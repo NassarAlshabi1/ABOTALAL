@@ -1,0 +1,6 @@
+{
+  "name": "ABO TALAL",
+  "description": "تطبيق احترافي للتحكم الكامل بشبكات المايكروتيك والمستخدمين والتحكم بالهوتسبوت واليوزر مانجر وتصميم وطباعة الكروت باحترافية عالية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
