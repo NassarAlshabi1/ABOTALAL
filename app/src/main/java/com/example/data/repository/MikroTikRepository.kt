@@ -126,8 +126,10 @@ class MikroTikRepository(
                 return@launch
             }
 
-            // 1. Native MikroTik API Socket (Default for port 8728 / 8729 or when socket works)
-            if (connection.port == 8728 || connection.port == 8729) {
+            // 1. Native MikroTik API Socket (default API ports 8728/8729, or any custom
+            // port that is not a web/REST port — e.g. when the `api` service is remapped)
+            if (connection.port == 8728 || connection.port == 8729 ||
+                connection.port !in listOf(80, 443, 8080, 8081)) {
                 try {
                     val api = MikroTikNativeApi(
                         host = connection.host,
