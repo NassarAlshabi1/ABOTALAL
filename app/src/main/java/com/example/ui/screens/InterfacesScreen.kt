@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import java.util.Locale
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -437,9 +438,9 @@ fun InterfaceItemCard(info: InterfaceStats) {
                         
                         Text(
                             text = if (info.rxSpeedKbps > 1000) {
-                                String.format("%.2f Mbps", info.rxSpeedKbps / 1024)
+                                String.format(Locale.US, "%.2f Mbps", info.rxSpeedKbps / 1024)
                             } else {
-                                String.format("%.0f Kbps", info.rxSpeedKbps)
+                                String.format(Locale.US, "%.0f Kbps", info.rxSpeedKbps)
                             },
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleLarge,
@@ -476,9 +477,9 @@ fun InterfaceItemCard(info: InterfaceStats) {
                         
                         Text(
                             text = if (info.txSpeedKbps > 1000) {
-                                String.format("%.2f Mbps", info.txSpeedKbps / 1024)
+                                String.format(Locale.US, "%.2f Mbps", info.txSpeedKbps / 1024)
                             } else {
-                                String.format("%.0f Kbps", info.txSpeedKbps)
+                                String.format(Locale.US, "%.0f Kbps", info.txSpeedKbps)
                             },
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleLarge,

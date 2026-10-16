@@ -3,14 +3,17 @@ package com.example
 import android.app.Application
 import android.util.Log
 
-class AboTalalApp : Application() {
+class NetCraftApp : Application() {
     override fun onCreate() {
         super.onCreate()
+
+        runCatching { installAppCheck(this) }
+            .onFailure { Log.w("NetCraftApp", "Firebase App Check skipped: ${it.message}") }
 
         // Global uncaught exception handler to prevent sudden crashes and ensure stability
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            Log.e("AboTalalApp", "Caught global uncaught exception on thread ${thread.name}: ${throwable.message}", throwable)
+            Log.e("NetCraftApp", "Caught global uncaught exception on thread ${thread.name}: ${throwable.message}", throwable)
             // If it's a non-fatal coroutine or background network exception, log and recover gracefully
             try {
                 if (thread.name.contains("DefaultDispatcher") || 
@@ -19,13 +22,14 @@ class AboTalalApp : Application() {
                     throwable is java.io.IOException ||
                     throwable is java.net.SocketException ||
                     throwable is NumberFormatException) {
-                    Log.w("AboTalalApp", "Suppressing fatal process death for recoverable background exception.")
+                    Log.w("NetCraftApp", "Suppressing fatal process death for recoverable background exception.")
                     return@setDefaultUncaughtExceptionHandler
                 }
             } catch (e: Exception) {
-                Log.e("AboTalalApp", "Error in global handler", e)
+                Log.e("NetCraftApp", "Error in global handler", e)
             }
             defaultHandler?.uncaughtException(thread, throwable)
         }
     }
+
 }

@@ -1,5 +1,6 @@
 package com.example.ui.screens.designs
 
+import java.util.Locale
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -1036,7 +1037,7 @@ fun DesignsScreen(
                         activeDesign?.let { d ->
                             val (wMm, hMm) = cardSize(d)
                             Text(
-                                text = "${String.format("%.1f", wMm)} × ${String.format("%.1f", hMm)} مم",
+                                text = "${String.format(Locale.US, "%.1f", wMm)} × ${String.format(Locale.US, "%.1f", hMm)} مم",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1238,7 +1239,7 @@ fun NumField(
             }
             
             OutlinedTextField(
-                value = String.format("%.${decimals}f", value),
+                value = String.format(Locale.US, "%.${decimals}f", value),
                 onValueChange = { newValue ->
                     val parsed = newValue.toFloatOrNull()
                     if (parsed != null) onValueChange(clamp(parsed))
@@ -1346,8 +1347,8 @@ fun ElementEditorCard(
                     val newY = maxOf(0f, element.y + dy)
                     onElementChange(
                         element.copy(
-                            x = String.format("%.1f", newX).toFloat(),
-                            y = String.format("%.1f", newY).toFloat()
+                            x = String.format(Locale.US, "%.1f", newX).toFloat(),
+                            y = String.format(Locale.US, "%.1f", newY).toFloat()
                         )
                     )
                 }

@@ -36,7 +36,7 @@ fun DeveloperWelcomeDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val sharedPrefs = remember { context.getSharedPreferences("abo_talal_prefs", Context.MODE_PRIVATE) }
+    val sharedPrefs = remember { context.getSharedPreferences("netcraft_prefs", Context.MODE_PRIVATE) }
     var dontShowAgain by remember { mutableStateOf(false) }
 
     fun dialNumber(number: String) {
@@ -193,7 +193,7 @@ fun DeveloperWelcomeDialog(
                             }
 
                             Text(
-                                text = "شركة الهيثم للبرمجيات",
+                                text = "Nassar Alshabi",
                                 fontFamily = CairoFontFamily,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.ExtraBold,

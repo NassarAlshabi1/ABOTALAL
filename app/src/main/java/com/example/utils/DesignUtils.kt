@@ -45,7 +45,7 @@ fun defaultDesign(id: String, name: String = "Default_Design"): Design {
         cardHeight = 15f,
         showUsername = true,
         username = ElementStyle(show = true, x = 4f, y = 4f, fontSize = 11f, bold = true),
-        title = ElementStyle(show = false, y = 2f, fontSize = 8f, text = "MK ALAMEER"),
+        title = ElementStyle(show = false, y = 2f, fontSize = 8f, text = "MK NETCRAFT"),
         password = ElementStyle(show = false, x = 34f, y = 4f, fontSize = 10f),
         borderOn = true,
         borderSize = 0.35f,

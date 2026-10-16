@@ -2,7 +2,7 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// ALAMEER-PRO Theme Colors
+// NetCraft Theme Colors
 val PrimaryLight = Color(0xFF0C5A60) // Deep Teal
 val PrimaryGradientStart = Color(0xFF0C5A60)
 val PrimaryGradientEnd = Color(0xFF167C80)
@@ -15,7 +15,7 @@ val OnSecondaryLight = Color(0xFFFFFFFF)
 val OnBackgroundLight = Color(0xFF111827) // High contrast dark text
 val OnSurfaceLight = Color(0xFF1E293B)
 
-// Dark Colors (ALAMEER-PRO Dark Mode)
+// Dark Colors (NetCraft Dark Mode)
 val PrimaryDark = Color(0xFF38BDF8)
 val SecondaryDark = Color(0xFF94A3B8)
 val TertiaryDark = Color(0xFF34D399)

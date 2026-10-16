@@ -177,7 +177,7 @@ class MikroTikRepository(
                     .header("Authorization", credential)
                     .build()
 
-                Log.d("ALAMEER-PRO", "Connecting via REST: $url")
+                Log.d("NetCraft", "Connecting via REST: $url")
                 okHttpClient?.newCall(request)?.execute().use { response ->
                     if (response != null && response.isSuccessful) {
                         _currentConnection.value = connection
@@ -201,7 +201,7 @@ class MikroTikRepository(
                     }
                 }
             } catch (ioe: IOException) {
-                Log.e("ALAMEER-PRO", "Connection error", ioe)
+                Log.e("NetCraft", "Connection error", ioe)
                 launch(Dispatchers.Main) { 
                     onError("تعذر الوصول إلى الآيبي ${connection.host}. تأكد من اتصال هاتفك بشبكة الراوتر.") 
                 }
@@ -234,10 +234,10 @@ class MikroTikRepository(
 
             _currentConnection.value = RouterConnection(
                 id = -1,
-                name = "ALAMEER-PRO",
+                name = "NetCraft",
                 host = cachedStats?.routerHost ?: "172.16.0.1",
                 port = 8728,
-                username = "abdulhamid",
+                username = "nassar",
                 password = ""
             )
             _isDemoMode.value = true
@@ -966,7 +966,7 @@ class MikroTikRepository(
             fetchRealInterfaces(connection)
             
         } catch (e: Exception) {
-            Log.e("AlameerNet", "Error tick resource", e)
+            Log.e("NetCraft", "Error tick resource", e)
         }
     }
 
@@ -1001,7 +1001,7 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.e("AlameerNet", "Error fetch users", e)
+            Log.e("NetCraft", "Error fetch users", e)
         }
     }
 
@@ -1034,7 +1034,7 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.e("AlameerNet", "Error fetch active", e)
+            Log.e("NetCraft", "Error fetch active", e)
         }
     }
 
@@ -1064,7 +1064,7 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.e("AlameerNet", "Error fetch profiles", e)
+            Log.e("NetCraft", "Error fetch profiles", e)
         }
     }
 
@@ -1097,7 +1097,7 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.e("AlameerNet", "Error fetch interfaces", e)
+            Log.e("NetCraft", "Error fetch interfaces", e)
         }
     }
 
@@ -1673,7 +1673,7 @@ class MikroTikRepository(
         // Mock Hotspot Users
         _hotspotUsers.value = listOf(
             HotspotUser(name = "امير_الشبكة", profile = "بروفايل_المدير", comment = "مدير للنظام", bytesOut = 452932901, bytesIn = 3280190),
-            HotspotUser(name = "ali_alameer", profile = "العادي_1ميجا", limitUptime = "12:00:00", comment = "كارت يومي", bytesOut = 28938210, bytesIn = 120938),
+            HotspotUser(name = "ali_nassar", profile = "العادي_1ميجا", limitUptime = "12:00:00", comment = "كارت يومي", bytesOut = 28938210, bytesIn = 120938),
             HotspotUser(name = "mohammed99", profile = "عرض_العيد_3ميجا", limitUptime = "24:00:00", bytesOut = 890432190, bytesIn = 42932192),
             HotspotUser(name = "user_34892", profile = "مفتوح_الحجم", limitUptime = "02:00:00", comment = "كرت ساعتين", bytesOut = 12293810, bytesIn = 422031),
             HotspotUser(name = "fatima_guest", profile = "العادي_1ميجا", limitUptime = "unlimited", disabled = true),
@@ -1683,7 +1683,7 @@ class MikroTikRepository(
         // Mock Active Users
         _activeHotspot.value = listOf(
             HotspotActive(user = "امير_الشبكة", address = "10.5.50.254", macAddress = "A0:C5:5F:12:DE:09", uptime = "05:42:19", bytesIn = 3280190, bytesOut = 452932901),
-            HotspotActive(user = "ali_alameer", address = "10.5.50.22", macAddress = "8C:1A:BF:34:44:A2", uptime = "01:12:03", bytesIn = 120938, bytesOut = 28938210),
+            HotspotActive(user = "ali_nassar", address = "10.5.50.22", macAddress = "8C:1A:BF:34:44:A2", uptime = "01:12:03", bytesIn = 120938, bytesOut = 28938210),
             HotspotActive(user = "mohammed99", address = "10.5.50.87", macAddress = "F4:E2:C1:22:90:BB", uptime = "03:49:12", bytesIn = 42932192, bytesOut = 890432190),
             HotspotActive(user = "user_34892", address = "10.5.50.11", macAddress = "34:FC:99:A8:11:7C", uptime = "00:45:30", bytesIn = 422031, bytesOut = 12293810)
         )
@@ -1793,7 +1793,7 @@ class MikroTikRepository(
             InterfaceStats("ether1-Gateway", "ether", 543100234, 1204932149, 1420.5, 4510.2),
             InterfaceStats("ether2-Local", "ether", 109238120, 429381204, 321.4, 1024.5),
             InterfaceStats("ether3-Hotspot", "ether", 894382010, 42938491, 2304.5, 895.4),
-            InterfaceStats("wlan1-Alameer", "wlan", 42938120, 10245009, 234.3, 112.5),
+            InterfaceStats("wlan1", "wlan", 42938120, 10245009, 234.3, 112.5),
             InterfaceStats("bridge-Local", "bridge", 1003429182, 1634317201, 2625.9, 5534.6)
         )
 
@@ -1802,7 +1802,7 @@ class MikroTikRepository(
             cpuUsage = 23,
             totalMemoryBytes = 1073741824, // 1 GB
             freeMemoryBytes = 743201492,  // ~700 MB
-            boardName = "MikroTik RB4011iGS+ (ALAMEER DEMO)",
+            boardName = "MikroTik RB4011iGS+ (NETCRAFT DEMO)",
             version = "RouterOS v7.14.3",
             uptime = "07d 12h 45m 12s",
             activeHotspotUsers = _activeHotspot.value.size,
@@ -2092,7 +2092,7 @@ class MikroTikRepository(
                 delay(400)
                 val demoPpp = listOf(
                     PppoeUser("client_ahmed", "1234", "pppoe", "10Mbps_Profile", "10.0.0.1", "10.0.0.15", "بروباند منزلي", false, "00:1A:2B:3C:4D:5E", "3d 05:22:10", true),
-                    PppoeUser("shop_alameer", "5566", "pppoe", "20Mbps_Profile", "10.0.0.1", "10.0.0.16", "محل الأمير للتجارة", false, "AA:BB:CC:DD:EE:01", "12d 18:40:02", true),
+                    PppoeUser("shop_netcraft", "5566", "pppoe", "20Mbps_Profile", "10.0.0.1", "10.0.0.16", "محل الأمير للتجارة", false, "AA:BB:CC:DD:EE:01", "12d 18:40:02", true),
                     PppoeUser("user_khalid", "9988", "pppoe", "5Mbps_Profile", "10.0.0.1", "10.0.0.17", "مشترك شهري", false, "11:22:33:44:55:66", "08:14:30", true),
                     PppoeUser("office_vip", "pass123", "pppoe", "Unlimited_VIP", "10.0.0.1", "10.0.0.18", "مكتب الإدارة", false, "44:55:66:77:88:99", "1d 02:11:55", true),
                     PppoeUser("guest_temp", "0000", "pppoe", "default", "", "", "حساب موقف مؤقت", true, "", "0s", false)

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import java.util.Locale
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -684,12 +685,12 @@ fun VoucherPrinterScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("أفقي X (يمين/يسار)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = usernameX, onValueChange = { usernameX = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                    Text(String.format("%.0f%%", usernameX*100), style = MaterialTheme.typography.labelSmall)
+                                    Text(String.format(Locale.US, "%.0f%%", usernameX*100), style = MaterialTheme.typography.labelSmall)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("رأسي Y (أعلى/أسفل)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = usernameY, onValueChange = { usernameY = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                    Text(String.format("%.0f%%", usernameY*100), style = MaterialTheme.typography.labelSmall)
+                                    Text(String.format(Locale.US, "%.0f%%", usernameY*100), style = MaterialTheme.typography.labelSmall)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("حجم الخط (Size)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
@@ -707,12 +708,12 @@ fun VoucherPrinterScreen(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("أفقي X (يمين/يسار)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                         Slider(value = passwordX, onValueChange = { passwordX = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                        Text(String.format("%.0f%%", passwordX*100), style = MaterialTheme.typography.labelSmall)
+                                        Text(String.format(Locale.US, "%.0f%%", passwordX*100), style = MaterialTheme.typography.labelSmall)
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("رأسي Y (أعلى/أسفل)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                         Slider(value = passwordY, onValueChange = { passwordY = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                        Text(String.format("%.0f%%", passwordY*100), style = MaterialTheme.typography.labelSmall)
+                                        Text(String.format(Locale.US, "%.0f%%", passwordY*100), style = MaterialTheme.typography.labelSmall)
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("حجم الخط (Size)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
@@ -730,12 +731,12 @@ fun VoucherPrinterScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("أفقي X", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = detailsX, onValueChange = { detailsX = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                    Text(String.format("%.0f%%", detailsX*100), style = MaterialTheme.typography.labelSmall)
+                                    Text(String.format(Locale.US, "%.0f%%", detailsX*100), style = MaterialTheme.typography.labelSmall)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("رأسي Y", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = detailsY, onValueChange = { detailsY = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                    Text(String.format("%.0f%%", detailsY*100), style = MaterialTheme.typography.labelSmall)
+                                    Text(String.format(Locale.US, "%.0f%%", detailsY*100), style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
@@ -1323,7 +1324,7 @@ class VoucherPDFPrinter(
                 }
 
                 if (mTotalPages > 0) {
-                    val info = PrintDocumentInfo.Builder("Alameer_Vouchers.pdf")
+                    val info = PrintDocumentInfo.Builder("NetCraft_Vouchers.pdf")
                         .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
                         .setPageCount(mTotalPages)
                         .build()
@@ -1529,6 +1530,6 @@ class VoucherPDFPrinter(
         };
 
         // Trigger Printing Frame Flow
-        printManager.print("Alameer Net Cards", printAdapter, null)
+        printManager.print("NetCraft Cards", printAdapter, null)
     }
 }

@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 
 object TelegramHelper {
     private const val TAG = "TelegramHelper"
-    private const val PREFS_NAME = "abo_talal_telegram_prefs"
+    private const val PREFS_NAME = "netcraft_telegram_prefs"
     private const val KEY_BOTS_JSON = "saved_bots_json"
     private const val KEY_SETTINGS_JSON = "notification_settings_json"
 

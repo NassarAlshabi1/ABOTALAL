@@ -40,7 +40,7 @@ data class Design(
         show = true, x = 4f, y = 4f, fontSize = 11f, bold = true
     ),
     val title: ElementStyle = ElementStyle(
-        show = false, y = 2f, fontSize = 8f, text = "MK ALAMEER"
+        show = false, y = 2f, fontSize = 8f, text = "MK NETCRAFT"
     ),
     val password: ElementStyle = ElementStyle(
         show = false, x = 34f, y = 4f, fontSize = 10f

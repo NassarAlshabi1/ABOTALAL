@@ -1,0 +1,106 @@
+{
+  "project_info": {
+    "project_number": "613681749386",
+    "firebase_url": "https://ahlan-hotel-manager-default-rtdb.firebaseio.com",
+    "project_id": "ahlan-hotel-manager",
+    "storage_bucket": "ahlan-hotel-manager.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:613681749386:android:f878d8a374a9b3ece23c73",
+        "android_client_info": {
+          "package_name": "com.marina.flutter"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "613681749386-qomj3idjn6nql4b0h0gu7fhiaatfc04q.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.marina.flutter",
+            "certificate_hash": "711c33d04ba8549d1afdee843fed655b13b2bdd5"
+          }
+        },
+        {
+          "client_id": "613681749386-613rjemh9lrfol508msk83uk3ruoanst.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCbNPMmiIdQ56aqol40ARsj_XOL4Qyvb84"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "107885037072184862860",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:613681749386:android:cda06975ca336acfe23c73",
+        "android_client_info": {
+          "package_name": "com.sky.marina.firebase"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "613681749386-613rjemh9lrfol508msk83uk3ruoanst.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCbNPMmiIdQ56aqol40ARsj_XOL4Qyvb84"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "107885037072184862860",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:613681749386:android:77b8a30db9f54d03e23c73",
+        "android_client_info": {
+          "package_name": "com.sky.marina.firebasei"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "613681749386-613rjemh9lrfol508msk83uk3ruoanst.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCbNPMmiIdQ56aqol40ARsj_XOL4Qyvb84"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "107885037072184862860",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

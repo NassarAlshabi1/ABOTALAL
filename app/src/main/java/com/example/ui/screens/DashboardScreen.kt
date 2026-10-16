@@ -864,7 +864,7 @@ fun DashboardScreen(
             title = { Text("الملف الشخصي", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("المستخدم: ${conn?.username ?: "abdulhamid"}", fontFamily = CairoFontFamily)
+                    Text("المستخدم: ${conn?.username ?: "nassar"}", fontFamily = CairoFontFamily)
                     Text("الراوتر: ${conn?.name ?: "172.16.0.1"}", fontFamily = CairoFontFamily)
                     Text("الصلاحية: مدير النظام (Full Admin)", fontFamily = CairoFontFamily)
                 }
@@ -922,7 +922,7 @@ fun DashboardScreen(
             title = { Text("الإرشاد والمساعدة والدعم الفني", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("برمجة وتطوير: شركة الهيثم للبرمجيات", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                    Text("برمجة وتطوير: Nassar Alshabi", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                     Text("هاتف التواصل: 773114243", fontFamily = CairoFontFamily)
                     Text("فريق الدعم الفني جاهز لمساعدتكم في أي استفسارات أو دعم للشبكة.", fontFamily = CairoFontFamily)
                 }
@@ -946,7 +946,7 @@ fun DashboardScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("نظام NetCraft", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                     Text("الإصدار: v1.0.1", fontFamily = CairoFontFamily)
-                    Text("تطوير: شركة الهيثم للبرمجيات (773114243)", fontFamily = CairoFontFamily)
+                    Text("تطوير: Nassar Alshabi (773114243)", fontFamily = CairoFontFamily)
                 }
             },
             confirmButton = {

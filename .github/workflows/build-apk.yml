@@ -29,5 +29,5 @@ jobs:
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: alameer-app-debug
+          name: netcraft-app-debug
           path: app/build/outputs/apk/debug/*.apk
