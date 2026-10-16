@@ -313,7 +313,8 @@ class MikroTikRepository(
                     if (umProfList.isNotEmpty()) isV6UM = true
                 }
                 if (umProfList.isEmpty()) {
-                    insertActivityLog("باقات اليوزرمانجر", "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر", connection.host)
+                    insertActivityLog("باقات اليوزرمانجر", api.lastError
+                        ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر", connection.host)
                 }
                 val limitations = if (isV6UM) {
                     api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
@@ -481,6 +482,11 @@ class MikroTikRepository(
                     if (umProfList.isEmpty()) {
                         umProfList = api.execute("/tool/user-manager/profile/print")
                         if (umProfList.isNotEmpty()) isV6UM = true
+                    }
+                    if (umProfList.isEmpty()) {
+                        insertActivityLog("باقات اليوزرمانجر", api.lastError
+                            ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر",
+                            _currentConnection.value?.host ?: "")
                     }
                     val limitations = if (isV6UM) {
                         api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
@@ -1474,6 +1480,11 @@ class MikroTikRepository(
                     if (umProfList.isEmpty()) {
                         umProfList = api.execute("/tool/user-manager/profile/print")
                         if (umProfList.isNotEmpty()) isV6UM = true
+                    }
+                    if (umProfList.isEmpty()) {
+                        insertActivityLog("باقات اليوزرمانجر", api.lastError
+                            ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر",
+                            _currentConnection.value?.host ?: "")
                     }
                     val limitations = if (isV6UM) {
                         api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }

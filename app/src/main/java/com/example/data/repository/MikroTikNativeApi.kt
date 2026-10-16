@@ -198,6 +198,11 @@ class MikroTikNativeApi(
     @Volatile
     private var lastCommandError: String? = null
 
+    /** Last !trap/!fatal/socket message recorded by [execute]; null when the last
+     *  command succeeded or never ran. */
+    val lastError: String?
+        get() = synchronized(socketLock) { lastCommandError }
+
     fun execute(command: String, params: Map<String, String>): List<Map<String, String>> {
         val arr = params.map { "${it.key}=${it.value}" }.toTypedArray()
         return execute(command, *arr)
