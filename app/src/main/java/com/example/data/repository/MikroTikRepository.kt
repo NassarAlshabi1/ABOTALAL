@@ -313,18 +313,18 @@ class MikroTikRepository(
                     if (umProfList.isNotEmpty()) isV6UM = true
                 }
                 val limitations = if (isV6UM) {
-                    api.execute("/tool/user-manager/profile/limitation/print").associateBy { it["name"] ?: "" }
+                    api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
                 } else {
                     api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
                 }
 
                 val umProfiles = umProfList.map { p ->
-                    val name = p["name"] ?: "default"
+                    val name = p["name"] ?: p["name-for-users"] ?: "default"
                     val lim = limitations[name] ?: emptyMap()
                     val validity = p["validity"] ?: p["starts-at"] ?: "30d"
                     val priceVal = p["price"]?.toDoubleOrNull() ?: 0.0
-                    val dlLimit = lim["download-limit"] ?: p["download-limit"] ?: "unlimited"
-                    val upLimit = lim["uptime-limit"] ?: p["uptime-limit"] ?: "unlimited"
+                    val dlLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited"
+                    val upLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited"
                     UserManagerProfile(
                         name = name,
                         validity = validity,
@@ -480,21 +480,21 @@ class MikroTikRepository(
                         if (umProfList.isNotEmpty()) isV6UM = true
                     }
                     val limitations = if (isV6UM) {
-                        api.execute("/tool/user-manager/profile/limitation/print").associateBy { it["name"] ?: "" }
+                        api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
                     } else {
                         api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
                     }
 
                     if (umProfList.isNotEmpty()) {
                         val umProfiles = umProfList.map { p ->
-                            val name = p["name"] ?: "default"
+                            val name = p["name"] ?: p["name-for-users"] ?: "default"
                             val lim = limitations[name] ?: emptyMap()
                             UserManagerProfile(
                                 name = name,
                                 validity = p["validity"] ?: p["starts-at"] ?: "30d",
                                 price = p["price"]?.toDoubleOrNull() ?: 0.0,
-                                downloadLimit = lim["download-limit"] ?: p["download-limit"] ?: "unlimited",
-                                uptimeLimit = lim["uptime-limit"] ?: p["uptime-limit"] ?: "unlimited",
+                                downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
+                                uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
                                 templateName = name,
                                 sharedUsers = p["override-shared-users"]?.toIntOrNull() ?: 1
                             )
@@ -1473,21 +1473,21 @@ class MikroTikRepository(
                         if (umProfList.isNotEmpty()) isV6UM = true
                     }
                     val limitations = if (isV6UM) {
-                        api.execute("/tool/user-manager/profile/limitation/print").associateBy { it["name"] ?: "" }
+                        api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
                     } else {
                         api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
                     }
 
                     if (umProfList.isNotEmpty()) {
                         val fetchedProfiles = umProfList.map { p ->
-                            val name = p["name"] ?: "default"
+                            val name = p["name"] ?: p["name-for-users"] ?: "default"
                             val lim = limitations[name] ?: emptyMap()
                             UserManagerProfile(
                                 name = name,
                                 validity = p["validity"] ?: p["starts-at"] ?: "30d",
                                 price = p["price"]?.toDoubleOrNull() ?: 0.0,
-                                downloadLimit = lim["download-limit"] ?: p["download-limit"] ?: "unlimited",
-                                uptimeLimit = lim["uptime-limit"] ?: p["uptime-limit"] ?: "unlimited",
+                                downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
+                                uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
                                 templateName = name,
                                 sharedUsers = p["override-shared-users"]?.toIntOrNull() ?: 1
                             )
