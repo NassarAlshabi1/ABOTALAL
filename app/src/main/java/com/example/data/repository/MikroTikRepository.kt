@@ -80,6 +80,18 @@ class MikroTikRepository(
     // Native Socket API instance for port 8728
     private var nativeApi: MikroTikNativeApi? = null
 
+    private val lastIfaceCounters = mutableMapOf<String, Triple<Long, Long, Long>>()
+
+    private fun speedFromDelta(name: String, rx: Long, tx: Long): Pair<Double, Double> {
+        val now = System.currentTimeMillis()
+        val prev = lastIfaceCounters.put(name, Triple(rx, tx, now)) ?: return 0.0 to 0.0
+        val dtSec = (now - prev.third) / 1000.0
+        if (dtSec <= 0) return 0.0 to 0.0
+        val rxKbps = (rx - prev.first).coerceAtLeast(0) * 8.0 / dtSec / 1024.0
+        val txKbps = (tx - prev.second).coerceAtLeast(0) * 8.0 / dtSec / 1024.0
+        return rxKbps to txKbps
+    }
+
     // Dynamic ticking job for dashboard updates
     private var isTickerRunning = false
 
@@ -698,6 +710,7 @@ class MikroTikRepository(
             nativeApi?.close()
         } catch (_: Exception) {}
         nativeApi = null
+        lastIfaceCounters.clear()
         _currentConnection.value = null
         _routerStats.value = null
         insertActivityLog("تسجيل الخروج", "تم فصل الاتصال بالراوتر", "")
@@ -783,13 +796,17 @@ class MikroTikRepository(
                 val ifList = api.execute("/interface/print")
                 if (ifList.isNotEmpty()) {
                     _interfaces.value = ifList.map {
+                        val ifName = it["name"] ?: "ether1"
+                        val rx = it["rx-byte"]?.toLongOrNull() ?: 0L
+                        val tx = it["tx-byte"]?.toLongOrNull() ?: 0L
+                        val (rxSpd, txSpd) = speedFromDelta(ifName, rx, tx)
                         InterfaceStats(
-                            name = it["name"] ?: "ether1",
+                            name = ifName,
                             type = it["type"] ?: "ether",
-                            rxByte = it["rx-byte"]?.toLongOrNull() ?: 0L,
-                            txByte = it["tx-byte"]?.toLongOrNull() ?: 0L,
-                            rxSpeedKbps = (it["rx-byte"]?.toLongOrNull() ?: 0L) / 1024.0 % 500,
-                            txSpeedKbps = (it["tx-byte"]?.toLongOrNull() ?: 0L) / 1024.0 % 500,
+                            rxByte = rx,
+                            txByte = tx,
+                            rxSpeedKbps = rxSpd,
+                            txSpeedKbps = txSpd,
                             running = it["running"] == "true"
                         )
                     }
