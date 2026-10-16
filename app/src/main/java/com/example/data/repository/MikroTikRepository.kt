@@ -995,7 +995,22 @@ class MikroTikRepository(
     /* Hotspot CRUD Real Action Handlers */
     fun addHotspotUser(user: HotspotUser, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            
+            val napi = nativeApi
+            if (napi != null) {
+                try {
+                    val params = mutableMapOf("name" to user.name, "password" to user.password, "profile" to user.profile)
+                    if (user.limitUptime != "unlimited" && user.limitUptime.isNotBlank()) params["limit-uptime"] = user.limitUptime
+                    if (user.comment.isNotBlank()) params["comment"] = user.comment
+                    if (user.disabled) params["disabled"] = "yes"
+                    napi.executeStrict("/ip/hotspot/user/add", params)
+                    insertActivityLog("إضافة مستخدم هوتسبوت", "تم إضافة المستخدم '${user.name}' على الراوتر", _currentConnection.value?.host ?: "")
+                    _hotspotUsers.value = _hotspotUsers.value + user
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError("فشل الإضافة على الراوتر: ${e.message}") }
+                }
+                return@launch
+            }
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
