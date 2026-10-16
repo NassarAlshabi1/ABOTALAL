@@ -88,20 +88,7 @@ fun UserManagerScreen(
     var feedbackMessage by remember { mutableStateOf<String?>(null) }
 
     // Batch records tracking
-    var batchRecords by remember {
-        mutableStateOf(
-            listOf(
-                GeneratedBatchRecord(
-                    batchId = "BATCH-01",
-                    date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
-                    profileName = "باقة 500 د.ع",
-                    count = 25,
-                    pricePerCard = 500,
-                    prefix = "VIP"
-                )
-            )
-        )
-    }
+    var batchRecords by remember { mutableStateOf(listOf<GeneratedBatchRecord>()) }
 
     // 10 Cards strictly mapped to the screenshot
     val menuItems = remember {

@@ -312,6 +312,9 @@ class MikroTikRepository(
                     umProfList = api.execute("/tool/user-manager/profile/print")
                     if (umProfList.isNotEmpty()) isV6UM = true
                 }
+                if (umProfList.isEmpty()) {
+                    insertActivityLog("باقات اليوزرمانجر", "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر", connection.host)
+                }
                 val limitations = if (isV6UM) {
                     api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
                 } else {

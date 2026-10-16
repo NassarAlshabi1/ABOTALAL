@@ -72,10 +72,12 @@ fun UserManagerBatchFullDialog(
     var selectedTopTab by remember { mutableIntStateOf(0) }
 
     // Section 1: خيارات الباقة
-    var selectedProfileName by remember {
-        mutableStateOf(
-            if (userManagerProfiles.isNotEmpty()) userManagerProfiles.first().name else "باقة 500 د.ع"
-        )
+    var selectedProfileName by remember { mutableStateOf("") }
+    LaunchedEffect(userManagerProfiles) {
+        val names = userManagerProfiles.map { it.name }
+        if (names.isNotEmpty() && selectedProfileName !in names) {
+            selectedProfileName = names.first()
+        }
     }
     var profileDropdownExpanded by remember { mutableStateOf(false) }
     var showAddProfileDialog by remember { mutableStateOf(false) }
@@ -478,15 +480,11 @@ fun UserManagerBatchFullDialog(
                                                     onDismissRequest = { profileDropdownExpanded = false }
                                                 ) {
                                                     if (userManagerProfiles.isEmpty()) {
-                                                        listOf("باقة 100 د.ع", "باقة 200 د.ع", "باقة 500 د.ع", "باقة 1000 د.ع", "باقة VIP غير محدودة").forEach { prof ->
-                                                            DropdownMenuItem(
-                                                                text = { Text(prof, fontFamily = CairoFontFamily) },
-                                                                onClick = {
-                                                                    selectedProfileName = prof
-                                                                    profileDropdownExpanded = false
-                                                                }
-                                                            )
-                                                        }
+                                                        DropdownMenuItem(
+                                                            text = { Text("لا توجد باقات على الراوتر — أنشئ باقة في User Manager", fontFamily = CairoFontFamily, fontSize = 12.sp) },
+                                                            enabled = false,
+                                                            onClick = {}
+                                                        )
                                                     } else {
                                                         userManagerProfiles.forEach { prof ->
                                                             DropdownMenuItem(
