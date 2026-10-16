@@ -1564,38 +1564,44 @@ class MikroTikRepository(
             try {
                 // If connected to live router, execute commands via RouterOS API
                 val api = nativeApi
-                if (_isConnected.value && api != null) {
+                if (api == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                val added = mutableListOf<UserManagerUser>()
+                var firstErr: String? = null
+                users.forEach { u ->
                     try {
-                        users.forEach { u ->
-                            api.executeStrict(
-                                "/tool/user-manager/user/add",
-                                mapOf(
+                        umWrite(api, "user/add", mapOf(
+                            "customer" to "admin",
+                            "username" to u.username,
+                            "password" to u.password
+                        ))
+                        if (u.profile.isNotEmpty()) {
+                            runCatching {
+                                umWrite(api, "user/create-and-activate-profile", mapOf(
                                     "customer" to "admin",
-                                    "username" to u.username,
-                                    "password" to u.password
-                                )
-                            )
-                            if (u.profile.isNotEmpty()) {
-                                api.executeStrict(
-                                    "/tool/user-manager/user/create-and-activate-profile",
-                                    mapOf(
-                                        "customer" to "admin",
-                                        "numbers" to u.username,
-                                        "profile" to u.profile
-                                    )
-                                )
+                                    "numbers" to (umResolveUserId(api, u.username) ?: u.username),
+                                    "profile" to u.profile
+                                ))
                             }
                         }
+                        added.add(u)
                     } catch (e: Exception) {
-                        Log.w("MikroTikRepo", "Batch API add partial/fallback: ${e.message}")
+                        if (firstErr == null) firstErr = e.message
                     }
                 }
-                val list = _userManagerUsers.value.toMutableList()
-                // Prepend so new cards appear instantly at top
-                list.addAll(0, users)
-                _userManagerUsers.value = list
-                insertActivityLog("توليد دفعة كروت", "تم توليد دفعة كروت جديدة ($batchName) بعدد ${users.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
-                launch(Dispatchers.Main) { onSuccess() }
+                if (added.isNotEmpty()) {
+                    val list = _userManagerUsers.value.toMutableList()
+                    // Prepend so new cards appear instantly at top
+                    list.addAll(0, added)
+                    _userManagerUsers.value = list
+                }
+                insertActivityLog("توليد دفعة كروت", "تم توليد دفعة كروت ($batchName): نجح ${added.size} من ${users.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) {
+                    if (added.size == users.size) onSuccess()
+                    else onError("نجح ${added.size} من ${users.size}. خطأ: ${firstErr ?: "غير معروف"}")
+                }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { onError(e.message ?: "خطأ في إضافة الكروت") }
             }
