@@ -93,6 +93,7 @@ internal class ScriptableMockServer {
                             if (command.startsWith("/login")) {
                                 if (rejectLogin) {
                                     writeSentence(out, listOf("!trap", "=message=invalid user name or password"))
+                                    writeSentence(out, listOf("!done"))
                                     continue
                                 }
                                 if (v6Challenge && words.any { it.startsWith("=response=00") }) {
@@ -107,12 +108,18 @@ internal class ScriptableMockServer {
                                 }
                                 if (v6Challenge) {
                                     writeSentence(out, listOf("!trap", "=message=invalid user name or password"))
+                                    writeSentence(out, listOf("!done"))
                                     continue
                                 }
                                 writeSentence(out, listOf("!done"))
                                 continue
                             }
-                            handler(words).forEach { writeSentence(out, it) }
+                            handler(words).let { replies ->
+                                replies.forEach { writeSentence(out, it) }
+                                if (replies.none { it.firstOrNull() == "!done" }) {
+                                    writeSentence(out, listOf("!done"))
+                                }
+                            }
                         }
                     } catch (_: Exception) {
                     } finally {

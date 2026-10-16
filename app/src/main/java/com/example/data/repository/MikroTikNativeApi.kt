@@ -277,6 +277,12 @@ class MikroTikNativeApi(
                             ?.removePrefix("=message=") ?: "رفض الراوتر الأمر"
                         Log.w(TAG, "Command trap response for $command: $reply")
                         lastCommandError = "فشل $command: $msg"
+                        // Drain the !done sentence that always follows !trap — otherwise the
+                        // next command reads it as its own reply and wrongly returns empty.
+                        while (true) {
+                            val drain = readSentence()
+                            if (drain.isEmpty() || drain.firstOrNull() == "!done") break
+                        }
                         break
                     } else if (replyType == "!fatal") {
                         Log.e(TAG, "Command fatal response for $command: $reply")
