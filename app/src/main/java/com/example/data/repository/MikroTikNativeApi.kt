@@ -232,7 +232,7 @@ class MikroTikNativeApi(
             try {
                 val words = mutableListOf(command)
                 for (p in params) {
-                    words.add("=$p")
+                    words.add(if (p.startsWith("=")) p else "=$p")
                 }
                 writeSentence(words)
 
