@@ -2259,7 +2259,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.executeStrict("/system/backup/cloud/remove", mapOf(".id" to backupId))
+                    api.executeStrict("/system/backup/cloud/remove", mapOf("numbers" to backupId))
                     fetchCloudData()
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
