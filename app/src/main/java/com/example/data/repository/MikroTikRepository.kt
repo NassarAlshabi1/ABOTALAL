@@ -1240,18 +1240,19 @@ class MikroTikRepository(
                 return@launch
             }
             var deleted = 0
+            val succeeded = mutableSetOf<String>()
             var firstErr: String? = null
             usernames.forEach { u ->
                 try {
                     umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, u) ?: u)))
                     deleted++
+                    succeeded.add(u)
                 } catch (e: Exception) {
                     if (firstErr == null) firstErr = e.message
                 }
             }
             if (deleted > 0) {
-                val removed = usernames.take(deleted).toSet()
-                _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in removed }
+                _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in succeeded }
             }
             insertActivityLog("حذف جماعي", "تم حذف $deleted كرت من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) {
@@ -1269,15 +1270,17 @@ class MikroTikRepository(
                 return@launch
             }
             val toToggle = usernames.toSet()
+            val succeeded = mutableSetOf<String>()
             var done = 0
             usernames.forEach { u ->
                 try {
                     umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, u) ?: u), "disabled" to if (active) "no" else "yes"))
                     done++
+                    succeeded.add(u)
                 } catch (_: Exception) {}
             }
             _userManagerUsers.value = _userManagerUsers.value.map {
-                if (it.username in toToggle) it.copy(active = active) else it
+                if (it.username in succeeded) it.copy(active = active) else it
             }
             insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} $done كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess(done) }
@@ -1515,7 +1518,7 @@ class MikroTikRepository(
             } else {
                 _userManagerProfiles.value = currentMap.values.toList()
             }
-            insertActivityLog("استيراد باقات", "تم استيراد ومزامنة $importedCount باقة يوزرمانجر بنجاح", _currentConnection.value?.host ?: "")
+            insertActivityLog("استيراد باقات", "تم تحميل $importedCount باقة جاهزة مدمجة في التطبيق (الراوتر لم يرجع باقات)", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess(importedCount) }
         }
     }
@@ -1572,15 +1575,16 @@ class MikroTikRepository(
             }
             val toRemove = _userManagerUsers.value.filter { !it.active || it.uptimeUsed == "expired" }.map { it.username }
             var removed = 0
+            val succeeded = mutableSetOf<String>()
             toRemove.forEach { u ->
                 try {
                     umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, u) ?: u)))
                     removed++
+                    succeeded.add(u)
                 } catch (_: Exception) {}
             }
             if (removed > 0) {
-                val removedSet = toRemove.toSet()
-                _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in removedSet || it.active && it.uptimeUsed != "expired" }
+                _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in succeeded }
             }
             insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removed كرت منتهي", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess(removed) }
