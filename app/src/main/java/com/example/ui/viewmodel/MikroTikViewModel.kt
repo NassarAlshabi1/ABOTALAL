@@ -217,8 +217,8 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.toggleUserManagerUser(username, onSuccess)
     }
 
-    fun backupUserManagerDatabase(onSuccess: (String) -> Unit) {
-        repository.backupUserManagerDatabase(onSuccess)
+    fun backupUserManagerDatabase(onSuccess: (String) -> Unit, onError: (String) -> Unit = {}) {
+        repository.backupUserManagerDatabase(onSuccess, onError)
     }
     /* Test Connection */
     fun testConnection(host: String, port: Int, onResult: (Boolean, String) -> Unit) {

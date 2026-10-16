@@ -1654,19 +1654,22 @@ class MikroTikRepository(
         }
     }
 
-    fun backupUserManagerDatabase(onSuccess: (String) -> Unit)  {
+    fun backupUserManagerDatabase(onSuccess: (String) -> Unit, onError: (String) -> Unit = {})  {
         repositoryScope.launch {
             val filename = "userman-backup-${System.currentTimeMillis()}.umb"
             val api = nativeApi
-            if (api != null) {
-                try {
-                    umWrite(api, "database/save", mapOf("name" to filename.removeSuffix(".umb")))
-                    insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية لقاعدة بيانات اليوزر مانجر باسم $filename", _currentConnection.value?.host ?: "")
-                } catch (e: Exception) {
-                    insertActivityLog("نسخ احتياطي", "فشل النسخ الاحتياطي: ${e.message}", _currentConnection.value?.host ?: "")
-                }
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                return@launch
             }
-            launch(Dispatchers.Main) { onSuccess(filename) }
+            try {
+                umWrite(api, "database/save", mapOf("name" to filename.removeSuffix(".umb")))
+                insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية لقاعدة بيانات اليوزر مانجر باسم $filename", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess(filename) }
+            } catch (e: Exception) {
+                insertActivityLog("نسخ احتياطي", "فشل النسخ الاحتياطي: ${e.message}", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل النسخ الاحتياطي على الراوتر") }
+            }
         }
     }
 

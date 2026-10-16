@@ -837,10 +837,16 @@ fun UserManagerScreen(
                     Button(
                         onClick = {
                             isGeneratingBackup = true
-                            viewModel.backupUserManagerDatabase { filename ->
-                                isGeneratingBackup = false
-                                feedbackMessage = "تم إنشاء النسخة الاحتياطية: $filename"
-                            }
+                            viewModel.backupUserManagerDatabase(
+                                onSuccess = { filename ->
+                                    isGeneratingBackup = false
+                                    feedbackMessage = "تم إنشاء النسخة الاحتياطية: $filename"
+                                },
+                                onError = { err ->
+                                    isGeneratingBackup = false
+                                    feedbackMessage = "فشل النسخ الاحتياطي: $err"
+                                }
+                            )
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
