@@ -100,7 +100,7 @@ fun WelcomeCreditsDialog(
                         }
 
                         Text(
-                            text = "ABO TALAL VIP",
+                            text = "NetCraft",
                             fontFamily = CairoFontFamily,
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Black,
@@ -183,7 +183,7 @@ fun WelcomeCreditsDialog(
                                         color = Color(0xFF0D9488)
                                     )
                                     Text(
-                                        text = "عبدالحميد داوؤد (أبو طلال)",
+                                        text = "شركة الهيثم للبرمجيات",
                                         fontFamily = CairoFontFamily,
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.ExtraBold,
@@ -202,15 +202,15 @@ fun WelcomeCreditsDialog(
                                 color = Color(0xFF334155)
                             )
 
-                            // Contact 1: 778215553
+                            // Contact 1: 773114243
                             ContactRow(
-                                phone = "778215553",
+                                phone = "773114243",
                                 context = context
                             )
 
-                            // Contact 2: 700897775
+                            // Contact 2: 734587456
                             ContactRow(
-                                phone = "700897775",
+                                phone = "734587456",
                                 context = context
                             )
                         }

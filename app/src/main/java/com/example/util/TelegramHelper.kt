@@ -146,7 +146,7 @@ object TelegramHelper {
     fun generateRouterOsScript(token: String, chatId: String, botName: String): String {
         return """
 # ====================================================
-# ABO TALAL VIP - سكربت إشعارات تيليجرام للمايكروتك
+# NetCraft - سكربت إشعارات تيليجرام للمايكروتك
 # البوت: $botName
 # ====================================================
 :global botToken "$token";
@@ -160,7 +160,7 @@ object TelegramHelper {
 }
 
 # تنبيه تشغيل السيرفر
-${'$'}sendTelegram "🔔%0A<b>[ABO TALAL VIP]</b>%0Aتم تشغيل راوتر المايكروتك بنجاح!%0Aالتاريخ: ${'$'}[/system clock get date]%0Aالوقت: ${'$'}[/system clock get time]";
+${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر المايكروتك بنجاح!%0Aالتاريخ: ${'$'}[/system clock get date]%0Aالوقت: ${'$'}[/system clock get time]";
         """.trimIndent()
     }
 

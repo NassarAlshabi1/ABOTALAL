@@ -351,7 +351,7 @@ fun DashboardScreen(
             }
         }
 
-        // 4. شريط نظام الطباعة ABO TALAL VIP
+        // 4. شريط نظام الطباعة NetCraft
         item {
             Surface(
                 modifier = Modifier
@@ -391,7 +391,7 @@ fun DashboardScreen(
                             }
                         }
                         Text(
-                            text = "معا نظام الطباعة ABO TALAL VIP",
+                            text = "معا نظام الطباعة NetCraft",
                             fontFamily = CairoFontFamily,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
@@ -768,10 +768,10 @@ fun DashboardScreen(
     if (showPrintingSystemDialog) {
         AlertDialog(
             onDismissRequest = { showPrintingSystemDialog = false },
-            title = { Text("نظام الطباعة ABO TALAL VIP", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            title = { Text("نظام الطباعة NetCraft", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "يتيح نظام الطباعة ABO TALAL VIP تصميم وطباعة كروت الهوتسبوت واليوزرمانجر بتنسيقات متعددة وقوالب جاهزة للطباعة الحرارية ومقاس A4.",
+                    "يتيح نظام الطباعة NetCraft تصميم وطباعة كروت الهوتسبوت واليوزرمانجر بتنسيقات متعددة وقوالب جاهزة للطباعة الحرارية ومقاس A4.",
                     fontFamily = CairoFontFamily
                 )
             },
@@ -922,8 +922,8 @@ fun DashboardScreen(
             title = { Text("الإرشاد والمساعدة والدعم الفني", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("برمجة وتطوير: المهندس عبدالحميد داوؤد", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    Text("هاتف التواصل: 778215553", fontFamily = CairoFontFamily)
+                    Text("برمجة وتطوير: شركة الهيثم للبرمجيات", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                    Text("هاتف التواصل: 773114243", fontFamily = CairoFontFamily)
                     Text("فريق الدعم الفني جاهز لمساعدتكم في أي استفسارات أو دعم للشبكة.", fontFamily = CairoFontFamily)
                 }
             },
@@ -944,9 +944,9 @@ fun DashboardScreen(
             title = { Text("حول التطبيق", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("نظام ABO TALAL VIP", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                    Text("نظام NetCraft", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                     Text("الإصدار: v1.0.1", fontFamily = CairoFontFamily)
-                    Text("تطوير: المهندس عبدالحميد داوؤد (778215553)", fontFamily = CairoFontFamily)
+                    Text("تطوير: شركة الهيثم للبرمجيات (773114243)", fontFamily = CairoFontFamily)
                 }
             },
             confirmButton = {

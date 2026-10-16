@@ -1,7 +1,9 @@
 package com.example
 
 import android.content.Context
+import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.local.AppDatabase
 import com.example.data.repository.MikroTikRepository
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -17,17 +19,27 @@ import org.robolectric.annotation.Config
 @Config(sdk = [36])
 class ExampleRobolectricTest {
 
+  private fun newRepository(context: Context): MikroTikRepository {
+    val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+    return MikroTikRepository(context, db.activityLogDao(), db.cacheDao())
+  }
+
   @Test
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("ABO TALAL VIP", appName)
+    assertEquals("NetCraft", appName)
   }
 
   @Test
   fun `test card renewal in repository`() = runBlocking {
     val context = ApplicationProvider.getApplicationContext<Context>()
-    val repo = MikroTikRepository(context)
+    val repo = newRepository(context)
+    repo.enableOfflineProgramMode {}
+    val deadline = System.currentTimeMillis() + 10_000
+    while (repo.userManagerUsers.value.isEmpty() && System.currentTimeMillis() < deadline) {
+      kotlinx.coroutines.delay(100)
+    }
 
     // Wait for initial demo users to be loaded
     val initialUsers = repo.userManagerUsers.value
@@ -44,8 +56,14 @@ class ExampleRobolectricTest {
       onError = {}
     )
 
+    var updatedUser = repo.userManagerUsers.value.find { it.username == targetUser.username }
+    var waitDeadline = System.currentTimeMillis() + 10_000
+    while (updatedUser?.profile != "3000RY" && System.currentTimeMillis() < waitDeadline) {
+      kotlinx.coroutines.delay(100)
+      updatedUser = repo.userManagerUsers.value.find { it.username == targetUser.username }
+    }
+
     // Verify user profile updated to 3000RY and active is true
-    val updatedUser = repo.userManagerUsers.value.find { it.username == targetUser.username }
     assertNotNull(updatedUser)
     assertEquals("3000RY", updatedUser?.profile)
     assertTrue(updatedUser?.active == true)
@@ -55,7 +73,12 @@ class ExampleRobolectricTest {
   @Test
   fun `test card bulk toggle active in repository`() = runBlocking {
     val context = ApplicationProvider.getApplicationContext<Context>()
-    val repo = MikroTikRepository(context)
+    val repo = newRepository(context)
+    repo.enableOfflineProgramMode {}
+    val deadline = System.currentTimeMillis() + 10_000
+    while (repo.userManagerUsers.value.isEmpty() && System.currentTimeMillis() < deadline) {
+      kotlinx.coroutines.delay(100)
+    }
 
     val users = repo.userManagerUsers.value
     val firstTwo = users.take(2).map { it.username }
@@ -64,7 +87,14 @@ class ExampleRobolectricTest {
       assertEquals(2, count)
     }
 
-    val updatedUsers = repo.userManagerUsers.value
+    var updatedUsers = repo.userManagerUsers.value
+    var waitDeadline = System.currentTimeMillis() + 10_000
+    while (updatedUsers.filter { it.username in firstTwo }.any { it.active } &&
+      System.currentTimeMillis() < waitDeadline
+    ) {
+      kotlinx.coroutines.delay(100)
+      updatedUsers = repo.userManagerUsers.value
+    }
     val deactivated = updatedUsers.filter { it.username in firstTwo }
     deactivated.forEach { assertFalse(it.active) }
   }

@@ -74,7 +74,7 @@ data class CardTemplateConfig(
     val borderSizeMm: Float = 0.35f,
     val borderColorHex: String = "#000000",
     val pageNoteEnabled: Boolean = false,
-    val pageNoteText: String = "أهلاً بكم في شبكة ABO TALAL",
+    val pageNoteText: String = "أهلاً بكم في شبكة NetCraft",
     val pageNoteX: Float = 40f,
     val pageNoteY: Float = 6f,
     val pageNoteSize: Float = 10f,
@@ -101,7 +101,7 @@ data class CardTemplateConfig(
     val titleConfig: CardElementConfig = CardElementConfig(
         visible = false,
         showTitle = false,
-        titleText = "ABO TALAL",
+        titleText = "NetCraft",
         xMm = 4f,
         yMm = 2f,
         fontSize = 8f,
@@ -290,7 +290,7 @@ object CardPrintAndExportHelper {
             borderSizeMm = prefs.getFloat("${p}_border_size", 0.35f),
             borderColorHex = prefs.getString("${p}_border_color", "#000000") ?: "#000000",
             pageNoteEnabled = prefs.getBoolean("${p}_page_note_enabled", false),
-            pageNoteText = prefs.getString("${p}_page_note_text", "أهلاً بكم في شبكة ABO TALAL VIP") ?: "أهلاً بكم في شبكة ABO TALAL VIP",
+            pageNoteText = prefs.getString("${p}_page_note_text", "أهلاً بكم في شبكة NetCraft") ?: "أهلاً بكم في شبكة NetCraft",
             pageNoteX = prefs.getFloat("${p}_page_note_x", 40f),
             pageNoteY = prefs.getFloat("${p}_page_note_y", 6f),
             pageNoteSize = prefs.getFloat("${p}_page_note_size", 10f),
@@ -316,7 +316,7 @@ object CardPrintAndExportHelper {
             titleConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_title_vis", false),
                 showTitle = false,
-                titleText = prefs.getString("${p}_title_text", "ABO TALAL VIP") ?: "ABO TALAL VIP",
+                titleText = prefs.getString("${p}_title_text", "NetCraft") ?: "NetCraft",
                 xMm = prefs.getFloat("${p}_title_x_mm", 4f),
                 yMm = prefs.getFloat("${p}_title_y_mm", 2f),
                 fontSize = prefs.getFloat("${p}_title_size", 8f),
@@ -693,7 +693,7 @@ object CardPrintAndExportHelper {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
 
-            context.startActivity(Intent.createChooser(intent, "معاينة ملف PDF - ABO TALAL"))
+            context.startActivity(Intent.createChooser(intent, "معاينة ملف PDF - NetCraft"))
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(context, "تعذر فتح معاينة PDF: ${e.message}", Toast.LENGTH_LONG).show()
@@ -741,7 +741,7 @@ object CardPrintAndExportHelper {
             try {
                 val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
                 if (!downloadsDir.exists()) downloadsDir.mkdirs()
-                val fileName = "ABO_TALAL_${config.templateName}_${System.currentTimeMillis()}.pdf"
+                val fileName = "NetCraft_${config.templateName}_${System.currentTimeMillis()}.pdf"
                 val targetFile = File(downloadsDir, fileName)
 
                 val pdfDocument = android.graphics.pdf.PdfDocument()
@@ -844,7 +844,7 @@ object CardPrintAndExportHelper {
                     return
                 }
 
-                val info = PrintDocumentInfo.Builder("ABO_TALAL_Preview_${config.templateName}.pdf")
+                val info = PrintDocumentInfo.Builder("NetCraft_Preview_${config.templateName}.pdf")
                     .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
                     .setPageCount(1)
                     .build()
@@ -883,7 +883,7 @@ object CardPrintAndExportHelper {
             }
         }
 
-        printManager.print("ABO TALAL - معاينة تصميم ${config.templateName}", printAdapter, null)
+        printManager.print("NetCraft - معاينة تصميم ${config.templateName}", printAdapter, null)
     }
 
     /**
@@ -947,7 +947,7 @@ object CardPrintAndExportHelper {
                     return
                 }
 
-                val info = PrintDocumentInfo.Builder("ABO_TALAL_TK_${batch.batchId}.pdf")
+                val info = PrintDocumentInfo.Builder("NetCraft_TK_${batch.batchId}.pdf")
                     .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
                     .setPageCount(totalPages)
                     .build()
@@ -993,7 +993,7 @@ object CardPrintAndExportHelper {
             }
         }
 
-        printManager.print("ABO TALAL - كروت ${batch.batchId}", printAdapter, null)
+        printManager.print("NetCraft - كروت ${batch.batchId}", printAdapter, null)
     }
 
     /**
@@ -1036,7 +1036,7 @@ object CardPrintAndExportHelper {
                 pdfDoc.finishPage(page)
             }
 
-            val fileName = "ABO_TALAL_TK_${batch.batchId}_${System.currentTimeMillis()}.pdf"
+            val fileName = "NetCraft_TK_${batch.batchId}_${System.currentTimeMillis()}.pdf"
             val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             val targetDir = if (downloadsDir != null && downloadsDir.exists()) downloadsDir else context.filesDir
             val pdfFile = File(targetDir, fileName)
@@ -1055,7 +1055,7 @@ object CardPrintAndExportHelper {
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "application/pdf"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "كروت ${batch.batchId} - ABO TALAL")
+                putExtra(Intent.EXTRA_SUBJECT, "كروت ${batch.batchId} - NetCraft")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
@@ -1082,7 +1082,7 @@ object CardPrintAndExportHelper {
         posName: String = "المركز الرئيسي"
     ): File? {
         try {
-            val fileName = "ABO_TALAL_TK_${batch.batchId}_${System.currentTimeMillis()}.csv"
+            val fileName = "NetCraft_TK_${batch.batchId}_${System.currentTimeMillis()}.csv"
             val exportDir = File(context.cacheDir, "exports")
             if (!exportDir.exists()) exportDir.mkdirs()
             val file = File(exportDir, fileName)
@@ -1117,7 +1117,7 @@ object CardPrintAndExportHelper {
                 type = "text/csv"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, "تصدير دفعة كروت: ${batch.batchId}")
-                putExtra(Intent.EXTRA_TEXT, "ملف إكسل لكروت الدفعة ${batch.batchId} - نظام ABO TALAL (${users.size} كرت)")
+                putExtra(Intent.EXTRA_TEXT, "ملف إكسل لكروت الدفعة ${batch.batchId} - نظام NetCraft (${users.size} كرت)")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 

@@ -589,7 +589,7 @@ fun VoucherPrinterScreen(
 
                             // Static Brand
                             Text(
-                                text = "شبكة ABO TALAL VIP",
+                                text = "شبكة NetCraft",
                                 color = if (designTheme == CardDesignTheme.MINIMAL_WHITE) Color.Black else Color.White,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
@@ -614,7 +614,7 @@ fun VoucherPrinterScreen(
                                         fontSize = (passwordFontSize - 3).sp
                                     )
                                     Text(
-                                        text = if (generatedVouchersList.isNotEmpty()) generatedVouchersList.first().username else "ABO-TALAL-VIP-101",
+                                        text = if (generatedVouchersList.isNotEmpty()) generatedVouchersList.first().username else "NETCRAFT-101",
                                         color = textDesignColor,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = usernameFontSize.sp,
@@ -1466,7 +1466,7 @@ class VoucherPDFPrinter(
                             textSize = 10f
                             isFakeBoldText = true
                         }
-                        canvas.drawText("شبكة ABO TALAL VIP", (xLeft + (singleW / 2)).toFloat(), yTop + 20f, paintBrand)
+                        canvas.drawText("شبكة NetCraft", (xLeft + (singleW / 2)).toFloat(), yTop + 20f, paintBrand)
 
                         // 2. Plot Username
                         val uX = xLeft + (singleW * xUser)

@@ -185,7 +185,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         }
                                     }
 
-                                    // Center: App Brand ABO TALAL VIP with VIP Star
+                                    // Center: App Brand NetCraft with VIP Star
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -198,7 +198,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                                 modifier = Modifier.size(15.dp)
                                             )
                                             Text(
-                                                text = "ABO TALAL VIP",
+                                                text = "NetCraft",
                                                 fontFamily = CairoFontFamily,
                                                 color = Color.White,
                                                 fontSize = 17.sp,

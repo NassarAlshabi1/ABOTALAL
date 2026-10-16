@@ -110,7 +110,7 @@ fun DeveloperWelcomeDialog(
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Filled.Router,
-                                    contentDescription = "ABO TALAL VIP",
+                                    contentDescription = "NetCraft",
                                     tint = Color(0xFFFDE047),
                                     modifier = Modifier.size(34.dp)
                                 )
@@ -119,7 +119,7 @@ fun DeveloperWelcomeDialog(
 
                         // App Title
                         Text(
-                            text = "ABO TALAL VIP",
+                            text = "NetCraft",
                             fontFamily = CairoFontFamily,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Black,
@@ -193,7 +193,7 @@ fun DeveloperWelcomeDialog(
                             }
 
                             Text(
-                                text = "المهندس / عبدالحميد داوؤد (أبو طلال)",
+                                text = "شركة الهيثم للبرمجيات",
                                 fontFamily = CairoFontFamily,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.ExtraBold,
@@ -209,18 +209,18 @@ fun DeveloperWelcomeDialog(
                                 color = Color(0xFF334155)
                             )
 
-                            // Contact Row 1: 778215553
+                            // Contact Row 1: 773114243
                             ContactRow(
-                                number = "778215553",
-                                onCall = { dialNumber("778215553") },
-                                onWhatsApp = { openWhatsApp("778215553") }
+                                number = "773114243",
+                                onCall = { dialNumber("773114243") },
+                                onWhatsApp = { openWhatsApp("773114243") }
                             )
 
-                            // Contact Row 2: 700897775
+                            // Contact Row 2: 734587456
                             ContactRow(
-                                number = "700897775",
-                                onCall = { dialNumber("700897775") },
-                                onWhatsApp = { openWhatsApp("700897775") }
+                                number = "734587456",
+                                onCall = { dialNumber("734587456") },
+                                onWhatsApp = { openWhatsApp("734587456") }
                             )
                         }
                     }

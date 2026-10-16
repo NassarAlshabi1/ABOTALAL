@@ -11,7 +11,7 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.alameer.app"
+    applicationId = "com.marina.flutter"
     minSdk = 24
     targetSdk = 36
     versionCode = 15
@@ -55,7 +55,15 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all {
+        it.systemProperty("robolectric.dependency.repo.id", "central")
+        it.systemProperty("robolectric.dependency.repo.url", "https://artifacts-caching-proxy.aws.intellij.net/maven-central")
+      }
+    }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files

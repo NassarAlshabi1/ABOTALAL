@@ -151,7 +151,7 @@ fun LoginScreen(
 
                             // Center: App Title
                             Text(
-                                text = "ABO TALAL VIP",
+                                text = "NetCraft",
                                 color = Color.White,
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
@@ -1328,14 +1328,14 @@ fun LoginScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "تطوير وبرمجة المهندس عبدالحميد داوؤد",
+                                text = "تطوير وبرمجة شركة الهيثم للبرمجيات",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "هاتف التواصل: 778215553 | ABO TALAL VIP v1.0.0",
+                                text = "هاتف التواصل: 773114243 | NetCraft v1.0.0",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                             )
@@ -1358,12 +1358,12 @@ fun LoginScreen(
                 Column {
                     Text("معرف الجهاز الحالي:")
                     Text(
-                        text = "ABO-TALAL-VIP-ID-778215553",
+                        text = "NETCRAFT-ID-773114243",
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF0C5A60)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("ABO TALAL VIP - ترخيص رقم #8472")
+                    Text("NetCraft - ترخيص رقم #8472")
                 }
             },
             confirmButton = {
@@ -1507,7 +1507,7 @@ fun LoginScreen(
             onDismissRequest = { showBackupRestoreDialog = false },
             title = { Text("استرجاع نسخة احتياطية", fontWeight = FontWeight.Bold) },
             text = {
-                Text("خاصية استرجاع واستيراد ملفات النسخ الاحتياطي المشفرة لليوزرمانجر وقواعد بيانات ABO TALAL VIP جاهزة ومجهزة بالكامل.")
+                Text("خاصية استرجاع واستيراد ملفات النسخ الاحتياطي المشفرة لليوزرمانجر وقواعد بيانات NetCraft جاهزة ومجهزة بالكامل.")
             },
             confirmButton = {
                 Button(

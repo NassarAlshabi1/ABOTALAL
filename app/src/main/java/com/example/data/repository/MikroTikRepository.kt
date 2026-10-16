@@ -158,7 +158,7 @@ class MikroTikRepository(
                         return@launch
                     }
                 } catch (e: Exception) {
-                    Log.e("ABO-TALAL-VIP", "Native API connection failed: ${e.message}")
+                    Log.e("NetCraft", "Native API connection failed: ${e.message}")
                     launch(Dispatchers.Main) {
                         onError("تعذر الاتصال بـ ${connection.host}:${connection.port}. يرجى التحقق من اتصال الواي فاي أو تشغيل خدمة api في الراوتر.")
                     }

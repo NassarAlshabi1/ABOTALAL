@@ -150,7 +150,7 @@ fun UserManagerBatchFullDialog(
             ) {
                 Scaffold(
                     topBar = {
-                        // Top Luxury Header with ABO TALAL TK Branding
+                        // Top Luxury Header with NetCraft TK Branding
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -207,7 +207,7 @@ fun UserManagerBatchFullDialog(
                                         color = Color(0xFFE0F2FE)
                                     ) {
                                         Text(
-                                            text = "ABO TALAL VIP",
+                                            text = "NetCraft",
                                             fontFamily = CairoFontFamily,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.ExtraBold,

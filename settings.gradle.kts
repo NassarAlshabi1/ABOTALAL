@@ -1,8 +1,15 @@
 pluginManagement {
   repositories {
+    // Local Gradle plugin marker overrides (Devin VM); ignored when absent.
+    val localMarkers = java.io.File(System.getProperty("user.home") + "/.m2/plugin-markers")
+    if (localMarkers.isDirectory) {
+      maven { url = localMarkers.toURI() }
+    }
     google()
-    mavenCentral()
+    // JetBrains cache proxy of Maven Central as a fallback for Central rate limits (HTTP 429).
+    maven("https://artifacts-caching-proxy.aws.intellij.net/maven-central")
     gradlePluginPortal()
+    mavenCentral()
   }
 }
 
@@ -12,10 +19,12 @@ dependencyResolutionManagement {
   repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
   repositories {
     google()
+    // JetBrains cache proxy of Maven Central as a fallback for Central rate limits (HTTP 429).
+    maven("https://artifacts-caching-proxy.aws.intellij.net/maven-central")
     mavenCentral()
   }
 }
 
-rootProject.name = "ABO TALAL"
+rootProject.name = "NetCraft"
 
 include(":app")

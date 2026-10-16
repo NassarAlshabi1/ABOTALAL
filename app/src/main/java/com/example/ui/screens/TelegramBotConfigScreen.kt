@@ -292,7 +292,7 @@ fun TelegramBotConfigScreen(
                             scope.launch {
                                 isSendingTestMsg = true
                                 val testMsg = """
-                                    🚀 <b>[ABO TALAL VIP] - تجربة الاتصال بالبوت</b>
+                                    🚀 <b>[NetCraft] - تجربة الاتصال بالبوت</b>
                                     ━━━━━━━━━━━━━━━━━━━━
                                     ✅ تم ربط تطبيق إدارة شبكات المايكروتك مع البوت بنجاح!
                                     📡 <b>السيرفر:</b> متصل ومستقر
