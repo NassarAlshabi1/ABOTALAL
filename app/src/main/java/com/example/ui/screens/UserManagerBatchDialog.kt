@@ -87,7 +87,7 @@ fun UserManagerBatchFullDialog(
     // POS / نقطة البيع
     var posList by remember {
         mutableStateOf(
-            listOf("بدون نقطة بيع", "المركز الرئيسي", "كشك رقم 1", "متجر الأمل", "بقالة النور", "نقطة بيع رقم 2")
+            listOf("بدون نقطة بيع")
         )
     }
     var selectedPos by remember { mutableStateOf("بدون نقطة بيع") }
@@ -98,7 +98,7 @@ fun UserManagerBatchFullDialog(
 
     // Template Binding
     var linkedTemplateName by remember {
-        mutableStateOf(sharedPrefs.getString("${selectedProfileName}_template", "كروت_فئة_100") ?: "كروت_فئة_100")
+        mutableStateOf(sharedPrefs.getString("${selectedProfileName}_template", "") ?: "")
     }
     var showLinkTemplateDialog by remember { mutableStateOf(false) }
 
@@ -137,7 +137,7 @@ fun UserManagerBatchFullDialog(
 
     // Update template link when profile changes
     LaunchedEffect(selectedProfileName) {
-        linkedTemplateName = sharedPrefs.getString("${selectedProfileName}_template", "كروت_فئة_100") ?: "كروت_فئة_100"
+        linkedTemplateName = sharedPrefs.getString("${selectedProfileName}_template", "") ?: ""
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {

@@ -212,10 +212,12 @@ class MikroTikNativeApi(
      *  returning partial results — use it for mutations where the caller must know
      *  whether the router actually applied the command. */
     fun executeStrict(command: String, vararg params: String): List<Map<String, String>> {
-        val res = execute(command, *params)
-        val err = synchronized(socketLock) { lastCommandError }
-        if (err != null) throw java.io.IOException(err)
-        return res
+        synchronized(socketLock) {
+            val res = executeInternal(command, *params)
+            val err = lastCommandError
+            if (err != null) throw java.io.IOException(err)
+            return res
+        }
     }
 
     fun executeStrict(command: String, params: Map<String, String>): List<Map<String, String>> {
@@ -224,8 +226,14 @@ class MikroTikNativeApi(
     }
 
     fun execute(command: String, vararg params: String): List<Map<String, String>> {
+        synchronized(socketLock) { return executeInternal(command, *params) }
+    }
+
+    /** Body of [execute]; MUST be called while holding socketLock so that
+     *  [lastCommandError] is observed atomically with the command's own reply. */
+    private fun executeInternal(command: String, vararg params: String): List<Map<String, String>> {
         val results = mutableListOf<Map<String, String>>()
-        synchronized(socketLock) {
+        run {
             lastCommandError = null
             if (!isConnected()) {
                 if (!ensureConnected()) {

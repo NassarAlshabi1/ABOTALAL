@@ -235,7 +235,7 @@ fun SplashScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // حقوق المبرمج وNassar Alshabi ورقم التواصل كما طلب المستخدم صراحة
+                // حقوق المطوّر ورقم التواصل
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = Color.Black.copy(alpha = 0.35f),
@@ -264,7 +264,7 @@ fun SplashScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "تطوير وبرمجة: Nassar Alshabi",
+                                text = "تطوير وبرمجة: شركة الهيثم للبرمجيات",
                                 color = Color.White,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold

@@ -183,7 +183,7 @@ fun WelcomeCreditsDialog(
                                         color = Color(0xFF0D9488)
                                     )
                                     Text(
-                                        text = "Nassar Alshabi",
+                                        text = "شركة الهيثم للبرمجيات",
                                         fontFamily = CairoFontFamily,
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.ExtraBold,

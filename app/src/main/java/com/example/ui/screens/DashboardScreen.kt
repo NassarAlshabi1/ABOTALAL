@@ -930,7 +930,7 @@ fun DashboardScreen(
             title = { Text("الإرشاد والمساعدة والدعم الفني", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("برمجة وتطوير: Nassar Alshabi", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                    Text("برمجة وتطوير: شركة الهيثم للبرمجيات", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                     Text("هاتف التواصل: 773114243", fontFamily = CairoFontFamily)
                     Text("فريق الدعم الفني جاهز لمساعدتكم في أي استفسارات أو دعم للشبكة.", fontFamily = CairoFontFamily)
                 }
@@ -954,7 +954,7 @@ fun DashboardScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("نظام NetCraft", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                     Text("الإصدار: v1.0.1", fontFamily = CairoFontFamily)
-                    Text("تطوير: Nassar Alshabi (773114243)", fontFamily = CairoFontFamily)
+                    Text("تطوير: شركة الهيثم للبرمجيات (773114243)", fontFamily = CairoFontFamily)
                 }
             },
             confirmButton = {

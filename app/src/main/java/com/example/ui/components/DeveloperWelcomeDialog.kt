@@ -193,7 +193,7 @@ fun DeveloperWelcomeDialog(
                             }
 
                             Text(
-                                text = "Nassar Alshabi",
+                                text = "شركة الهيثم للبرمجيات",
                                 fontFamily = CairoFontFamily,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.ExtraBold,

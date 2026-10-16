@@ -1322,7 +1322,7 @@ fun LoginScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "تطوير وبرمجة Nassar Alshabi",
+                                text = "تطوير وبرمجة شركة الهيثم للبرمجيات",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant

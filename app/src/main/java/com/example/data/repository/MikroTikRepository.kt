@@ -383,13 +383,15 @@ class MikroTikRepository(
                     _interfaces.value = ifList.map {
                         val rx = it["rx-byte"]?.toLongOrNull() ?: 0L
                         val tx = it["tx-byte"]?.toLongOrNull() ?: 0L
+                        val name = it["name"] ?: "ether1"
+                        val (rs, ts) = speedFromDelta(name, rx, tx)
                         InterfaceStats(
-                            name = it["name"] ?: "ether1",
+                            name = name,
                             type = it["type"] ?: "ether",
                             rxByte = rx,
                             txByte = tx,
-                            rxSpeedKbps = (rx / 1024.0) % 500,
-                            txSpeedKbps = (tx / 1024.0) % 500,
+                            rxSpeedKbps = rs,
+                            txSpeedKbps = ts,
                             running = it["running"] == "true"
                         )
                     }
@@ -644,13 +646,15 @@ class MikroTikRepository(
                         _interfaces.value = ifList.map {
                             val rx = it["rx-byte"]?.toLongOrNull() ?: 0L
                             val tx = it["tx-byte"]?.toLongOrNull() ?: 0L
+                            val name = it["name"] ?: "ether1"
+                            val (rs, ts) = speedFromDelta(name, rx, tx)
                             InterfaceStats(
-                                name = it["name"] ?: "ether1",
+                                name = name,
                                 type = it["type"] ?: "ether",
                                 rxByte = rx,
                                 txByte = tx,
-                                rxSpeedKbps = (rx / 1024.0) % 500,
-                                txSpeedKbps = (tx / 1024.0) % 500,
+                                rxSpeedKbps = rs,
+                                txSpeedKbps = ts,
                                 running = it["running"] == "true"
                             )
                         }
@@ -1000,13 +1004,17 @@ class MikroTikRepository(
                     val list = mutableListOf<InterfaceStats>()
                     for (i in 0 until array.length()) {
                         val obj = array.getJSONObject(i)
+                        val name = obj.optString("name", "")
+                        val rxB = obj.optLong("rx-byte", 0)
+                        val txB = obj.optLong("tx-byte", 0)
+                        val (rs, ts) = speedFromDelta(name, rxB, txB)
                         list.add(InterfaceStats(
-                            name = obj.optString("name", ""),
+                            name = name,
                             type = obj.optString("type", ""),
-                            rxByte = obj.optLong("rx-byte", 0),
-                            txByte = obj.optLong("tx-byte", 0),
-                            rxSpeedKbps = (obj.optLong("rx-byte", 0) / 1024.0) % 500, // mock speed from delta is best, fallback to relative logic
-                            txSpeedKbps = (obj.optLong("tx-byte", 0) / 1024.0) % 500,
+                            rxByte = rxB,
+                            txByte = txB,
+                            rxSpeedKbps = rs,
+                            txSpeedKbps = ts,
                             running = obj.optBoolean("running", true)
                         ))
                     }
@@ -1743,12 +1751,9 @@ class MikroTikRepository(
             if (api != null) {
                 try {
                     val profiles = api.execute("/ip/hotspot/profile/print")
-                    if (profiles.isNotEmpty()) {
-                        val firstId = profiles.first()[".id"] ?: "*0"
-                        api.executeStrict("/ip/hotspot/profile/set", "=numbers=$firstId", "=html-directory=$dirName")
-                    } else {
-                        api.executeStrict("/ip/hotspot/profile/set", "=numbers=*0", "=html-directory=$dirName")
-                    }
+                    val firstId = profiles.firstOrNull()?.get(".id")
+                        ?: throw java.io.IOException("الراوتر لم يرجع أي بروفايل هوتسبوت لتطبيق المجلد عليه")
+                    api.executeStrict("/ip/hotspot/profile/set", "=numbers=$firstId", "=html-directory=$dirName")
                     insertActivityLog("تغيير مجلد الهوتسبوت", "تم ضبط مجلد صفحة تسجيل الدخول إلى: $dirName", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
