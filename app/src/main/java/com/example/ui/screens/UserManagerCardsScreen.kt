@@ -1638,7 +1638,7 @@ fun RenewCardDialog(
     onConfirmRenew: (targetProfile: String, resetUptime: Boolean) -> Unit
 ) {
     var selectedProfileName by remember {
-        mutableStateOf(if (profiles.any { it.name == user.profile }) user.profile else profiles.firstOrNull()?.name ?: "500RY")
+        mutableStateOf(if (profiles.any { it.name == user.profile }) user.profile else profiles.firstOrNull()?.name ?: "")
     }
     var resetUptime by remember { mutableStateOf(true) }
 
@@ -1717,11 +1717,15 @@ fun RenewCardDialog(
                     )
 
                     // Profile options list
-                    val displayProfiles = if (profiles.isNotEmpty()) profiles else listOf(
-                        UserManagerProfile(name = "500RY", validity = "10 ايام", price = 500.0, downloadLimit = "2GB"),
-                        UserManagerProfile(name = "300RY", validity = "1 اسبوع", price = 300.0, downloadLimit = "1.5GB"),
-                        UserManagerProfile(name = "3000RY", validity = "30 يوم", price = 3000.0, downloadLimit = "10GB")
-                    )
+                    if (profiles.isEmpty()) {
+                        Text(
+                            text = "لا توجد باقات على الراوتر — أنشئ باقة في User Manager أولاً",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = Color(0xFF94A3B8)
+                        )
+                    }
+                    val displayProfiles = profiles
 
                     Column(
                         modifier = Modifier.fillMaxWidth(),

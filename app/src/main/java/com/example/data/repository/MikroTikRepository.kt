@@ -1243,6 +1243,20 @@ class MikroTikRepository(
         throw lastErr ?: java.io.IOException("user-manager غير متوفر على الراوتر")
     }
 
+    // Resolves the real user-manager customer on the router (v6: /tool/user-manager
+    // customer/print). Defaults to "admin" only when the router reports none.
+    private fun umResolveCustomer(api: MikroTikNativeApi): String {
+        for (base in listOf("/user-manager", "/tool/user-manager")) {
+            try {
+                val list = api.execute("$base/customer/print")
+                val login = list.firstOrNull { it["login"] == "admin" }?.get("login")
+                    ?: list.firstOrNull()?.get("login") ?: list.firstOrNull()?.get("name")
+                if (login != null) return login
+            } catch (_: Exception) {}
+        }
+        return "admin"
+    }
+
     // Resolves a user-manager user's real .id on the router (numbers= accepts
     // .id reliably on both ROS v6 and v7, usernames not always).
     private fun umResolveUserId(api: MikroTikNativeApi, username: String): String? {
@@ -1269,7 +1283,7 @@ class MikroTikRepository(
                 val params = mutableMapOf(
                     "username" to user.username,
                     "password" to user.password,
-                    "customer" to "admin"
+                    "customer" to umResolveCustomer(api)
                 )
                 if (user.profile.isNotEmpty()) params["profile"] = user.profile
                 if (user.comment.isNotEmpty()) params["comment"] = user.comment
@@ -1297,7 +1311,7 @@ class MikroTikRepository(
                 // ROS v7 accepts a plain set. Try v6 path first, then v7 set.
                 var activated = false
                 try {
-                    umWrite(api, "user/create-and-activate-profile", mapOf("numbers" to uid, "profile" to newProfile, "customer" to "admin"))
+                    umWrite(api, "user/create-and-activate-profile", mapOf("numbers" to uid, "profile" to newProfile, "customer" to umResolveCustomer(api)))
                     activated = true
                 } catch (_: Exception) {
                     umWrite(api, "user/set", mapOf("numbers" to uid, "profile" to newProfile, "disabled" to "no"))
@@ -1557,17 +1571,18 @@ class MikroTikRepository(
                 }
                 val added = mutableListOf<UserManagerUser>()
                 var firstErr: String? = null
+                val customer = umResolveCustomer(api)
                 users.forEach { u ->
                     try {
                         umWrite(api, "user/add", mapOf(
-                            "customer" to "admin",
+                            "customer" to customer,
                             "username" to u.username,
                             "password" to u.password
                         ))
                         if (u.profile.isNotEmpty()) {
                             runCatching {
                                 umWrite(api, "user/create-and-activate-profile", mapOf(
-                                    "customer" to "admin",
+                                    "customer" to umResolveCustomer(api),
                                     "numbers" to (umResolveUserId(api, u.username) ?: u.username),
                                     "profile" to u.profile
                                 ))
