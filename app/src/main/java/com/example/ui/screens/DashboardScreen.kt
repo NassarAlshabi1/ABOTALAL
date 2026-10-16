@@ -190,7 +190,7 @@ fun DashboardScreen(
                                 }
                             }
                             Text(
-                                text = conn?.host?.ifEmpty { "172.16.0.1" } ?: "172.16.0.1",
+                                text = conn?.host?.ifEmpty { "-" } ?: "-",
                                 fontFamily = CairoFontFamily,
                                 color = Color.White,
                                 fontSize = 15.sp,
@@ -229,13 +229,13 @@ fun DashboardScreen(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.Schedule,
                             label = "مدة التشغيل",
-                            value = stats?.uptime?.ifEmpty { "1d18h59m52s" } ?: "1d18h59m52s"
+                            value = stats?.uptime?.ifEmpty { "-" } ?: "-"
                         )
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.Settings,
                             label = "اصدار الراوتر",
-                            value = "(stable) ${stats?.version?.ifEmpty { "6.49.19" } ?: "6.49.19"}"
+                            value = stats?.version?.ifEmpty { "-" } ?: "-"
                         )
                     }
 
@@ -248,7 +248,7 @@ fun DashboardScreen(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.Memory,
                             label = "المعالج",
-                            value = "${stats?.cpuUsage ?: 30}%"
+                            value = "${stats?.cpuUsage ?: 0}%"
                         )
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
@@ -267,9 +267,17 @@ fun DashboardScreen(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.FormatListBulleted,
                             label = "الذاكرة",
-                            value = "MB / 128.0 MB 48.0",
-                            hasProgressBar = true,
-                            progressFraction = 48f / 128f
+                            value = run {
+                                val total = stats?.totalMemoryBytes ?: 0L
+                                val free = stats?.freeMemoryBytes ?: 0L
+                                val usedMb = ((total - free).coerceAtLeast(0L)) / 1048576f
+                                val totalMb = total / 1048576f
+                                if (total > 0) "%.1f / %.1f MB".format(usedMb, totalMb) else "-"
+                            },
+                            hasProgressBar = (stats?.totalMemoryBytes ?: 0L) > 0L,
+                            progressFraction = if ((stats?.totalMemoryBytes ?: 0L) > 0L)
+                                (((stats!!.totalMemoryBytes - stats!!.freeMemoryBytes).toFloat()) / stats!!.totalMemoryBytes).coerceIn(0f, 1f)
+                            else 0f
                         )
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
@@ -864,8 +872,8 @@ fun DashboardScreen(
             title = { Text("الملف الشخصي", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("المستخدم: ${conn?.username ?: "nassar"}", fontFamily = CairoFontFamily)
-                    Text("الراوتر: ${conn?.name ?: "172.16.0.1"}", fontFamily = CairoFontFamily)
+                    Text("المستخدم: ${conn?.username ?: "-"}", fontFamily = CairoFontFamily)
+                    Text("الراوتر: ${conn?.name ?: "-"}", fontFamily = CairoFontFamily)
                     Text("الصلاحية: مدير النظام (Full Admin)", fontFamily = CairoFontFamily)
                 }
             },

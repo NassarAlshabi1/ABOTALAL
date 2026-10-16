@@ -618,7 +618,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "اختر الإجراء الذي ترغب بتنفيذه على الراوتر المتصل (${conn?.host ?: "172.16.0.1"}):",
+                        "اختر الإجراء الذي ترغب بتنفيذه على الراوتر المتصل (${conn?.host ?: "-"}):",
                         fontFamily = CairoFontFamily
                     )
 

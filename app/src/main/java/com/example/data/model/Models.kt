@@ -186,12 +186,12 @@ data class RouterGenericItem(
 )
 
 data class MikroTikCloudInfo(
-    val ddnsEnabled: Boolean = true,
-    val updateTime: Boolean = true,
-    val publicAddress: String = "185.120.45.10",
+    val ddnsEnabled: Boolean = false,
+    val updateTime: Boolean = false,
+    val publicAddress: String = "",
     val publicAddressIpv6: String = "",
-    val dnsName: String = "4f8205f2a1b3.sn.mynetname.net",
-    val status: String = "updated",
+    val dnsName: String = "",
+    val status: String = "",
     val warning: String = "",
     val updateInterval: String = "none"
 )

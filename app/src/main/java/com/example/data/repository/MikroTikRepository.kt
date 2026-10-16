@@ -224,12 +224,12 @@ class MikroTikRepository(
                 // 1. System Resource
                 val resList = api.execute("/system/resource/print")
                 val res = resList.firstOrNull() ?: emptyMap()
-                val totalMem = res["total-memory"]?.toLongOrNull() ?: (128 * 1024 * 1024L)
-                val freeMem = res["free-memory"]?.toLongOrNull() ?: (48 * 1024 * 1024L)
-                val cpu = res["cpu-load"]?.toIntOrNull() ?: 20
-                val uptime = res["uptime"] ?: "1d20h21m54s"
-                val version = res["version"] ?: "(stable) 6.49.19"
-                val board = res["board-name"] ?: "MikroTik"
+                val totalMem = res["total-memory"]?.toLongOrNull() ?: 0L
+                val freeMem = res["free-memory"]?.toLongOrNull() ?: 0L
+                val cpu = res["cpu-load"]?.toIntOrNull() ?: 0
+                val uptime = res["uptime"] ?: "-"
+                val version = res["version"] ?: "-"
+                val board = res["board-name"] ?: "-"
 
                 // 2. Hotspot User Profiles
                 var hsProfList = api.execute("/ip/hotspot/user/profile/print")
@@ -451,7 +451,7 @@ class MikroTikRepository(
     ) {
         repositoryScope.launch {
             val conn = _currentConnection.value
-            val host = conn?.host ?: "172.16.0.1"
+            val host = conn?.host ?: ""
             try {
                 val api = nativeApi
 
@@ -637,12 +637,12 @@ class MikroTikRepository(
 
                     val res = api.execute("/system/resource/print").firstOrNull()
                     if (res != null) {
-                        val freeMem = (res["free-memory"]?.toLongOrNull() ?: 48000000L)
-                        val totalMem = (res["total-memory"]?.toLongOrNull() ?: 128000000L)
-                        val cpu = res["cpu-load"]?.toIntOrNull() ?: 30
-                        val board = res["board-name"] ?: "MikroTik"
-                        val ver = res["version"] ?: "(stable) 6.49.19"
-                        val up = res["uptime"] ?: "1d18h59m52s"
+                        val freeMem = (res["free-memory"]?.toLongOrNull() ?: 0L)
+                        val totalMem = (res["total-memory"]?.toLongOrNull() ?: 0L)
+                        val cpu = res["cpu-load"]?.toIntOrNull() ?: 0
+                        val board = res["board-name"] ?: "-"
+                        val ver = res["version"] ?: "-"
+                        val up = res["uptime"] ?: "-"
 
                         _routerStats.value = RouterStats(
                             cpuUsage = cpu,
@@ -743,12 +743,12 @@ class MikroTikRepository(
             val resList = api.execute("/system/resource/print")
             if (resList.isNotEmpty()) {
                 val res = resList.first()
-                val totalMem = res["total-memory"]?.toLongOrNull() ?: (128 * 1024 * 1024L)
-                val freeMem = res["free-memory"]?.toLongOrNull() ?: (48 * 1024 * 1024L)
-                val cpu = res["cpu-load"]?.toIntOrNull() ?: 20
-                val uptime = res["uptime"] ?: "1d"
-                val version = res["version"] ?: "(stable) 6.49.19"
-                val board = res["board-name"] ?: "MikroTik"
+                val totalMem = res["total-memory"]?.toLongOrNull() ?: 0L
+                val freeMem = res["free-memory"]?.toLongOrNull() ?: 0L
+                val cpu = res["cpu-load"]?.toIntOrNull() ?: 0
+                val uptime = res["uptime"] ?: "-"
+                val version = res["version"] ?: "-"
+                val board = res["board-name"] ?: "-"
 
                 _routerStats.value = RouterStats(
                     cpuUsage = cpu,
@@ -831,12 +831,12 @@ class MikroTikRepository(
                     val body = response.body?.string() ?: ""
                     val json = JSONObject(body)
                     
-                    val cpuLoad = json.optInt("cpu-load", 12)
-                    val freeMem = json.optLong("free-memory", 480 * 1024 * 1024)
-                    val totalMem = json.optLong("total-memory", 1024 * 1024 * 1024)
-                    val uptime = json.optString("uptime", "3d 4h")
-                    val board = json.optString("board-name", "RB4011iGS+")
-                    val version = json.optString("version", "7.12.1")
+                    val cpuLoad = json.optInt("cpu-load", 0)
+                    val freeMem = json.optLong("free-memory", 0)
+                    val totalMem = json.optLong("total-memory", 0)
+                    val uptime = json.optString("uptime", "-")
+                    val board = json.optString("board-name", "-")
+                    val version = json.optString("version", "-")
                     
                     _routerStats.value = RouterStats(
                         cpuUsage = cpuLoad,
@@ -1243,7 +1243,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             val conn = _currentConnection.value
-            val host = conn?.host ?: "172.16.0.1"
+            val host = conn?.host ?: ""
 
             if (api != null && _isConnected.value) {
                 try {
@@ -1449,7 +1449,7 @@ class MikroTikRepository(
     // Router Control: Reboot / Shutdown
     fun rebootRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            val host = _currentConnection.value?.host ?: "172.16.0.1"
+            val host = _currentConnection.value?.host ?: ""
             if (nativeApi != null) {
                 val ok = nativeApi?.reboot() ?: false
                 insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل عبر المنفذ 8728", host)
@@ -1485,7 +1485,7 @@ class MikroTikRepository(
 
     fun shutdownRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            val host = _currentConnection.value?.host ?: "172.16.0.1"
+            val host = _currentConnection.value?.host ?: ""
             if (nativeApi != null) {
                 val ok = nativeApi?.shutdown() ?: false
                 insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف تشغيل الراوتر", host)
