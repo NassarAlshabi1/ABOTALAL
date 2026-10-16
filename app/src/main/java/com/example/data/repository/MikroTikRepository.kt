@@ -43,8 +43,6 @@ class MikroTikRepository(
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
-    private val _isDemoMode = MutableStateFlow(false)
-    val isDemoMode: StateFlow<Boolean> = _isDemoMode.asStateFlow()
 
     private val _currentConnection = MutableStateFlow<RouterConnection?>(null)
     val currentConnection: StateFlow<RouterConnection?> = _currentConnection.asStateFlow()
@@ -142,7 +140,6 @@ class MikroTikRepository(
                     if (loginSuccess) {
                         nativeApi = api
                         _currentConnection.value = connection
-                        _isDemoMode.value = false
                         _isConnected.value = true
 
                         insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر عبر المنفذ ${connection.port}", connection.host)
@@ -183,7 +180,6 @@ class MikroTikRepository(
                 okHttpClient?.newCall(request)?.execute().use { response ->
                     if (response != null && response.isSuccessful) {
                         _currentConnection.value = connection
-                        _isDemoMode.value = false
                         _isConnected.value = true
                         
                         insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر ${connection.name} (${connection.host})", connection.host)
@@ -218,105 +214,6 @@ class MikroTikRepository(
             launch(Dispatchers.Main) {
                 onResult(res.first, res.second)
             }
-        }
-    }
-
-    // Enter Program directly (الدخول للبرنامج - وضع المعاينة والمراجعة المحلية للبيانات المحفوظة بدون نت)
-    fun enableOfflineProgramMode(onSuccess: () -> Unit) {
-        repositoryScope.launch {
-            _operationStatus.value = "جاري الدخول إلى البرنامج..."
-            delay(150)
-            
-            // Read any saved router stats or cache from local Room database
-            val cachedStats = cacheDao.getLatestStats()
-            val cachedHotspot = cacheDao.getAllHotspotUsers()
-            val cachedUM = cacheDao.getAllUserManagerUsers()
-            val cachedUMProfiles = cacheDao.getAllUserManagerProfiles()
-            val cachedHSProfiles = cacheDao.getAllHotspotProfiles()
-
-            _currentConnection.value = RouterConnection(
-                id = -1,
-                name = "NetCraft",
-                host = cachedStats?.routerHost ?: "172.16.0.1",
-                port = 8728,
-                username = "nassar",
-                password = ""
-            )
-            _isDemoMode.value = true
-            _isConnected.value = true
-
-            // Set router stats from cache or realistic baseline
-            _routerStats.value = RouterStats(
-                cpuUsage = cachedStats?.cpuUsage ?: 30,
-                totalMemoryBytes = cachedStats?.totalMemoryBytes ?: (128 * 1024 * 1024L),
-                freeMemoryBytes = cachedStats?.freeMemoryBytes ?: (48 * 1024 * 1024L),
-                boardName = cachedStats?.boardName ?: "MikroTik RB750Gr3",
-                version = cachedStats?.version ?: "(stable) 6.49.19",
-                uptime = cachedStats?.uptime ?: "1d18h59m52s",
-                activeHotspotUsers = cachedStats?.activeHotspotUsers ?: 0,
-                activeUserManagerUsers = cachedStats?.activeUserManagerUsers ?: 0,
-                totalInterfaces = 5
-            )
-
-            if (cachedHotspot.isNotEmpty()) {
-                _hotspotUsers.value = cachedHotspot.map {
-                    HotspotUser(
-                        id = it.id,
-                        name = it.name,
-                        password = it.password,
-                        profile = it.profile,
-                        limitUptime = it.limitUptime,
-                        comment = it.comment,
-                        disabled = it.disabled,
-                        bytesOut = it.bytesOut,
-                        bytesIn = it.bytesIn
-                    )
-                }
-            } else {
-                generateDemoData()
-            }
-
-            if (cachedUM.isNotEmpty()) {
-                _userManagerUsers.value = cachedUM.map {
-                    UserManagerUser(
-                        username = it.username,
-                        password = it.password,
-                        profile = it.profile,
-                        active = it.active,
-                        uptimeUsed = it.uptimeUsed,
-                        downloadLimit = it.downloadLimit
-                    )
-                }
-            }
-
-            if (cachedUMProfiles.isNotEmpty()) {
-                _userManagerProfiles.value = cachedUMProfiles.map {
-                    UserManagerProfile(
-                        name = it.name,
-                        validity = it.validity,
-                        price = it.price,
-                        downloadLimit = it.downloadLimit,
-                        uptimeLimit = it.uptimeLimit,
-                        templateName = it.templateName,
-                        sharedUsers = it.sharedUsers
-                    )
-                }
-            }
-
-            if (cachedHSProfiles.isNotEmpty()) {
-                _hotspotProfiles.value = cachedHSProfiles.map {
-                    HotspotProfile(
-                        name = it.name,
-                        sharedUsers = it.sharedUsers,
-                        rateLimit = it.rateLimit,
-                        keepaliveTimeout = it.keepaliveTimeout
-                    )
-                }
-            }
-
-            insertActivityLog("الدخول للبرنامج", "تم الدخول إلى النظام (وضع المعاينة وقراءة البيانات)", "172.16.0.1")
-            startRealtimeTicker()
-            launch(Dispatchers.Main) { onSuccess() }
         }
     }
 
@@ -793,16 +690,10 @@ class MikroTikRepository(
         }
     }
 
-    // Force system trial (زر تجربة النظام)
-    fun enableDemoMode(onSuccess: () -> Unit) {
-        enableOfflineProgramMode(onSuccess)
-    }
-
     // Logoff connection
     fun disconnect() {
         isTickerRunning = false
         _isConnected.value = false
-        _isDemoMode.value = false
         try {
             nativeApi?.close()
         } catch (_: Exception) {}
@@ -828,9 +719,7 @@ class MikroTikRepository(
             var counter = 0
             while (isTickerRunning) {
                 try {
-                    if (_isDemoMode.value) {
-                        tickDemoStats(counter)
-                    } else {
+                    
                         val api = nativeApi
                         val conn = _currentConnection.value
                         if (api != null && conn != null) {
@@ -838,7 +727,7 @@ class MikroTikRepository(
                         } else if (conn != null) {
                             fetchRealRouterDashboard(conn)
                         }
-                    }
+                    
                 } catch (t: Throwable) {
                     Log.w("MikroTikRepository", "Protected ticker tick from error: ${t.message}")
                 }
@@ -1106,14 +995,7 @@ class MikroTikRepository(
     /* Hotspot CRUD Real Action Handlers */
     fun addHotspotUser(user: HotspotUser, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                // Demo addition
-                val list = _hotspotUsers.value.toMutableList()
-                list.add(user)
-                _hotspotUsers.value = list
-                insertActivityLog("إضافة مستخدم هوتسبوت", "تم إضافة المستخدم '${user.name}' بنجاح", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-            } else {
+            
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
@@ -1154,19 +1036,13 @@ class MikroTikRepository(
                         launch(Dispatchers.Main) { onError("خطأ في الاتصال: ${e.message}") }
                     }
                 }
-            }
+            
         }
     }
 
     fun deleteHotspotUser(id: String, name: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                _hotspotUsers.value = _hotspotUsers.value.filter { it.id != id }
-                // Also remove from active if active
-                _activeHotspot.value = _activeHotspot.value.filter { it.user != name }
-                insertActivityLog("حذف مستخدم هوتسبوت", "تم حذف المستخدم '$name' نهائياً", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-            } else {
+            
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
@@ -1190,17 +1066,13 @@ class MikroTikRepository(
                         launch(Dispatchers.Main) { onError("خطأ في الاتصال: ${e.message}") }
                     }
                 }
-            }
+            
         }
     }
 
     fun removeActiveHotspotUser(id: String, username: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                _activeHotspot.value = _activeHotspot.value.filter { it.id != id }
-                insertActivityLog("قطع اتصال مستخدم هوتسبوت", "تم قطع اتصال المستخدم النشط '$username'", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-            } else {
+            
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
@@ -1224,20 +1096,14 @@ class MikroTikRepository(
                         launch(Dispatchers.Main) { onError("خطأ في الاتصال: ${e.message}") }
                     }
                 }
-            }
+            
         }
     }
 
     // Add profile
     fun addHotspotProfile(profile: HotspotProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                val list = _hotspotProfiles.value.toMutableList()
-                list.add(profile)
-                _hotspotProfiles.value = list
-                insertActivityLog("إضافة بروفايل هوتسبوت", "تم إضافة البروفايل الجديد '${profile.name}' بسرعة ${profile.rateLimit}", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-            } else {
+            
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
@@ -1273,7 +1139,7 @@ class MikroTikRepository(
                         launch(Dispatchers.Main) { onError("خطأ: ${e.message}") }
                     }
                 }
-            }
+            
         }
     }
 
@@ -1591,14 +1457,7 @@ class MikroTikRepository(
                 launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة تشغيل الراوتر بنجاح!") }
                 return@launch
             }
-            if (_isDemoMode.value) {
-                insertActivityLog("إعادة تشغيل", "طلب إعادة تشغيل الراوتر", host)
-                _operationStatus.value = "جاري إعادة تشغيل الراوتر..."
-                delay(2000)
-                _operationStatus.value = null
-                disconnect()
-                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة تشغيل الراوتر بنجاح!") }
-            } else {
+            
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
@@ -1620,7 +1479,7 @@ class MikroTikRepository(
                         launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة التشغيل للراوتر بنجاح!") }
                     }
                 }
-            }
+            
         }
     }
 
@@ -1634,14 +1493,7 @@ class MikroTikRepository(
                 launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
                 return@launch
             }
-            if (_isDemoMode.value) {
-                insertActivityLog("إيقاف تشغيل", "طلب إيقاف تشغيل الراوتر", host)
-                _operationStatus.value = "جاري إيقاف تشغيل الراوتر..."
-                delay(2000)
-                _operationStatus.value = null
-                disconnect()
-                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
-            } else {
+            
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
@@ -1663,7 +1515,7 @@ class MikroTikRepository(
                         launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
                     }
                 }
-            }
+            
         }
     }
 
@@ -1671,251 +1523,7 @@ class MikroTikRepository(
     /* =========================================
        DYNAMIC STATEFUL DEMO DATA ENGINE
        ========================================= */
-    private fun generateDemoData() {
-        // Mock Hotspot Users
-        _hotspotUsers.value = listOf(
-            HotspotUser(name = "امير_الشبكة", profile = "بروفايل_المدير", comment = "مدير للنظام", bytesOut = 452932901, bytesIn = 3280190),
-            HotspotUser(name = "ali_nassar", profile = "العادي_1ميجا", limitUptime = "12:00:00", comment = "كارت يومي", bytesOut = 28938210, bytesIn = 120938),
-            HotspotUser(name = "mohammed99", profile = "عرض_العيد_3ميجا", limitUptime = "24:00:00", bytesOut = 890432190, bytesIn = 42932192),
-            HotspotUser(name = "user_34892", profile = "مفتوح_الحجم", limitUptime = "02:00:00", comment = "كرت ساعتين", bytesOut = 12293810, bytesIn = 422031),
-            HotspotUser(name = "fatima_guest", profile = "العادي_1ميجا", limitUptime = "unlimited", disabled = true),
-            HotspotUser(name = "ahmed_kamil", profile = "بريميم_5ميجا", comment = "اشتراك سنوي", bytesOut = 1243924300, bytesIn = 100943210)
-        )
-
-        // Mock Active Users
-        _activeHotspot.value = listOf(
-            HotspotActive(user = "امير_الشبكة", address = "10.5.50.254", macAddress = "A0:C5:5F:12:DE:09", uptime = "05:42:19", bytesIn = 3280190, bytesOut = 452932901),
-            HotspotActive(user = "ali_nassar", address = "10.5.50.22", macAddress = "8C:1A:BF:34:44:A2", uptime = "01:12:03", bytesIn = 120938, bytesOut = 28938210),
-            HotspotActive(user = "mohammed99", address = "10.5.50.87", macAddress = "F4:E2:C1:22:90:BB", uptime = "03:49:12", bytesIn = 42932192, bytesOut = 890432190),
-            HotspotActive(user = "user_34892", address = "10.5.50.11", macAddress = "34:FC:99:A8:11:7C", uptime = "00:45:30", bytesIn = 422031, bytesOut = 12293810)
-        )
-
-        // Mock Hotspot Profiles
-        _hotspotProfiles.value = listOf(
-            HotspotProfile(name = "default", sharedUsers = "1", rateLimit = "512k/512k"),
-            HotspotProfile(name = "بروفايل_المدير", sharedUsers = "5", rateLimit = "10M/10M"),
-            HotspotProfile(name = "العادي_1ميجا", sharedUsers = "1", rateLimit = "1M/1M", keepaliveTimeout = "2m"),
-            HotspotProfile(name = "عرض_العيد_3ميجا", sharedUsers = "1", rateLimit = "3M/3M", keepaliveTimeout = "5m"),
-            HotspotProfile(name = "بريميم_5ميجا", sharedUsers = "2", rateLimit = "5M/5M", keepaliveTimeout = "1m")
-        )
-
-        // Mock User Manager Users matching router screenshot
-        val sampleCards = listOf(
-            "023261", "048521", "097301", "077271", "028871", "071181",
-            "069161", "053161", "059121", "063311", "061251", "073761",
-            "081192", "041285", "033190", "014278", "095512", "066431"
-        )
-        val fullCardList = mutableListOf<UserManagerUser>()
-        sampleCards.forEachIndexed { i, uname ->
-            fullCardList.add(
-                UserManagerUser(
-                    username = uname,
-                    password = uname,
-                    profile = if (i % 3 == 0) "500RY" else if (i % 3 == 1) "300RY" else "3000RY",
-                    active = true,
-                    serialNumber = "-",
-                    uptimeUsed = if (i % 4 == 0) "1d 2h" else "0s"
-                )
-            )
-        }
-        for (i in 19..85) {
-            val numStr = String.format(Locale.US, "%06d", (i * 1237) % 999999)
-            fullCardList.add(
-                UserManagerUser(
-                    username = numStr,
-                    password = numStr,
-                    profile = if (i % 2 == 0) "500RY" else "300RY",
-                    active = i % 10 != 0,
-                    serialNumber = "-",
-                    uptimeUsed = if (i % 10 == 0) "expired" else "${(i % 5)}h"
-                )
-            )
-        }
-        _userManagerUsers.value = fullCardList
-
-        _userManagerProfiles.value = listOf(
-            UserManagerProfile(
-                name = "500RY",
-                validity = "10 ايام",
-                price = 500.0,
-                downloadLimit = "2 جيجابايت",
-                uptimeLimit = "72 ساعات",
-                templateName = "500RY",
-                sharedUsers = 1
-            ),
-            UserManagerProfile(
-                name = "300RY",
-                validity = "1 اسبوع",
-                price = 0.0,
-                downloadLimit = "2500 ميجابايت",
-                uptimeLimit = "15 ساعات",
-                templateName = "300RY",
-                sharedUsers = 1
-            ),
-            UserManagerProfile(
-                name = "3000RY",
-                validity = "4 اسبوع",
-                price = 3000.0,
-                downloadLimit = "10 جيجابايت",
-                uptimeLimit = "680 ساعات",
-                templateName = "3000RY",
-                sharedUsers = 1
-            ),
-            UserManagerProfile(
-                name = "250RY",
-                validity = "1 اسبوع",
-                price = 250.0,
-                downloadLimit = "1 جيجابايت",
-                uptimeLimit = "10 ساعات",
-                templateName = "250RY",
-                sharedUsers = 1
-            ),
-            UserManagerProfile(
-                name = "200RY",
-                validity = "5 ايام",
-                price = 200.0,
-                downloadLimit = "850 ميجابايت",
-                uptimeLimit = "8 ساعات",
-                templateName = "200RY",
-                sharedUsers = 1
-            ),
-            UserManagerProfile(
-                name = "100RY",
-                validity = "4 ايام",
-                price = 100.0,
-                downloadLimit = "10 جيجابايت",
-                uptimeLimit = "680 ساعات",
-                templateName = "100RY",
-                sharedUsers = 1
-            )
-        )
-
-        // Interfaces
-        _interfaces.value = listOf(
-            InterfaceStats("ether1-Gateway", "ether", 543100234, 1204932149, 1420.5, 4510.2),
-            InterfaceStats("ether2-Local", "ether", 109238120, 429381204, 321.4, 1024.5),
-            InterfaceStats("ether3-Hotspot", "ether", 894382010, 42938491, 2304.5, 895.4),
-            InterfaceStats("wlan1", "wlan", 42938120, 10245009, 234.3, 112.5),
-            InterfaceStats("bridge-Local", "bridge", 1003429182, 1634317201, 2625.9, 5534.6)
-        )
-
-        // Real router stats simulation initialized
-        _routerStats.value = RouterStats(
-            cpuUsage = 23,
-            totalMemoryBytes = 1073741824, // 1 GB
-            freeMemoryBytes = 743201492,  // ~700 MB
-            boardName = "MikroTik RB4011iGS+ (NETCRAFT DEMO)",
-            version = "RouterOS v7.14.3",
-            uptime = "07d 12h 45m 12s",
-            activeHotspotUsers = _activeHotspot.value.size,
-            activeUserManagerUsers = _userManagerUsers.value.count { it.active },
-            totalInterfaces = _interfaces.value.size
-        )
-    }
-
     private fun comments(comment: String): String = comment
-
-    private fun tickDemoStats(counter: Int) {
-        val currentStats = _routerStats.value ?: return
-        
-        // Random fluctuate CPU usage slightly
-        val newCpu = Math.max(2, Math.min(98, currentStats.cpuUsage + (-5..5).random()))
-        
-        // Change memory slightly
-        val memDelta = (-2048 * 1024..2048 * 1024).random().toLong()
-        val newFreeMem = Math.max(100 * 1024 * 1024, Math.min(950 * 1024 * 1024, currentStats.freeMemoryBytes + memDelta))
-        
-        // Accumulate active uptimes safely
-        val updatedActive = _activeHotspot.value.map { active ->
-            try {
-                val parts = active.uptime.split(":")
-                if (parts.size == 3) {
-                    var h = parts[0].filter { it.isDigit() }.toIntOrNull() ?: 0
-                    var m = parts[1].filter { it.isDigit() }.toIntOrNull() ?: 0
-                    var s = parts[2].filter { it.isDigit() }.toIntOrNull() ?: 0
-                    s += 2
-                    if (s >= 60) {
-                        s = 0
-                        m += 1
-                        if (m >= 60) {
-                            m = 0
-                            h += 1
-                        }
-                    }
-                    val formatH = String.format(Locale.US, "%02d", h)
-                    val formatM = String.format(Locale.US, "%02d", m)
-                    val formatS = String.format(Locale.US, "%02d", s)
-                    active.copy(
-                        uptime = "$formatH:$formatM:$formatS",
-                        bytesOut = active.bytesOut + (2000..50000).random(),
-                        bytesIn = active.bytesIn + (500..12000).random()
-                    )
-                } else {
-                    active
-                }
-            } catch (_: Exception) {
-                active
-            }
-        }
-        _activeHotspot.value = updatedActive
-
-        // Live speed interfaces fluctuations
-        val updatedInterfaces = _interfaces.value.map {
-            val rxSpeed = if (it.running) (10..5500).random().toDouble() else 0.0
-            val txSpeed = if (it.running) (20..8500).random().toDouble() else 0.0
-            it.copy(
-                rxByte = it.rxByte + (rxSpeed * 256).toLong(),
-                txByte = it.txByte + (txSpeed * 256).toLong(),
-                rxSpeedKbps = rxSpeed,
-                txSpeedKbps = txSpeed
-            )
-        }
-        _interfaces.value = updatedInterfaces
-
-        // Periodic join/leave of a fake guest to make dashboard interactive
-        if (counter % 15 == 0) {
-            val names = listOf("iphone_user", "samsung_galaxy", "macbook_pro", "xiaomi_redmi", "guest_home", "huawei_p50")
-            val randName = names.random()
-            
-            val isAlreadyActive = _activeHotspot.value.any { it.user == randName }
-            if (isAlreadyActive) {
-                // leave
-                _activeHotspot.value = _activeHotspot.value.filter { it.user != randName }
-                insertActivityLog("تسجيل خروج مستخدم", "قطع المستخدم '$randName' اتصاله بالهوتسبوت", "10.5.50.1")
-            } else {
-                // join
-                val mac = "00:1A:2B:3C:${(10..99).random()}:${(10..99).random()}"
-                val activeNew = HotspotActive(
-                    user = randName,
-                    address = "10.5.50.${(100..253).random()}",
-                    macAddress = mac,
-                    uptime = "00:00:01",
-                    bytesIn = 4096,
-                    bytesOut = 51200
-                )
-                _activeHotspot.value = _activeHotspot.value + activeNew
-                insertActivityLog("تسجيل دخول مستخدم", "المستخدم '$randName' سجل دخوله الآن بنجاح عبر الهوتسبوت", "10.5.50.1")
-            }
-        }
-
-        // Format system uptime clock
-        val hours = (counter * 2) / 3600
-        val mins = ((counter * 2) % 3600) / 60
-        val secs = (counter * 2) % 60
-        val uptimeStr = "07d 12h " + String.format(Locale.US, "%02dm %02ds", mins + 45, secs + 12)
-
-        _routerStats.value = RouterStats(
-            cpuUsage = newCpu,
-            totalMemoryBytes = currentStats.totalMemoryBytes,
-            freeMemoryBytes = newFreeMem,
-            boardName = currentStats.boardName,
-            version = currentStats.version,
-            uptime = uptimeStr,
-            activeHotspotUsers = _activeHotspot.value.size,
-            activeUserManagerUsers = _userManagerUsers.value.count { it.active },
-            totalInterfaces = _interfaces.value.size
-        )
-    }
 
     fun refreshData() {
         repositoryScope.launch {
@@ -1923,10 +1531,8 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null && conn != null) {
                 fetchRealNativeData(api, conn)
-            } else if (conn != null && !_isDemoMode.value) {
+            } else if (conn != null) {
                 fetchRealRouterData(conn)
-            } else {
-                tickDemoStats(1)
             }
         }
     }
@@ -1937,13 +1543,7 @@ class MikroTikRepository(
 
     fun setHtmlDirectory(dirName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(400)
-                insertActivityLog("تغيير مجلد الهوتسبوت", "تم ضبط مجلد صفحة تسجيل الدخول إلى: $dirName", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     val profiles = api.execute("/ip/hotspot/profile/print")
@@ -1966,14 +1566,7 @@ class MikroTikRepository(
 
     fun toggleFreeHotspot(enableFree: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(400)
-                val statusText = if (enableFree) "تفعيل الشبكة مجاناً بدون كروت" else "إعادة قفل الشبكة بنظام الكروت"
-                insertActivityLog("تفعيل الشبكة مجاناً", statusText, "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     val servers = api.execute("/ip/hotspot/print")
@@ -1995,14 +1588,7 @@ class MikroTikRepository(
 
     fun toggleTtlBypass(blockSharing: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(400)
-                val statusText = if (blockSharing) "تم تفعيل حظر مشاركة الإنترنت (TTL=1)" else "تم إلغاء حظر مشاركة الإنترنت"
-                insertActivityLog("إيقاف مشاركة النت", statusText, "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     val rules = api.execute("/ip/firewall/mangle/print")
@@ -2039,16 +1625,7 @@ class MikroTikRepository(
 
     fun toggleInterface(interfaceName: String, enable: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(300)
-                _interfaces.value = _interfaces.value.map {
-                    if (it.name == interfaceName) it.copy(running = enable) else it
-                }
-                insertActivityLog("المنافذ", if (enable) "تشغيل المنفذ $interfaceName" else "تعطيل المنفذ $interfaceName", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     api.execute("/interface/set", "=numbers=$interfaceName", "=disabled=${if (enable) "no" else "yes"}")
@@ -2065,16 +1642,7 @@ class MikroTikRepository(
 
     fun resetInterfaceCounters(interfaceName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(300)
-                _interfaces.value = _interfaces.value.map {
-                    if (it.name == interfaceName) it.copy(rxByte = 0L, txByte = 0L, rxSpeedKbps = 0.0, txSpeedKbps = 0.0) else it
-                }
-                insertActivityLog("المنافذ", "إعادة ضبط عدادات المنفذ $interfaceName", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     api.execute("/interface/reset-counters", "=numbers=$interfaceName")
@@ -2090,19 +1658,7 @@ class MikroTikRepository(
 
     fun fetchPppoeUsers(onSuccess: (List<PppoeUser>) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(400)
-                val demoPpp = listOf(
-                    PppoeUser("client_ahmed", "1234", "pppoe", "10Mbps_Profile", "10.0.0.1", "10.0.0.15", "بروباند منزلي", false, "00:1A:2B:3C:4D:5E", "3d 05:22:10", true),
-                    PppoeUser("shop_netcraft", "5566", "pppoe", "20Mbps_Profile", "10.0.0.1", "10.0.0.16", "محل الأمير للتجارة", false, "AA:BB:CC:DD:EE:01", "12d 18:40:02", true),
-                    PppoeUser("user_khalid", "9988", "pppoe", "5Mbps_Profile", "10.0.0.1", "10.0.0.17", "مشترك شهري", false, "11:22:33:44:55:66", "08:14:30", true),
-                    PppoeUser("office_vip", "pass123", "pppoe", "Unlimited_VIP", "10.0.0.1", "10.0.0.18", "مكتب الإدارة", false, "44:55:66:77:88:99", "1d 02:11:55", true),
-                    PppoeUser("guest_temp", "0000", "pppoe", "default", "", "", "حساب موقف مؤقت", true, "", "0s", false)
-                )
-                launch(Dispatchers.Main) { onSuccess(demoPpp) }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     val secrets = api.execute("/ppp/secret/print")
@@ -2138,13 +1694,7 @@ class MikroTikRepository(
 
     fun addPppoeUser(user: PppoeUser, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(300)
-                insertActivityLog("بروباند", "إضافة مستخدم بروباند ${user.name}", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     api.execute(
@@ -2168,13 +1718,7 @@ class MikroTikRepository(
 
     fun deletePppoeUser(name: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(300)
-                insertActivityLog("بروباند", "حذف مستخدم البروباند $name", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     api.execute("/ppp/secret/remove", "=numbers=$name")
@@ -2191,13 +1735,7 @@ class MikroTikRepository(
 
     fun installTelegramScript(scriptName: String, scriptSource: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                delay(400)
-                insertActivityLog("سكربتات المايكروتك", "تثبيت سكربت التلغرام $scriptName بنجاح", "192.168.88.1")
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     // Check if exists
@@ -2227,22 +1765,7 @@ class MikroTikRepository(
     fun executePing(target: String, count: Int = 4, onResult: (String) -> Unit) {
         repositoryScope.launch {
             val cleanTarget = target.trim()
-            if (_isDemoMode.value) {
-                delay(800)
-                val pingOutput = buildString {
-                    appendLine("PING $cleanTarget 56 data bytes:")
-                    appendLine("64 bytes from $cleanTarget: icmp_seq=1 ttl=58 time=12.4 ms")
-                    appendLine("64 bytes from $cleanTarget: icmp_seq=2 ttl=58 time=11.8 ms")
-                    appendLine("64 bytes from $cleanTarget: icmp_seq=3 ttl=58 time=13.1 ms")
-                    appendLine("64 bytes from $cleanTarget: icmp_seq=4 ttl=58 time=12.0 ms")
-                    appendLine("--- $cleanTarget ping statistics ---")
-                    appendLine("4 packets transmitted, 4 received, 0% packet loss, time 3004ms")
-                    appendLine("rtt min/avg/max/mdev = 11.8/12.3/13.1/0.5 ms")
-                }
-                launch(Dispatchers.Main) { onResult(pingOutput) }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     val res = api.execute("/ping", "=address=$cleanTarget", "=count=$count")
@@ -2269,13 +1792,7 @@ class MikroTikRepository(
 
     fun fetchGenericSectionData(categoryKey: String, onSuccess: (List<RouterGenericItem>) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            if (_isDemoMode.value) {
-                // No fabricated data — demo mode shows an honest empty state.
-                delay(200)
-                launch(Dispatchers.Main) { onSuccess(emptyList()) }
-                return@launch
-            }
-            val api = nativeApi
+                        val api = nativeApi
             if (api != null) {
                 try {
                     val cmd = when (categoryKey) {
@@ -2389,9 +1906,9 @@ class MikroTikRepository(
                     val info = cloudResults.firstOrNull() ?: emptyMap()
                     val ddns = info["ddns-enabled"]?.equals("true", ignoreCase = true) ?: (info["ddns-enabled"]?.equals("yes", ignoreCase = true) ?: true)
                     val updateTime = info["update-time"]?.equals("true", ignoreCase = true) ?: (info["update-time"]?.equals("yes", ignoreCase = true) ?: true)
-                    val publicIp = info["public-address"] ?: info["public-ip"] ?: "185.120.45.10"
+                    val publicIp = info["public-address"] ?: info["public-ip"] ?: ""
                     val publicIp6 = info["public-address-ipv6"] ?: ""
-                    val dnsName = info["dns-name"] ?: "4f8205f2a1b3.sn.mynetname.net"
+                    val dnsName = info["dns-name"] ?: ""
                     val status = info["status"] ?: "updated"
                     val warning = info["warning"] ?: ""
 
@@ -2412,9 +1929,9 @@ class MikroTikRepository(
                             MikroTikCloudBackup(
                                 id = b[".id"] ?: idx.toString(),
                                 name = b["name"] ?: "cloud-backup-$idx",
-                                size = b["size"] ?: "1.2 MB",
+                                size = b["size"] ?: "",
                                 downloadStatus = b["download-status"] ?: "complete",
-                                time = b["creation-time"] ?: "2026-09-08 14:30:00",
+                                time = b["creation-time"] ?: "",
                                 encrypted = true
                             )
                         }
@@ -2425,21 +1942,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل جلب بيانات الكلاود") }
                 }
             } else {
-                val demo = MikroTikCloudInfo(
-                    ddnsEnabled = true,
-                    updateTime = true,
-                    publicAddress = "185.120.45.10",
-                    publicAddressIpv6 = "2a02:26f0:b400::1",
-                    dnsName = "4f8205f2a1b3.sn.mynetname.net",
-                    status = "updated",
-                    warning = ""
-                )
-                _cloudInfo.value = demo
-                _cloudBackups.value = listOf(
-                    MikroTikCloudBackup("0", "full-config-auto.backup", "1.4 MB", "complete", "2026-09-07 10:15:00", true),
-                    MikroTikCloudBackup("1", "users-and-hs-backup.backup", "850 KB", "complete", "2026-09-05 18:00:22", true)
-                )
-                launch(Dispatchers.Main) { onSuccess(demo) }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
             }
         }
     }
@@ -2457,8 +1960,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل تحديث الكلاود") }
                 }
             } else {
-                fetchCloudData()
-                launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
             }
         }
     }
@@ -2476,8 +1978,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل حفظ إعدادات الكلاود") }
                 }
             } else {
-                _cloudInfo.value = _cloudInfo.value.copy(ddnsEnabled = enabled)
-                launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
             }
         }
     }
@@ -2516,16 +2017,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل رفع النسخة السحابية") }
                 }
             } else {
-                val newBackup = MikroTikCloudBackup(
-                    id = System.currentTimeMillis().toString(),
-                    name = if (name.isBlank()) "backup-${System.currentTimeMillis()}.backup" else "$name.backup",
-                    size = "1.1 MB",
-                    downloadStatus = "complete",
-                    time = "الآن",
-                    encrypted = password.isNotBlank()
-                )
-                _cloudBackups.value = listOf(newBackup) + _cloudBackups.value
-                launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
             }
         }
     }
@@ -2542,8 +2034,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل حذف النسخة السحابية") }
                 }
             } else {
-                _cloudBackups.value = _cloudBackups.value.filter { it.id != backupId }
-                launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
             }
         }
     }

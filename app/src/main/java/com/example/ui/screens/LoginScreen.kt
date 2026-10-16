@@ -1207,39 +1207,11 @@ fun LoginScreen(
                     item {
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Bottom Actions: [تسجيل الدخول ➔] and [الدخول للبرنامج ➔]
+                        // Bottom Action: [تسجيل الدخول ➔]
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            // Left: الدخول للبرنامج ➔ (Enters app in offline / local cache review mode)
-                            OutlinedButton(
-                                onClick = {
-                                    viewModel.startOfflineProgramMode { onLoginSuccess() }
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp),
-                                shape = RoundedCornerShape(14.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Text(
-                                        text = "الدخول للبرنامج",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Icon(
-                                        imageVector = Icons.Filled.ArrowForward,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-
                             // Right: تسجيل الدخول ➔ (Connects to chosen router)
                             Button(
                                 onClick = {

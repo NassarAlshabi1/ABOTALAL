@@ -45,7 +45,6 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     // UI exposed states from repository
     val isConnected = repository.isConnected
-    val isDemoMode = repository.isDemoMode
     val currentConnection = repository.currentConnection
     val routerStats = repository.routerStats
     val hotspotUsers = repository.hotspotUsers
@@ -120,17 +119,6 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             }
         )
     }
-
-    // Launch Demo System Mode
-    fun startDemoMode(onSuccess: () -> Unit) {
-        _isConnecting.value = true
-        _connectionError.value = null
-        repository.enableDemoMode {
-            _isConnecting.value = false
-            onSuccess()
-        }
-    }
-
     // Disconnect
     fun logout() {
         repository.disconnect()
@@ -232,17 +220,6 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
     fun backupUserManagerDatabase(onSuccess: (String) -> Unit) {
         repository.backupUserManagerDatabase(onSuccess)
     }
-
-    /* Offline Program Mode */
-    fun startOfflineProgramMode(onSuccess: () -> Unit) {
-        _isConnecting.value = true
-        _connectionError.value = null
-        repository.enableOfflineProgramMode {
-            _isConnecting.value = false
-            onSuccess()
-        }
-    }
-
     /* Test Connection */
     fun testConnection(host: String, port: Int, onResult: (Boolean, String) -> Unit) {
         repository.testConnection(host, port, onResult)

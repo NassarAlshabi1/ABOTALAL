@@ -116,6 +116,11 @@ class NativeApiIntegrationTest {
                     writeSentence(out, listOf("!re", "=.id=*1", "=name=default", "=rate-limit=1M/1M"))
                     writeSentence(out, listOf("!done"))
                 }
+                command.startsWith("/user-manager/user/print") -> {
+                    writeSentence(out, listOf("!re", "=.id=*1", "=name=card_ahmed", "=password=1111", "=profile=1h_100MB", "=uptime-used=15m", "=disabled=false"))
+                    writeSentence(out, listOf("!re", "=.id=*2", "=name=card_khalid", "=password=2222", "=profile=1h_100MB", "=uptime-used=30m", "=disabled=false"))
+                    writeSentence(out, listOf("!done"))
+                }
                 command.startsWith("/system/identity/print") ->
                     writeSentence(out, listOf("!done", "=name=mock-router"))
                 else -> writeSentence(out, listOf("!done"))
@@ -215,9 +220,95 @@ class NativeApiIntegrationTest {
                 kotlinx.coroutines.delay(100)
             }
             assertTrue(repo.isConnected.value)
-            assertFalse(repo.isDemoMode.value)
             assertEquals("test_card1", repo.hotspotUsers.value.firstOrNull()?.name)
             assertEquals("default", repo.hotspotProfiles.value.firstOrNull()?.name)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    private fun connectRepoToMock(server: MockMikroTikServer): MikroTikRepository {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        val repo = MikroTikRepository(context, db.activityLogDao(), db.cacheDao())
+        var success = false
+        var error: String? = null
+        repo.connectToRouter(
+            RouterConnection(name = "test", host = "127.0.0.1", port = server.port, username = "admin", password = "1234"),
+            onSuccess = { success = true },
+            onError = { error = it }
+        )
+        val deadline = System.currentTimeMillis() + 15_000
+        while ((!success && error == null) && System.currentTimeMillis() < deadline) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.sleep(100)
+        }
+        assertTrue("connectToRouter failed: $error", success)
+        return repo
+    }
+
+    private fun awaitUmUsers(repo: MikroTikRepository) {
+        val deadline = System.currentTimeMillis() + 15_000
+        while (repo.userManagerUsers.value.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100)
+        }
+        assertTrue("user-manager users should load from router", repo.userManagerUsers.value.isNotEmpty())
+    }
+
+    @Test
+    fun `card renewal updates profile and resets uptime`() = runBlocking {
+        val server = MockMikroTikServer()
+        try {
+            val repo = connectRepoToMock(server)
+            awaitUmUsers(repo)
+
+            val target = repo.userManagerUsers.value.first()
+            var successCalled = false
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            repo.renewUserManagerUser(
+                username = target.username,
+                newProfile = "3000RY",
+                resetUptime = true,
+                onSuccess = { successCalled = true },
+                onError = {}
+            )
+            var wait = System.currentTimeMillis() + 10_000
+            while (!successCalled && System.currentTimeMillis() < wait) {
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+                kotlinx.coroutines.delay(100)
+            }
+
+            assertTrue(successCalled)
+            val updated = repo.userManagerUsers.value.find { it.username == target.username }
+            assertEquals("3000RY", updated?.profile)
+            assertTrue(updated?.active == true)
+            assertEquals("0s", updated?.uptimeUsed)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `bulk toggle deactivates selected user-manager cards`() = runBlocking {
+        val server = MockMikroTikServer()
+        try {
+            val repo = connectRepoToMock(server)
+            awaitUmUsers(repo)
+
+            val usernames = repo.userManagerUsers.value.take(2).map { it.username }
+            var toggled = -1
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            repo.bulkToggleUserManagerUsers(usernames, active = false) { count -> toggled = count }
+            var wait = System.currentTimeMillis() + 10_000
+            while (toggled < 0 && System.currentTimeMillis() < wait) {
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+                kotlinx.coroutines.delay(100)
+            }
+
+            assertEquals(2, toggled)
+            repo.userManagerUsers.value.filter { it.username in usernames }.forEach {
+                assertFalse(it.active)
+            }
         } finally {
             server.shutdown()
         }
