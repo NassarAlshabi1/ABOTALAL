@@ -1150,7 +1150,7 @@ class MikroTikRepository(
             val list = _userManagerUsers.value.toMutableList()
             list.add(user)
             _userManagerUsers.value = list
-            insertActivityLog("يوزر مانجر", "تم إضافة مستخدم يوزر مانجر جديد '${user.username}' بالبروفايل '${user.profile}'", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("يوزر مانجر", "تم إضافة مستخدم يوزر مانجر جديد '${user.username}' بالبروفايل '${user.profile}'", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess() }
         }
     }
@@ -1168,7 +1168,7 @@ class MikroTikRepository(
                 } else it
             }
             _userManagerUsers.value = list
-            insertActivityLog("تجديد كرت", "تم تجديد الكرت '$username' بالباقة '$newProfile'", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("تجديد كرت", "تم تجديد الكرت '$username' بالباقة '$newProfile'", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess() }
         }
     }
@@ -1180,7 +1180,7 @@ class MikroTikRepository(
             val initial = _userManagerUsers.value.size
             _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in toRemove }
             val deletedCount = initial - _userManagerUsers.value.size
-            insertActivityLog("حذف جماعي", "تم حذف $deletedCount كرت من نظام اليوزر مانجر", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("حذف جماعي", "تم حذف $deletedCount كرت من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess(deletedCount) }
         }
     }
@@ -1192,7 +1192,7 @@ class MikroTikRepository(
             _userManagerUsers.value = _userManagerUsers.value.map {
                 if (it.username in toToggle) it.copy(active = active) else it
             }
-            insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} ${toToggle.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} ${toToggle.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess(toToggle.size) }
         }
     }
@@ -1201,7 +1201,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             delay(350)
             _userManagerUsers.value = _userManagerUsers.value.filter { it.username != username }
-            insertActivityLog("يوزر مانجر", "تم حذف مستخدم '${username}' من نظام اليوزر مانجر", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("يوزر مانجر", "تم حذف مستخدم '${username}' من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess() }
         }
     }
@@ -1213,7 +1213,7 @@ class MikroTikRepository(
             list.removeAll { it.name == profile.name }
             list.add(profile)
             _userManagerProfiles.value = list
-            insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' بسعر ${profile.price.toInt()} د.ع", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' بسعر ${profile.price.toInt()} د.ع", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess() }
         }
     }
@@ -1225,7 +1225,7 @@ class MikroTikRepository(
                 if (it.name == oldName) updatedProfile else it
             }
             _userManagerProfiles.value = list
-            insertActivityLog("يوزر مانجر بروفايل", "تم تحديث باقة يوزر مانجر '${updatedProfile.name}'", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("يوزر مانجر بروفايل", "تم تحديث باقة يوزر مانجر '${updatedProfile.name}'", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess() }
         }
     }
@@ -1234,7 +1234,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             delay(300)
             _userManagerProfiles.value = _userManagerProfiles.value.filter { it.name != profileName }
-            insertActivityLog("يوزر مانجر بروفايل", "تم حذف باقة يوزر مانجر '${profileName}'", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("يوزر مانجر بروفايل", "تم حذف باقة يوزر مانجر '${profileName}'", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess() }
         }
     }
@@ -1367,7 +1367,7 @@ class MikroTikRepository(
             } else {
                 _userManagerProfiles.value = currentMap.values.toList()
             }
-            insertActivityLog("استيراد باقات", "تم استيراد ومزامنة $importedCount باقة يوزرمانجر بنجاح", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("استيراد باقات", "تم استيراد ومزامنة $importedCount باقة يوزرمانجر بنجاح", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess(importedCount) }
         }
     }
@@ -1407,7 +1407,7 @@ class MikroTikRepository(
                 // Prepend so new cards appear instantly at top
                 list.addAll(0, users)
                 _userManagerUsers.value = list
-                insertActivityLog("توليد دفعة كروت", "تم توليد دفعة كروت جديدة ($batchName) بعدد ${users.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "192.168.88.1")
+                insertActivityLog("توليد دفعة كروت", "تم توليد دفعة كروت جديدة ($batchName) بعدد ${users.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { onError(e.message ?: "خطأ في إضافة الكروت") }
@@ -1422,7 +1422,7 @@ class MikroTikRepository(
             val kept = _userManagerUsers.value.filter { it.active && it.uptimeUsed != "expired" }
             val removedCount = initialCount - kept.size
             _userManagerUsers.value = kept
-            insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removedCount كرت منتهي", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removedCount كرت منتهي", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess(removedCount) }
         }
     }
@@ -1441,7 +1441,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             delay(500)
             val filename = "userman-backup-${System.currentTimeMillis()}.umb"
-            insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية لقاعدة بيانات اليوزر مانجر باسم $filename", _currentConnection.value?.host ?: "192.168.88.1")
+            insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية لقاعدة بيانات اليوزر مانجر باسم $filename", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) { onSuccess(filename) }
         }
     }
@@ -1519,11 +1519,6 @@ class MikroTikRepository(
         }
     }
 
-
-    /* =========================================
-       DYNAMIC STATEFUL DEMO DATA ENGINE
-       ========================================= */
-    private fun comments(comment: String): String = comment
 
     fun refreshData() {
         repositoryScope.launch {
