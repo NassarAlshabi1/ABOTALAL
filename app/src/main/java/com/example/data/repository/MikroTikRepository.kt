@@ -1380,7 +1380,7 @@ class MikroTikRepository(
                 if (_isConnected.value && api != null) {
                     try {
                         users.forEach { u ->
-                            api.execute(
+                            api.executeStrict(
                                 "/tool/user-manager/user/add",
                                 mapOf(
                                     "customer" to "admin",
@@ -1389,7 +1389,7 @@ class MikroTikRepository(
                                 )
                             )
                             if (u.profile.isNotEmpty()) {
-                                api.execute(
+                                api.executeStrict(
                                     "/tool/user-manager/user/create-and-activate-profile",
                                     mapOf(
                                         "customer" to "admin",
@@ -1544,9 +1544,9 @@ class MikroTikRepository(
                     val profiles = api.execute("/ip/hotspot/profile/print")
                     if (profiles.isNotEmpty()) {
                         val firstId = profiles.first()[".id"] ?: "*0"
-                        api.execute("/ip/hotspot/profile/set", "=numbers=$firstId", "=html-directory=$dirName")
+                        api.executeStrict("/ip/hotspot/profile/set", "=numbers=$firstId", "=html-directory=$dirName")
                     } else {
-                        api.execute("/ip/hotspot/profile/set", "=numbers=*0", "=html-directory=$dirName")
+                        api.executeStrict("/ip/hotspot/profile/set", "=numbers=*0", "=html-directory=$dirName")
                     }
                     insertActivityLog("تغيير مجلد الهوتسبوت", "تم ضبط مجلد صفحة تسجيل الدخول إلى: $dirName", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
@@ -1567,7 +1567,7 @@ class MikroTikRepository(
                     val servers = api.execute("/ip/hotspot/print")
                     for (srv in servers) {
                         val srvId = srv[".id"] ?: continue
-                        api.execute("/ip/hotspot/set", "=numbers=$srvId", "=disabled=${if (enableFree) "yes" else "no"}")
+                        api.executeStrict("/ip/hotspot/set", "=numbers=$srvId", "=disabled=${if (enableFree) "yes" else "no"}")
                     }
                     val statusText = if (enableFree) "تم فتح الشبكة مجاناً بنجاح" else "تم إعادة تشغيل نظام كروت الهوتسبوت"
                     insertActivityLog("حالة الهوتسبوت", statusText, _currentConnection.value?.host ?: "")
@@ -1590,7 +1590,7 @@ class MikroTikRepository(
                     val existing = rules.find { it["comment"]?.contains("ABO_TALAL_ANTI_SHARE") == true }
                     if (blockSharing) {
                         if (existing == null) {
-                            api.execute(
+                            api.executeStrict(
                                 "/ip/firewall/mangle/add",
                                 "=chain=postrouting",
                                 "=action=change-ttl",
@@ -1603,7 +1603,7 @@ class MikroTikRepository(
                         if (existing != null) {
                             val ruleId = existing[".id"] ?: ""
                             if (ruleId.isNotBlank()) {
-                                api.execute("/ip/firewall/mangle/remove", "=numbers=$ruleId")
+                                api.executeStrict("/ip/firewall/mangle/remove", "=numbers=$ruleId")
                             }
                         }
                     }
@@ -1623,7 +1623,7 @@ class MikroTikRepository(
                         val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/interface/set", "=numbers=$interfaceName", "=disabled=${if (enable) "no" else "yes"}")
+                    api.executeStrict("/interface/set", "=numbers=$interfaceName", "=disabled=${if (enable) "no" else "yes"}")
                     fetchRealInterfaces(_currentConnection.value ?: return@launch)
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
@@ -1640,7 +1640,7 @@ class MikroTikRepository(
                         val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/interface/reset-counters", "=numbers=$interfaceName")
+                    api.executeStrict("/interface/reset-counters", "=numbers=$interfaceName")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError("فشل تصفير العدادات: ${e.message}") }
@@ -1692,7 +1692,7 @@ class MikroTikRepository(
                         val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute(
+                    api.executeStrict(
                         "/ppp/secret/add",
                         "=name=${user.name}",
                         "=password=${user.password}",
@@ -1716,7 +1716,7 @@ class MikroTikRepository(
                         val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/ppp/secret/remove", "=numbers=$name")
+                    api.executeStrict("/ppp/secret/remove", "=numbers=$name")
                     insertActivityLog("بروباند", "حذف مشترك بروباند $name", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
@@ -1737,9 +1737,9 @@ class MikroTikRepository(
                     val existing = api.execute("/system/script/print").find { it["name"] == scriptName }
                     if (existing != null) {
                         val scriptId = existing[".id"] ?: scriptName
-                        api.execute("/system/script/set", "=numbers=$scriptId", "=source=$scriptSource")
+                        api.executeStrict("/system/script/set", "=numbers=$scriptId", "=source=$scriptSource")
                     } else {
-                        api.execute(
+                        api.executeStrict(
                             "/system/script/add",
                             "=name=$scriptName",
                             "=policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive",
@@ -1763,7 +1763,7 @@ class MikroTikRepository(
                         val api = nativeApi
             if (api != null) {
                 try {
-                    val res = api.execute("/ping", "=address=$cleanTarget", "=count=$count")
+                    val res = api.executeStrict("/ping", "=address=$cleanTarget", "=count=$count")
                     val output = if (res.isNotEmpty()) {
                         res.joinToString("\n") { row ->
                             val host = row["host"] ?: cleanTarget
@@ -1947,7 +1947,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/ip/cloud/force-update")
+                    api.executeStrict("/ip/cloud/force-update")
                     fetchCloudData()
                     insertActivityLog("تحديث الكلاود", "تم إرسال أمر التحديث الفوري لكلاود مايكروتك", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
@@ -1965,7 +1965,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/ip/cloud/set", mapOf("ddns-enabled" to if (enabled) "yes" else "no"))
+                    api.executeStrict("/ip/cloud/set", mapOf("ddns-enabled" to if (enabled) "yes" else "no"))
                     _cloudInfo.value = _cloudInfo.value.copy(ddnsEnabled = enabled)
                     insertActivityLog("إعدادات الكلاود", "تم ${if (enabled) "تفعيل" else "تعطيل"} الـ DDNS السحابي", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
@@ -1983,7 +1983,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/ip/cloud/set", mapOf("update-time" to if (enabled) "yes" else "no"))
+                    api.executeStrict("/ip/cloud/set", mapOf("update-time" to if (enabled) "yes" else "no"))
                     _cloudInfo.value = _cloudInfo.value.copy(updateTime = enabled)
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
@@ -2004,7 +2004,7 @@ class MikroTikRepository(
                     val params = mutableMapOf<String, String>()
                     if (name.isNotBlank()) params["name"] = name.trim()
                     if (password.isNotBlank()) params["password"] = password.trim()
-                    api.execute("/system/backup/cloud/upload", params)
+                    api.executeStrict("/system/backup/cloud/upload", params)
                     fetchCloudData()
                     insertActivityLog("نسخ سحابي", "تم رفع نسخة احتياطية جديدة إلى سحابة مايكروتك", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
@@ -2022,7 +2022,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/system/backup/cloud/remove", mapOf(".id" to backupId))
+                    api.executeStrict("/system/backup/cloud/remove", mapOf(".id" to backupId))
                     fetchCloudData()
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {

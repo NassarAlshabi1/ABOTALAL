@@ -195,16 +195,36 @@ class MikroTikNativeApi(
         }
     }
 
+    @Volatile
+    private var lastCommandError: String? = null
+
     fun execute(command: String, params: Map<String, String>): List<Map<String, String>> {
         val arr = params.map { "${it.key}=${it.value}" }.toTypedArray()
         return execute(command, *arr)
     }
 
+    /** Like [execute] but reports !trap/!fatal/socket failures instead of silently
+     *  returning partial results — use it for mutations where the caller must know
+     *  whether the router actually applied the command. */
+    fun executeStrict(command: String, vararg params: String): List<Map<String, String>> {
+        val res = execute(command, *params)
+        val err = synchronized(socketLock) { lastCommandError }
+        if (err != null) throw java.io.IOException(err)
+        return res
+    }
+
+    fun executeStrict(command: String, params: Map<String, String>): List<Map<String, String>> {
+        val arr = params.map { "${it.key}=${it.value}" }.toTypedArray()
+        return executeStrict(command, *arr)
+    }
+
     fun execute(command: String, vararg params: String): List<Map<String, String>> {
         val results = mutableListOf<Map<String, String>>()
         synchronized(socketLock) {
+            lastCommandError = null
             if (!isConnected()) {
                 if (!ensureConnected()) {
+                    lastCommandError = "تعذر الاتصال بالراوتر لتنفيذ: $command"
                     return results
                 }
             }
@@ -248,16 +268,21 @@ class MikroTikNativeApi(
                         }
                         break
                     } else if (replyType == "!trap") {
+                        val msg = reply.firstOrNull { it.startsWith("=message=") }
+                            ?.removePrefix("=message=") ?: "رفض الراوتر الأمر"
                         Log.w(TAG, "Command trap response for $command: $reply")
+                        lastCommandError = "فشل $command: $msg"
                         break
                     } else if (replyType == "!fatal") {
                         Log.e(TAG, "Command fatal response for $command: $reply")
+                        lastCommandError = "انقطع اتصال الراوتر أثناء: $command"
                         closeInternal()
                         break
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Execute command error for $command", e)
+                lastCommandError = "خطأ في تنفيذ $command: ${e.message}"
                 // Socket error: close internal socket to trigger reconnect next time
                 closeInternal()
             }
