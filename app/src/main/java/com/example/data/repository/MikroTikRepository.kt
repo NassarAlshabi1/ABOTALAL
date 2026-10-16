@@ -1042,7 +1042,18 @@ class MikroTikRepository(
 
     fun deleteHotspotUser(id: String, name: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            
+            val napi = nativeApi
+            if (napi != null) {
+                try {
+                    napi.executeStrict("/ip/hotspot/user/remove", "=numbers=$id")
+                    _hotspotUsers.value = _hotspotUsers.value.filter { it.id != id }
+                    insertActivityLog("حذف مستخدم هوتسبوت", "تم حذف المستخدم '$name' من الراوتر", _currentConnection.value?.host ?: "")
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError("فشل الحذف على الراوتر: ${e.message}") }
+                }
+                return@launch
+            }
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
@@ -1072,7 +1083,18 @@ class MikroTikRepository(
 
     fun removeActiveHotspotUser(id: String, username: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            
+            val napi = nativeApi
+            if (napi != null) {
+                try {
+                    napi.executeStrict("/ip/hotspot/active/remove", "=numbers=$id")
+                    _activeHotspot.value = _activeHotspot.value.filter { it.id != id }
+                    insertActivityLog("فصل مستخدم", "تم فصل المستخدم النشط '$username' من الراوتر", _currentConnection.value?.host ?: "")
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError("فشل الفصل على الراوتر: ${e.message}") }
+                }
+                return@launch
+            }
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
@@ -1103,7 +1125,21 @@ class MikroTikRepository(
     // Add profile
     fun addHotspotProfile(profile: HotspotProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
-            
+            val napi = nativeApi
+            if (napi != null) {
+                try {
+                    val params = mutableMapOf("name" to profile.name)
+                    if (profile.rateLimit.isNotBlank() && profile.rateLimit != "unlimited") params["rate-limit"] = profile.rateLimit
+                    if (profile.sharedUsers.isNotBlank()) params["shared-users"] = profile.sharedUsers
+                    napi.executeStrict("/ip/hotspot/user/profile/add", params)
+                    insertActivityLog("إضافة بروفايل هوتسبوت", "تم إضافة البروفايل '${profile.name}' على الراوتر", _currentConnection.value?.host ?: "")
+                    _hotspotProfiles.value = _hotspotProfiles.value + profile
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError("فشل إضافة البروفايل على الراوتر: ${e.message}") }
+                }
+                return@launch
+            }
                 _currentConnection.value?.let { conn ->
                     val protocol = if (conn.useSsl) "https" else "http"
                     val credential = Credentials.basic(conn.username, conn.password)
