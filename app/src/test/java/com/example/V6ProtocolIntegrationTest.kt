@@ -188,4 +188,31 @@ class V6ProtocolIntegrationTest {
             assertTrue(removes.isNotEmpty())
             assertTrue("must send resolved .id in =numbers=", removes.first().any { it == "=numbers=*77" })
         } finally { server.shutdown() }
-    }}
+    }
+    @Test
+    fun `user-manager profiles fetched via v6 tool path when v7 traps`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            server.handler = { words ->
+                val cmd = words.firstOrNull() ?: ""
+                when {
+                    // v6 router: /user-manager does not exist -> trap
+                    cmd.startsWith("/user-manager/") ->
+                        listOf(listOf("!trap", "=message=no such command"))
+                    cmd.startsWith("/tool/user-manager/profile/profile-limitation/print") ->
+                        listOf(listOf("!re", "=name=lim1", "=profile=p500", "=uptime=1d"), listOf("!done"))
+                    cmd.startsWith("/tool/user-manager/profile/print") ->
+                        listOf(listOf("!re", "=.id=*1", "=name=p500", "=validity=4w2d", "=price=500"), listOf("!done"))
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            pumpMainUntil(15000) { repo.userManagerProfiles.value.isNotEmpty() }
+            assertTrue(
+                "profiles must be fetched from the router via the v6 tool path",
+                repo.userManagerProfiles.value.any { it.name == "p500" }
+            )
+            assertTrue(server.commandsMatching("/tool/user-manager/profile/print").isNotEmpty())
+        } finally { server.shutdown() }
+    }
+}
