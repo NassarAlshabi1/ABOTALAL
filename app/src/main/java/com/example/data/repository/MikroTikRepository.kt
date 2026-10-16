@@ -2297,6 +2297,17 @@ class MikroTikRepository(
                         "health" -> "/system/health/print"
                         "logs" -> "/log/print"
                         "users" -> "/user/print"
+                        "backup" -> "/file/print"
+                        "fetch" -> "/file/print"
+                        "blocked_sites" -> "/ip/dns/static/print"
+                        "layer7" -> "/ip/firewall/layer7-protocol/print"
+                        "bandwidth_test" -> "/tool/bandwidth-server/print"
+                        "sniffer" -> "/tool/sniffer/print"
+                        "torch" -> "/tool/traffic-monitor/print"
+                        "netwatch" -> "/tool/netwatch/print"
+                        "graphing" -> "/tool/graphing/print"
+                        "email" -> "/tool/e-mail/print"
+                        "sms" -> "/tool/sms/print"
                         else -> "/interface/print"
                     }
                     val resList = api.execute(cmd)
