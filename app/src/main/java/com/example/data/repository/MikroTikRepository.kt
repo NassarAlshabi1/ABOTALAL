@@ -1158,6 +1158,21 @@ class MikroTikRepository(
         throw lastErr ?: java.io.IOException("user-manager غير متوفر على الراوتر")
     }
 
+    // Resolves a user-manager user's real .id on the router (numbers= accepts
+    // .id reliably on both ROS v6 and v7, usernames not always).
+    private fun umResolveUserId(api: MikroTikNativeApi, username: String): String? {
+        for (base in listOf("/user-manager", "/tool/user-manager")) {
+            try {
+                val list = api.execute("$base/user/print")
+                val hit = list.firstOrNull {
+                    it["name"] == username || it["username"] == username
+                }
+                if (hit != null) return hit[".id"]
+            } catch (_: Exception) {}
+        }
+        return null
+    }
+
     fun addUserManagerUser(user: UserManagerUser, onSuccess: () -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
             val api = nativeApi
@@ -1192,9 +1207,19 @@ class MikroTikRepository(
                 return@launch
             }
             try {
-                umWrite(api, "user/set", mapOf("numbers" to username, "profile" to newProfile, "disabled" to "no"))
-                if (resetUptime) {
-                    runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to username)) }
+                val uid = umResolveUserId(api, username) ?: username
+                // ROS v6 activates a profile on a user via create-and-activate-profile;
+                // ROS v7 accepts a plain set. Try v6 path first, then v7 set.
+                var activated = false
+                try {
+                    umWrite(api, "user/create-and-activate-profile", mapOf("numbers" to uid, "profile" to newProfile, "customer" to "admin"))
+                    activated = true
+                } catch (_: Exception) {
+                    umWrite(api, "user/set", mapOf("numbers" to uid, "profile" to newProfile, "disabled" to "no"))
+                    activated = true
+                }
+                if (resetUptime && activated) {
+                    runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to uid)) }
                 }
                 _userManagerUsers.value = _userManagerUsers.value.map {
                     if (it.username == username) it.copy(profile = newProfile, active = true, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
@@ -1218,7 +1243,7 @@ class MikroTikRepository(
             var firstErr: String? = null
             usernames.forEach { u ->
                 try {
-                    umWrite(api, "user/remove", mapOf("numbers" to u))
+                    umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, u) ?: u)))
                     deleted++
                 } catch (e: Exception) {
                     if (firstErr == null) firstErr = e.message
@@ -1247,7 +1272,7 @@ class MikroTikRepository(
             var done = 0
             usernames.forEach { u ->
                 try {
-                    umWrite(api, "user/set", mapOf("numbers" to u, "disabled" to if (active) "no" else "yes"))
+                    umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, u) ?: u), "disabled" to if (active) "no" else "yes"))
                     done++
                 } catch (_: Exception) {}
             }
@@ -1267,7 +1292,7 @@ class MikroTikRepository(
                 return@launch
             }
             try {
-                umWrite(api, "user/remove", mapOf("numbers" to username))
+                umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, username) ?: username)))
                 _userManagerUsers.value = _userManagerUsers.value.filter { it.username != username }
                 insertActivityLog("يوزر مانجر", "تم حذف مستخدم '${username}' من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
@@ -1309,7 +1334,17 @@ class MikroTikRepository(
                 return@launch
             }
             try {
-                val params = mutableMapOf("numbers" to oldName, "name" to updatedProfile.name)
+                val pid = run {
+                    var id: String? = null
+                    for (base in listOf("/user-manager", "/tool/user-manager")) {
+                        try {
+                            id = api.execute("$base/profile/print").firstOrNull { it["name"] == oldName }?.get(".id")
+                            if (id != null) break
+                        } catch (_: Exception) {}
+                    }
+                    id ?: oldName
+                }
+                val params = mutableMapOf("numbers" to pid, "name" to updatedProfile.name)
                 if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
                 if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
                 umWrite(api, "profile/set", params)
@@ -1332,7 +1367,17 @@ class MikroTikRepository(
                 return@launch
             }
             try {
-                umWrite(api, "profile/remove", mapOf("numbers" to profileName))
+                val pid = run {
+                    var id: String? = null
+                    for (base in listOf("/user-manager", "/tool/user-manager")) {
+                        try {
+                            id = api.execute("$base/profile/print").firstOrNull { it["name"] == profileName }?.get(".id")
+                            if (id != null) break
+                        } catch (_: Exception) {}
+                    }
+                    id ?: profileName
+                }
+                umWrite(api, "profile/remove", mapOf("numbers" to pid))
                 _userManagerProfiles.value = _userManagerProfiles.value.filter { it.name != profileName }
                 insertActivityLog("يوزر مانجر بروفايل", "تم حذف باقة يوزر مانجر '${profileName}'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
@@ -1529,7 +1574,7 @@ class MikroTikRepository(
             var removed = 0
             toRemove.forEach { u ->
                 try {
-                    umWrite(api, "user/remove", mapOf("numbers" to u))
+                    umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, u) ?: u)))
                     removed++
                 } catch (_: Exception) {}
             }
@@ -1552,7 +1597,7 @@ class MikroTikRepository(
             val current = _userManagerUsers.value.find { it.username == username } ?: return@launch
             val newActive = !current.active
             try {
-                umWrite(api, "user/set", mapOf("numbers" to username, "disabled" to if (newActive) "no" else "yes"))
+                umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, username) ?: username), "disabled" to if (newActive) "no" else "yes"))
                 _userManagerUsers.value = _userManagerUsers.value.map {
                     if (it.username == username) it.copy(active = newActive) else it
                 }
