@@ -1949,9 +1949,9 @@ class MikroTikRepository(
                     val profiles = api.execute("/ip/hotspot/profile/print")
                     if (profiles.isNotEmpty()) {
                         val firstId = profiles.first()[".id"] ?: "*0"
-                        api.execute("/ip/hotspot/profile/set", "=.id=$firstId", "=html-directory=$dirName")
+                        api.execute("/ip/hotspot/profile/set", "=numbers=$firstId", "=html-directory=$dirName")
                     } else {
-                        api.execute("/ip/hotspot/profile/set", "=.id=*0", "=html-directory=$dirName")
+                        api.execute("/ip/hotspot/profile/set", "=numbers=*0", "=html-directory=$dirName")
                     }
                     insertActivityLog("تغيير مجلد الهوتسبوت", "تم ضبط مجلد صفحة تسجيل الدخول إلى: $dirName", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
@@ -1979,7 +1979,7 @@ class MikroTikRepository(
                     val servers = api.execute("/ip/hotspot/print")
                     for (srv in servers) {
                         val srvId = srv[".id"] ?: continue
-                        api.execute("/ip/hotspot/set", "=.id=$srvId", "=disabled=${if (enableFree) "yes" else "no"}")
+                        api.execute("/ip/hotspot/set", "=numbers=$srvId", "=disabled=${if (enableFree) "yes" else "no"}")
                     }
                     val statusText = if (enableFree) "تم فتح الشبكة مجاناً بنجاح" else "تم إعادة تشغيل نظام كروت الهوتسبوت"
                     insertActivityLog("حالة الهوتسبوت", statusText, _currentConnection.value?.host ?: "")
@@ -2022,7 +2022,7 @@ class MikroTikRepository(
                         if (existing != null) {
                             val ruleId = existing[".id"] ?: ""
                             if (ruleId.isNotBlank()) {
-                                api.execute("/ip/firewall/mangle/remove", "=.id=$ruleId")
+                                api.execute("/ip/firewall/mangle/remove", "=numbers=$ruleId")
                             }
                         }
                     }
@@ -2051,7 +2051,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/interface/set", "=.id=$interfaceName", "=disabled=${if (enable) "no" else "yes"}")
+                    api.execute("/interface/set", "=numbers=$interfaceName", "=disabled=${if (enable) "no" else "yes"}")
                     fetchRealInterfaces(_currentConnection.value ?: return@launch)
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
@@ -2077,7 +2077,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/interface/reset-counters", "=.id=$interfaceName")
+                    api.execute("/interface/reset-counters", "=numbers=$interfaceName")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError("فشل تصفير العدادات: ${e.message}") }
@@ -2177,7 +2177,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.execute("/ppp/secret/remove", "=.id=$name")
+                    api.execute("/ppp/secret/remove", "=numbers=$name")
                     insertActivityLog("بروباند", "حذف مشترك بروباند $name", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
@@ -2204,7 +2204,7 @@ class MikroTikRepository(
                     val existing = api.execute("/system/script/print").find { it["name"] == scriptName }
                     if (existing != null) {
                         val scriptId = existing[".id"] ?: scriptName
-                        api.execute("/system/script/set", "=.id=$scriptId", "=source=$scriptSource")
+                        api.execute("/system/script/set", "=numbers=$scriptId", "=source=$scriptSource")
                     } else {
                         api.execute(
                             "/system/script/add",
