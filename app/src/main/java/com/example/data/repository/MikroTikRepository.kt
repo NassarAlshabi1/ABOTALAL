@@ -1144,98 +1144,201 @@ class MikroTikRepository(
     }
 
     // User Manager Operations
-    fun addUserManagerUser(user: UserManagerUser, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        repositoryScope.launch {
-            delay(400)
-            val list = _userManagerUsers.value.toMutableList()
-            list.add(user)
-            _userManagerUsers.value = list
-            insertActivityLog("يوزر مانجر", "تم إضافة مستخدم يوزر مانجر جديد '${user.username}' بالبروفايل '${user.profile}'", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess() }
-        }
-    }
-
-    fun renewUserManagerUser(username: String, newProfile: String, resetUptime: Boolean = true, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        repositoryScope.launch {
-            delay(350)
-            val list = _userManagerUsers.value.map {
-                if (it.username == username) {
-                    it.copy(
-                        profile = newProfile,
-                        active = true,
-                        uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed
-                    )
-                } else it
+    // Runs a user-manager write on the router: ROS v7 menu first, then the
+    // legacy ROS v6 /tool/user-manager path. Throws with the router's real error.
+    private fun umWrite(api: MikroTikNativeApi, action: String, params: Map<String, String>): List<Map<String, String>> {
+        var lastErr: Exception? = null
+        for (base in listOf("/user-manager", "/tool/user-manager")) {
+            try {
+                return api.executeStrict("$base/$action", params)
+            } catch (e: Exception) {
+                lastErr = e
             }
-            _userManagerUsers.value = list
-            insertActivityLog("تجديد كرت", "تم تجديد الكرت '$username' بالباقة '$newProfile'", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess() }
+        }
+        throw lastErr ?: java.io.IOException("user-manager غير متوفر على الراوتر")
+    }
+
+    fun addUserManagerUser(user: UserManagerUser, onSuccess: () -> Unit, onError: (String) -> Unit)  {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val params = mutableMapOf(
+                    "username" to user.username,
+                    "password" to user.password,
+                    "customer" to "admin"
+                )
+                if (user.profile.isNotEmpty()) params["profile"] = user.profile
+                if (user.comment.isNotEmpty()) params["comment"] = user.comment
+                if (user.active) params["disabled"] = "no"
+                umWrite(api, "user/add", params)
+                _userManagerUsers.value = _userManagerUsers.value + user
+                insertActivityLog("يوزر مانجر", "تم إضافة مستخدم يوزر مانجر جديد '${user.username}' بالبروفايل '${user.profile}'", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إضافة المستخدم على الراوتر") }
+            }
         }
     }
 
-    fun bulkDeleteUserManagerUsers(usernames: List<String>, onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+    fun renewUserManagerUser(username: String, newProfile: String, resetUptime: Boolean = true, onSuccess: () -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
-            delay(350)
-            val toRemove = usernames.toSet()
-            val initial = _userManagerUsers.value.size
-            _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in toRemove }
-            val deletedCount = initial - _userManagerUsers.value.size
-            insertActivityLog("حذف جماعي", "تم حذف $deletedCount كرت من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess(deletedCount) }
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                umWrite(api, "user/set", mapOf("numbers" to username, "profile" to newProfile, "disabled" to "no"))
+                if (resetUptime) {
+                    runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to username)) }
+                }
+                _userManagerUsers.value = _userManagerUsers.value.map {
+                    if (it.username == username) it.copy(profile = newProfile, active = true, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
+                }
+                insertActivityLog("تجديد كرت", "تم تجديد الكرت '$username' بالباقة '$newProfile'", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل تجديد الكرت على الراوتر") }
+            }
         }
     }
 
-    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit) {
+    fun bulkDeleteUserManagerUsers(usernames: List<String>, onSuccess: (Int) -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
-            delay(300)
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                return@launch
+            }
+            var deleted = 0
+            var firstErr: String? = null
+            usernames.forEach { u ->
+                try {
+                    umWrite(api, "user/remove", mapOf("numbers" to u))
+                    deleted++
+                } catch (e: Exception) {
+                    if (firstErr == null) firstErr = e.message
+                }
+            }
+            if (deleted > 0) {
+                val removed = usernames.take(deleted).toSet()
+                _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in removed }
+            }
+            insertActivityLog("حذف جماعي", "تم حذف $deleted كرت من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
+            launch(Dispatchers.Main) {
+                if (deleted == usernames.size) onSuccess(deleted)
+                else onError("حُذف $deleted من ${usernames.size}. خطأ: ${firstErr ?: "غير معروف"}")
+            }
+        }
+    }
+
+    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit)  {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onSuccess(0) }
+                return@launch
+            }
             val toToggle = usernames.toSet()
+            var done = 0
+            usernames.forEach { u ->
+                try {
+                    umWrite(api, "user/set", mapOf("numbers" to u, "disabled" to if (active) "no" else "yes"))
+                    done++
+                } catch (_: Exception) {}
+            }
             _userManagerUsers.value = _userManagerUsers.value.map {
                 if (it.username in toToggle) it.copy(active = active) else it
             }
-            insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} ${toToggle.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess(toToggle.size) }
+            insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} $done كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
+            launch(Dispatchers.Main) { onSuccess(done) }
         }
     }
 
-    fun deleteUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+    fun deleteUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
-            delay(350)
-            _userManagerUsers.value = _userManagerUsers.value.filter { it.username != username }
-            insertActivityLog("يوزر مانجر", "تم حذف مستخدم '${username}' من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess() }
-        }
-    }
-
-    fun addUserManagerProfile(profile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        repositoryScope.launch {
-            delay(300)
-            val list = _userManagerProfiles.value.toMutableList()
-            list.removeAll { it.name == profile.name }
-            list.add(profile)
-            _userManagerProfiles.value = list
-            insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' بسعر ${profile.price.toInt()} د.ع", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess() }
-        }
-    }
-
-    fun updateUserManagerProfile(oldName: String, updatedProfile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        repositoryScope.launch {
-            delay(300)
-            val list = _userManagerProfiles.value.map {
-                if (it.name == oldName) updatedProfile else it
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                return@launch
             }
-            _userManagerProfiles.value = list
-            insertActivityLog("يوزر مانجر بروفايل", "تم تحديث باقة يوزر مانجر '${updatedProfile.name}'", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess() }
+            try {
+                umWrite(api, "user/remove", mapOf("numbers" to username))
+                _userManagerUsers.value = _userManagerUsers.value.filter { it.username != username }
+                insertActivityLog("يوزر مانجر", "تم حذف مستخدم '${username}' من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل حذف المستخدم على الراوتر") }
+            }
         }
     }
 
-    fun deleteUserManagerProfile(profileName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+    fun addUserManagerProfile(profile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
-            delay(300)
-            _userManagerProfiles.value = _userManagerProfiles.value.filter { it.name != profileName }
-            insertActivityLog("يوزر مانجر بروفايل", "تم حذف باقة يوزر مانجر '${profileName}'", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess() }
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val params = mutableMapOf("name" to profile.name)
+                if (profile.validity.isNotEmpty()) params["validity"] = profile.validity
+                if (profile.price > 0) params["price"] = profile.price.toInt().toString()
+                umWrite(api, "profile/add", params)
+                val list = _userManagerProfiles.value.toMutableList()
+                list.removeAll { it.name == profile.name }
+                list.add(profile)
+                _userManagerProfiles.value = list
+                insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' بسعر ${profile.price.toInt()} د.ع", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إضافة الباقة على الراوتر") }
+            }
+        }
+    }
+
+    fun updateUserManagerProfile(oldName: String, updatedProfile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit)  {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val params = mutableMapOf("numbers" to oldName, "name" to updatedProfile.name)
+                if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
+                if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
+                umWrite(api, "profile/set", params)
+                _userManagerProfiles.value = _userManagerProfiles.value.map {
+                    if (it.name == oldName) updatedProfile else it
+                }
+                insertActivityLog("يوزر مانجر بروفايل", "تم تحديث باقة يوزر مانجر '${updatedProfile.name}'", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل تحديث الباقة على الراوتر") }
+            }
+        }
+    }
+
+    fun deleteUserManagerProfile(profileName: String, onSuccess: () -> Unit, onError: (String) -> Unit)  {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                umWrite(api, "profile/remove", mapOf("numbers" to profileName))
+                _userManagerProfiles.value = _userManagerProfiles.value.filter { it.name != profileName }
+                insertActivityLog("يوزر مانجر بروفايل", "تم حذف باقة يوزر مانجر '${profileName}'", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل حذف الباقة على الراوتر") }
+            }
         }
     }
 
@@ -1415,33 +1518,61 @@ class MikroTikRepository(
         }
     }
 
-    fun cleanExpiredUserManagerUsers(onSuccess: (Int) -> Unit) {
+    fun cleanExpiredUserManagerUsers(onSuccess: (Int) -> Unit)  {
         repositoryScope.launch {
-            delay(400)
-            val initialCount = _userManagerUsers.value.size
-            val kept = _userManagerUsers.value.filter { it.active && it.uptimeUsed != "expired" }
-            val removedCount = initialCount - kept.size
-            _userManagerUsers.value = kept
-            insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removedCount كرت منتهي", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess(removedCount) }
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onSuccess(0) }
+                return@launch
+            }
+            val toRemove = _userManagerUsers.value.filter { !it.active || it.uptimeUsed == "expired" }.map { it.username }
+            var removed = 0
+            toRemove.forEach { u ->
+                try {
+                    umWrite(api, "user/remove", mapOf("numbers" to u))
+                    removed++
+                } catch (_: Exception) {}
+            }
+            if (removed > 0) {
+                val removedSet = toRemove.toSet()
+                _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in removedSet || it.active && it.uptimeUsed != "expired" }
+            }
+            insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removed كرت منتهي", _currentConnection.value?.host ?: "")
+            launch(Dispatchers.Main) { onSuccess(removed) }
         }
     }
 
-    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit) {
+    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit)  {
         repositoryScope.launch {
-            val list = _userManagerUsers.value.map {
-                if (it.username == username) it.copy(active = !it.active) else it
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onSuccess() }
+                return@launch
             }
-            _userManagerUsers.value = list
+            val current = _userManagerUsers.value.find { it.username == username } ?: return@launch
+            val newActive = !current.active
+            try {
+                umWrite(api, "user/set", mapOf("numbers" to username, "disabled" to if (newActive) "no" else "yes"))
+                _userManagerUsers.value = _userManagerUsers.value.map {
+                    if (it.username == username) it.copy(active = newActive) else it
+                }
+            } catch (_: Exception) {}
             launch(Dispatchers.Main) { onSuccess() }
         }
     }
 
-    fun backupUserManagerDatabase(onSuccess: (String) -> Unit) {
+    fun backupUserManagerDatabase(onSuccess: (String) -> Unit)  {
         repositoryScope.launch {
-            delay(500)
             val filename = "userman-backup-${System.currentTimeMillis()}.umb"
-            insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية لقاعدة بيانات اليوزر مانجر باسم $filename", _currentConnection.value?.host ?: "")
+            val api = nativeApi
+            if (api != null) {
+                try {
+                    umWrite(api, "database/save", mapOf("name" to filename.removeSuffix(".umb")))
+                    insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية لقاعدة بيانات اليوزر مانجر باسم $filename", _currentConnection.value?.host ?: "")
+                } catch (e: Exception) {
+                    insertActivityLog("نسخ احتياطي", "فشل النسخ الاحتياطي: ${e.message}", _currentConnection.value?.host ?: "")
+                }
+            }
             launch(Dispatchers.Main) { onSuccess(filename) }
         }
     }
