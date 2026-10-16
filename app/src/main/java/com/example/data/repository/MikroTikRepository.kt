@@ -2270,9 +2270,9 @@ class MikroTikRepository(
     fun fetchGenericSectionData(categoryKey: String, onSuccess: (List<RouterGenericItem>) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             if (_isDemoMode.value) {
-                delay(400)
-                val items = getDemoSectionItems(categoryKey)
-                launch(Dispatchers.Main) { onSuccess(items) }
+                // No fabricated data — demo mode shows an honest empty state.
+                delay(200)
+                launch(Dispatchers.Main) { onSuccess(emptyList()) }
                 return@launch
             }
             val api = nativeApi
@@ -2311,10 +2311,13 @@ class MikroTikRepository(
                         else -> "/interface/print"
                     }
                     val resList = api.execute(cmd)
+                    val spec = sectionFieldSpecs[categoryKey] ?: SectionFieldSpec()
                     val genericList = resList.mapIndexed { idx, map ->
-                        val title = map["name"] ?: map["address"] ?: map["chain"] ?: map["src-address"] ?: map["message"] ?: "عنصر #${idx + 1}"
-                        val sub = map["interface"] ?: map["mac-address"] ?: map["action"] ?: map["target"] ?: map["time"] ?: ""
-                        val status = map["status"] ?: (if (map["disabled"] == "true") "معطل" else "نشط")
+                        val title = spec.titleKeys.firstNotNullOfOrNull { map[it] }
+                            ?: "عنصر #${idx + 1}"
+                        val sub = spec.subtitleKeys.firstNotNullOfOrNull { map[it] } ?: ""
+                        val status = map["status"]
+                            ?: (if (map["disabled"] == "true" || map["disabled"] == "yes") "معطل" else "نشط")
                         RouterGenericItem(
                             id = map[".id"] ?: idx.toString(),
                             title = title,
@@ -2335,78 +2338,43 @@ class MikroTikRepository(
         }
     }
 
-    private fun getDemoSectionItems(categoryKey: String): List<RouterGenericItem> {
-        return when (categoryKey) {
-            "dhcp_server" -> listOf(
-                RouterGenericItem("1", "dhcp_lan", "الواجهة: ether2", "نشط", "نطاق: 192.168.88.10-192.168.88.254"),
-                RouterGenericItem("2", "dhcp_hotspot", "الواجهة: bridge1", "نشط", "نطاق: 10.0.0.10-10.0.0.254")
-            )
-            "ip_addresses" -> listOf(
-                RouterGenericItem("1", "192.168.88.1/24", "الشبكة: 192.168.88.0", "نشط", "الواجهة: ether2-LAN"),
-                RouterGenericItem("2", "10.0.0.1/24", "الشبكة: 10.0.0.0", "نشط", "الواجهة: bridge-Hotspot"),
-                RouterGenericItem("3", "192.168.1.150/24", "الشبكة: 192.168.1.0", "نشط", "الواجهة: ether1-WAN (مودم)")
-            )
-            "dhcp_leases" -> listOf(
-                RouterGenericItem("1", "192.168.88.25", "MAC: BC:D0:74:11:22:33", "Bound (متصل)", "الهاتف: Samsung S23"),
-                RouterGenericItem("2", "192.168.88.42", "MAC: A0:B1:C2:D3:E4:F5", "Bound (متصل)", "كمبيوتر الإدارة الرئيسي"),
-                RouterGenericItem("3", "10.0.0.88", "MAC: 12:34:56:78:90:AB", "Bound (متصل)", "iPhone 15 Pro")
-            )
-            "nat" -> listOf(
-                RouterGenericItem("1", "srcnat -> masquerade", "Out Interface: ether1-WAN", "نشط", "مشاركة الإنترنت لجميع المستخدمين"),
-                RouterGenericItem("2", "dstnat -> port 8728", "In Interface: ether1", "نشط", "تحويل منفذ API لإدارة الراوتر عن بعد")
-            )
-            "dns" -> listOf(
-                RouterGenericItem("1", "8.8.8.8", "خادم أساسي (Google DNS)", "نشط", "Static/Dynamic"),
-                RouterGenericItem("2", "1.1.1.1", "خادم ثانوي (Cloudflare DNS)", "نشط", "Static/Dynamic"),
-                RouterGenericItem("3", "router.vip", "10.0.0.1 (صفحة تسجيل الدخول)", "نشط", "DNS Name للشبكة")
-            )
-            "address_lists" -> listOf(
-                RouterGenericItem("1", "WhiteList_VIP", "192.168.88.42", "مسموح", "أجهزة الإدارة - بدون حجب"),
-                RouterGenericItem("2", "BlackList_Blocked", "10.0.0.99", "محظور", "جهاز محظور بسبب تجاوز الباندويث"),
-                RouterGenericItem("3", "Social_Media", "157.240.22.35", "مراقبة", "نطاقات فيسبوك وإنستغرام")
-            )
-            "firewall_filter" -> listOf(
-                RouterGenericItem("1", "input: accept established,related", "Chain: input", "نشط", "قبول الاتصالات المعتمدة"),
-                RouterGenericItem("2", "input: drop invalid", "Chain: input", "نشط", "إسقاط الحزم التالفة"),
-                RouterGenericItem("3", "forward: drop BlackList_Blocked", "Chain: forward", "نشط", "منع الأجهزة المحظورة")
-            )
-            "arp" -> listOf(
-                RouterGenericItem("1", "192.168.88.1", "00:0C:42:1A:2B:3C", "Dynamic", "ether2"),
-                RouterGenericItem("2", "10.0.0.15", "54:E6:FC:88:99:AA", "Dynamic", "bridge1"),
-                RouterGenericItem("3", "192.168.1.1", "F4:8C:50:11:22:33", "Dynamic", "ether1-WAN")
-            )
-            "queues" -> listOf(
-                RouterGenericItem("1", "VIP_Management", "الهدف: 192.168.88.42", "50M/50M", "أعلى سرعة للإدارة"),
-                RouterGenericItem("2", "Hotspot_Users_Total", "الهدف: 10.0.0.0/24", "30M/30M", "تحديد السرعة الإجمالية للهوتسبوت"),
-                RouterGenericItem("3", "PPPoE_General", "الهدف: 10.10.0.0/16", "40M/40M", "سرعة البروباند")
-            )
-            "neighbors" -> listOf(
-                RouterGenericItem("1", "MikroTik hEX S", "IP: 192.168.88.2", "مكتشف عبر MNDP", "MAC: 48:8F:5A:11:22:33"),
-                RouterGenericItem("2", "Ubiquiti NanoStation", "IP: 10.0.0.250", "مكتشف عبر CDP", "MAC: DC:9F:DB:44:55:66"),
-                RouterGenericItem("3", "MikroTik Groove 52", "IP: 10.0.0.251", "مكتشف عبر LLDP", "MAC: 64:D1:54:77:88:99")
-            )
-            "resources" -> listOf(
-                RouterGenericItem("1", "المعالج CPU", "Load: 14% | Frequency: 716 MHz", "طبيعي", "4 Cores"),
-                RouterGenericItem("2", "الذاكرة RAM", "المستخدم: 82 MB | المتوفر: 174 MB", "ممتاز", "Total: 256 MB"),
-                RouterGenericItem("3", "القرص والذاكرة", "المساحة المتوفرة: 14.2 MB من 16 MB", "سليم", "NAND Storage"),
-                RouterGenericItem("4", "وقت التشغيل Uptime", "3 أسابيع، 4 أيام، 16 ساعة", "مستقر", "RouterOS v7.14.2")
-            )
-            "routerboard" -> listOf(
-                RouterGenericItem("1", "الموديل (Model)", "RB750Gr3 (hEX)", "الأصلي", "MikroTik RouterBOARD"),
-                RouterGenericItem("2", "الرقم التسلسلي (Serial)", "H8E09ABCD123", "مسجل", "Hardware SN"),
-                RouterGenericItem("3", "إصدار الفيرموير (Firmware)", "Current: 7.14.2 | Upgrade: 7.14.2", "محدث", "RouterBOOT")
-            )
-            "health" -> listOf(
-                RouterGenericItem("1", "درجة حرارة اللوحة", "38 °C", "ممتاز", "نطاق آمن (أقل من 65°C)"),
-                RouterGenericItem("2", "فولتية التيار الكهربائي", "24.1 V", "مستقر", "محول 24V 1.5A"),
-                RouterGenericItem("3", "استهلاك الطاقة", "4.2 Watt", "منخفض", "كفاءة عالية")
-            )
-            else -> listOf(
-                RouterGenericItem("1", "العنصر الأول", "التفاصيل الأساسية للقسم", "نشط", "نظام الراوتر"),
-                RouterGenericItem("2", "العنصر الثاني", "معلومات تشغيلية إضافية", "نشط", "نظام الراوتر")
-            )
-        }
-    }
+    // Precise per-section display mapping: which RouterOS fields label each row.
+    private data class SectionFieldSpec(
+        val titleKeys: List<String> = listOf("name", "address", "chain", "src-address", "host", "message"),
+        val subtitleKeys: List<String> = listOf("interface", "mac-address", "action", "target", "time", "type")
+    )
+
+    private val sectionFieldSpecs = mapOf(
+        "dhcp_server" to SectionFieldSpec(listOf("name", "interface"), listOf("interface", "lease-time", "address-pool")),
+        "ip_addresses" to SectionFieldSpec(listOf("address", "network"), listOf("interface", "network")),
+        "dhcp_leases" to SectionFieldSpec(listOf("address", "host-name"), listOf("mac-address", "host-name", "status")),
+        "dhcp_relay" to SectionFieldSpec(listOf("name", "interface"), listOf("interface", "dhcp-server", "local-address")),
+        "nat" to SectionFieldSpec(listOf("chain", "action"), listOf("action", "src-address", "dst-address", "out-interface")),
+        "dns" to SectionFieldSpec(listOf("name", "address"), listOf("address", "type", "ttl")),
+        "blocked_sites" to SectionFieldSpec(listOf("name", "address"), listOf("address", "type", "regexp", "comment")),
+        "address_lists" to SectionFieldSpec(listOf("list", "address"), listOf("address", "comment")),
+        "firewall_filter" to SectionFieldSpec(listOf("chain", "action"), listOf("action", "src-address", "dst-address", "protocol")),
+        "arp" to SectionFieldSpec(listOf("address", "mac-address"), listOf("mac-address", "interface", "status")),
+        "mangle" to SectionFieldSpec(listOf("chain", "action"), listOf("action", "src-address", "dst-address", "protocol")),
+        "connections" to SectionFieldSpec(listOf("src-address", "dst-address"), listOf("dst-address", "protocol", "tcp-state")),
+        "queues" to SectionFieldSpec(listOf("name", "target"), listOf("target", "max-limit", "rate")),
+        "neighbors" to SectionFieldSpec(listOf("identity", "address"), listOf("interface", "mac-address", "platform", "version")),
+        "resources" to SectionFieldSpec(listOf("version", "board-name"), listOf("board-name", "uptime", "cpu-load")),
+        "routerboard" to SectionFieldSpec(listOf("model", "serial-number"), listOf("serial-number", "firmware-type", "current-firmware")),
+        "health" to SectionFieldSpec(listOf("name", "value"), listOf("value", "type")),
+        "logs" to SectionFieldSpec(listOf("message", "topics"), listOf("time", "topics")),
+        "users" to SectionFieldSpec(listOf("name", "group"), listOf("group", "last-logged-in")),
+        "backup" to SectionFieldSpec(listOf("name", "type"), listOf("type", "size", "creation-time")),
+        "fetch" to SectionFieldSpec(listOf("name", "type"), listOf("type", "size", "creation-time")),
+        "layer7" to SectionFieldSpec(listOf("name", "regexp"), listOf("regexp", "comment")),
+        "bandwidth_test" to SectionFieldSpec(listOf("enabled", "max-session-count"), listOf("max-session-count", "authenticate", "allocate-udp-ports-from")),
+        "sniffer" to SectionFieldSpec(listOf("filter-interface", "filter-ip-address"), listOf("filter-interface", "memory-limit", "file-name")),
+        "torch" to SectionFieldSpec(listOf("name", "trigger"), listOf("trigger", "threshold", "chain", "timeout")),
+        "netwatch" to SectionFieldSpec(listOf("host", "name"), listOf("interval", "timeout", "status", "comment")),
+        "graphing" to SectionFieldSpec(listOf("interface", "allow-address"), listOf("allow-address", "store-on-disk", "comment")),
+        "email" to SectionFieldSpec(listOf("server", "from"), listOf("from", "port", "user")),
+        "sms" to SectionFieldSpec(listOf("port", "number"), listOf("channel", "secret", "allowed-number"))
+    )
 
     // ==========================================
     // 🌐 MIKROTIK CLOUD MANAGEMENT (/ip/cloud)
