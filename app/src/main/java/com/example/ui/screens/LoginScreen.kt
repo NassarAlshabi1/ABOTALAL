@@ -96,6 +96,18 @@ fun LoginScreen(
         }
     }
 
+    // Keep the manual form in sync with the selected saved router so the bottom
+    // "تسجيل الدخول" button, the card "تسجيل" button and "اختبار الاتصال" all
+    // target the same host/port/credentials the user sees on screen.
+    LaunchedEffect(selectedSavedRouterId) {
+        val conn = savedConnections.firstOrNull { it.id == selectedSavedRouterId } ?: return@LaunchedEffect
+        routerHost = conn.host
+        routerPort = conn.port.toString()
+        routerUser = conn.username
+        routerPassword = conn.password
+        useSsl = conn.useSsl
+    }
+
     // Dialogs & Feedback
     var showAccountIdDialog by remember { mutableStateOf(false) }
     var testResultDialog by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
@@ -1231,23 +1243,33 @@ fun LoginScreen(
                             // Right: تسجيل الدخول ➔ (Connects to chosen router)
                             Button(
                                 onClick = {
-                                    val conn = savedConnections.firstOrNull { it.id == selectedSavedRouterId }
-                                        ?: savedConnections.firstOrNull()
-                                    if (conn != null) {
-                                        viewModel.connectRouter(conn) { onLoginSuccess() }
-                                    } else {
-                                        // Fallback manual connect
-                                        val p = routerPort.toIntOrNull() ?: 8728
-                                        viewModel.connectManualRouter(
-                                            name = "راوتر $routerHost",
-                                            host = routerHost.trim(),
-                                            port = p,
-                                            username = routerUser.trim(),
-                                            password = routerPassword,
-                                            useSsl = useSsl,
-                                            onSuccess = { onLoginSuccess() }
-                                        )
+                                    // The form is the single source of truth — it is
+                                    // auto-filled from the selected saved router above,
+                                    // so login uses exactly what the user sees.
+                                    val targetRaw = when (connectionMode) {
+                                        0 -> routerHost.trim()
+                                        1 -> {
+                                            val raw = routerCloudDns.trim()
+                                            if (raw.isNotEmpty() && !raw.contains(".") && !raw.contains(":")) {
+                                                "$raw.sn.mynetname.net"
+                                            } else {
+                                                raw
+                                            }
+                                        }
+                                        else -> routerDomain.trim()
                                     }
+                                    val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
+                                    val p = parsedPort ?: (routerPort.toIntOrNull() ?: 8728)
+                                    val name = routerCustomName.ifBlank { "راوتر $cleanHostStr" }
+                                    viewModel.connectManualRouter(
+                                        name = name,
+                                        host = cleanHostStr,
+                                        port = p,
+                                        username = routerUser.trim(),
+                                        password = routerPassword,
+                                        useSsl = useSsl,
+                                        onSuccess = { onLoginSuccess() }
+                                    )
                                 },
                                 modifier = Modifier
                                     .weight(1f)
