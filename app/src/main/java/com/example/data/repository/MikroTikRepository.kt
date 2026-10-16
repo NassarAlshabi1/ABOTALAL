@@ -1510,84 +1510,17 @@ class MikroTikRepository(
                         return@launch
                     }
                 } catch (e: Exception) {
-                    Log.w("MikroTikRepository", "Failed to fetch live profiles, using defaults", e)
+                    Log.w("MikroTikRepository", "Failed to fetch live profiles", e)
                 }
             }
 
-            delay(300)
-            val defaultImportList = listOf(
-                UserManagerProfile(
-                    name = "500RY",
-                    validity = "10 ايام",
-                    price = 500.0,
-                    downloadLimit = "2 جيجابايت",
-                    uptimeLimit = "72 ساعات",
-                    templateName = "500RY",
-                    sharedUsers = 1
-                ),
-                UserManagerProfile(
-                    name = "300RY",
-                    validity = "1 اسبوع",
-                    price = 0.0,
-                    downloadLimit = "2500 ميجابايت",
-                    uptimeLimit = "15 ساعات",
-                    templateName = "300RY",
-                    sharedUsers = 1
-                ),
-                UserManagerProfile(
-                    name = "3000RY",
-                    validity = "4 اسبوع",
-                    price = 3000.0,
-                    downloadLimit = "10 جيجابايت",
-                    uptimeLimit = "680 ساعات",
-                    templateName = "3000RY",
-                    sharedUsers = 1
-                ),
-                UserManagerProfile(
-                    name = "250RY",
-                    validity = "1 اسبوع",
-                    price = 250.0,
-                    downloadLimit = "1 جيجابايت",
-                    uptimeLimit = "10 ساعات",
-                    templateName = "250RY",
-                    sharedUsers = 1
-                ),
-                UserManagerProfile(
-                    name = "200RY",
-                    validity = "5 ايام",
-                    price = 200.0,
-                    downloadLimit = "850 ميجابايت",
-                    uptimeLimit = "8 ساعات",
-                    templateName = "200RY",
-                    sharedUsers = 1
-                ),
-                UserManagerProfile(
-                    name = "100RY",
-                    validity = "4 ايام",
-                    price = 100.0,
-                    downloadLimit = "10 جيجابايت",
-                    uptimeLimit = "680 ساعات",
-                    templateName = "100RY",
-                    sharedUsers = 1
-                )
-            )
-            val currentMap = _userManagerProfiles.value.associateBy { it.name }.toMutableMap()
-            var importedCount = 0
-            defaultImportList.forEach { prof ->
-                if (!currentMap.containsKey(prof.name)) {
-                    currentMap[prof.name] = prof
-                    importedCount++
-                }
-            }
-            if (importedCount == 0) {
-                // Merge all
-                _userManagerProfiles.value = defaultImportList
-                importedCount = defaultImportList.size
+            // Router returned no profiles — report honestly; never fabricate built-ins
+            if (api == null || !_isConnected.value) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
             } else {
-                _userManagerProfiles.value = currentMap.values.toList()
+                insertActivityLog("استيراد باقات", "الراوتر لم يرجع أي باقات يوزرمانجر", host)
+                launch(Dispatchers.Main) { onError("الراوتر لم يرجع أي باقات — أنشئ الباقات في User Manager على الراوتر أولاً") }
             }
-            insertActivityLog("استيراد باقات", "تم تحميل $importedCount باقة جاهزة مدمجة في التطبيق (الراوتر لم يرجع باقات)", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess(importedCount) }
         }
     }
 
