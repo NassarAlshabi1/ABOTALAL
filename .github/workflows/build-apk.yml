@@ -1,4 +1,4 @@
- name: Build APK
+name: Build APK
 
 # Re-registered by Devin to enable GitHub Actions workflow_dispatch
 
