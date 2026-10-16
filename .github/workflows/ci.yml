@@ -30,10 +30,10 @@ jobs:
       - name: Lint
         run: ./gradlew :app:lintDebug --stacktrace
 
-      - name: Upload lint report
+      - name: Lint report summary
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lint-report
-          path: app/build/reports/lint-results-debug.html
-          if-no-files-found: ignore
+        run: |
+          if [ -f app/build/reports/lint-results-debug.html ]; then
+            echo "### Lint report generated (artifact upload disabled: storage quota full)" >> "$GITHUB_STEP_SUMMARY"
+            grep -oE "[0-9]+ errors?|[0-9]+ warnings?" app/build/reports/lint-results-debug.html | head -5 >> "$GITHUB_STEP_SUMMARY" || true
+          fi
