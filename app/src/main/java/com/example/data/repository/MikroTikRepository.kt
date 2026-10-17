@@ -1569,30 +1569,56 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
                     return@launch
                 }
+                if (users.isEmpty()) {
+                    launch(Dispatchers.Main) { onError("لم يتم إدخال عدد صالح للكروت") }
+                    return@launch
+                }
                 val added = mutableListOf<UserManagerUser>()
                 var firstErr: String? = null
                 val customer = umResolveCustomer(api)
-                users.forEach { u ->
+
+                // Add the requested cards first. Do not re-fetch the full user table for every row.
+                users.forEach { user ->
                     try {
                         umWrite(api, "user/add", mapOf(
                             "customer" to customer,
-                            "username" to u.username,
-                            "password" to u.password
+                            "username" to user.username,
+                            "password" to user.password
                         ))
-                        if (u.profile.isNotEmpty()) {
-                            runCatching {
-                                umWrite(api, "user/create-and-activate-profile", mapOf(
-                                    "customer" to umResolveCustomer(api),
-                                    "numbers" to (umResolveUserId(api, u.username) ?: u.username),
-                                    "profile" to u.profile
-                                ))
-                            }
-                        }
-                        added.add(u)
+                        added.add(user)
                     } catch (e: Exception) {
                         if (firstErr == null) firstErr = e.message
                     }
                 }
+
+                // Resolve IDs in one read for large batches, then attach each selected profile.
+                if (added.any { it.profile.isNotEmpty() }) {
+                    var routerUsers: List<Map<String, String>> = emptyList()
+                    for (path in listOf("/user-manager/user/print", "/tool/user-manager/user/print")) {
+                        val records = runCatching { api.executeStrict(path) }.getOrDefault(emptyList())
+                        if (records.isNotEmpty()) {
+                            routerUsers = records
+                            break
+                        }
+                    }
+                    val idByUsername = routerUsers.mapNotNull { record ->
+                        val username = record["name"] ?: record["username"]
+                        val id = record[".id"]
+                        if (username != null && id != null) username to id else null
+                    }.toMap()
+                    added.filter { it.profile.isNotEmpty() }.forEach { user ->
+                        runCatching {
+                            umWrite(api, "user/create-and-activate-profile", mapOf(
+                                "customer" to customer,
+                                "numbers" to (idByUsername[user.username] ?: user.username),
+                                "profile" to user.profile
+                            ))
+                        }.onFailure { e ->
+                            if (firstErr == null) firstErr = e.message
+                        }
+                    }
+                }
+
                 if (added.isNotEmpty()) {
                     val list = _userManagerUsers.value.toMutableList()
                     // Prepend so new cards appear instantly at top

@@ -54,6 +54,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.pow
 import kotlin.random.Random
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -891,8 +892,8 @@ fun UserManagerBatchFullDialog(
                                             value = pageCountInput,
                                             onValueChange = {
                                                 pageCountInput = it
-                                                val p = it.toIntOrNull() ?: 1
-                                                cardCountInput = "${p * cardsPerPage}"
+                                                val p = it.toAsciiDigits().toIntOrNull()
+                                                if (p != null && p > 0) cardCountInput = "${p * cardsPerPage}"
                                             },
                                             singleLine = true,
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -913,8 +914,10 @@ fun UserManagerBatchFullDialog(
                                             value = cardCountInput,
                                             onValueChange = {
                                                 cardCountInput = it
-                                                val c = it.toIntOrNull() ?: 51
-                                                pageCountInput = "${Math.ceil(c.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)}"
+                                                val c = it.toAsciiDigits().toIntOrNull()
+                                                if (c != null && c > 0) {
+                                                    pageCountInput = "${Math.ceil(c.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)}"
+                                                }
                                             },
                                             singleLine = true,
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -999,17 +1002,45 @@ fun UserManagerBatchFullDialog(
                             item {
                                 Button(
                                     onClick = {
-                                        val count = cardCountInput.toAsciiDigits().toIntOrNull()?.coerceIn(1, 5000) ?: 50
+                                        val count = cardCountInput.toAsciiDigits().toIntOrNull()
+                                        if (count == null || count !in 1..5000) {
+                                            Toast.makeText(context, "أدخل عددًا صحيحًا من 1 إلى 5000 كرت", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
                                         val len = nameLengthInput.toAsciiDigits().toIntOrNull()?.coerceIn(4, 30) ?: 9
                                         val cleanPrefix = cardPrefixInput.toAsciiDigits()
                                         val cleanSuffix = cardSuffixInput.toAsciiDigits()
                                         val price = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price?.toInt() ?: 0
                                         val excluded = if (excludeCharEnabled) excludedCharInput.toAsciiDigits().toSet() else emptySet()
+                                        val allowedChars = cardCodeCharacterPool(selectedNamePattern, excluded)
+                                        if (allowedChars.isEmpty()) {
+                                            Toast.makeText(context, "لا توجد أحرف متاحة بعد تطبيق الاستثناءات", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
+
+                                        val coreLength = (len - cleanPrefix.length - cleanSuffix.length).coerceAtLeast(3)
+                                        val possibleCodes = allowedChars.length.toDouble().pow(coreLength)
+                                        val usedUsernames = userManagerUsers.mapTo(mutableSetOf()) { it.username }
+                                        val alreadyUsedCodes = usedUsernames.count { username ->
+                                            username.startsWith(cleanPrefix) && username.endsWith(cleanSuffix) &&
+                                                username.length == cleanPrefix.length + coreLength + cleanSuffix.length &&
+                                                username.substring(cleanPrefix.length, username.length - cleanSuffix.length.coerceAtMost(username.length))
+                                                    .all { it in allowedChars }
+                                        }
+                                        if (possibleCodes - alreadyUsedCodes < count.toDouble()) {
+                                            Toast.makeText(context, "عدد التركيبات المتاحة لا يكفي لإنشاء $count اسمًا فريدًا. زد طول الاسم أو غيّر نمطه.", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
 
                                         isGenerating = true
 
-                                        // Generate Users with pure ASCII characters
-                                        val generatedUsers = (1..count).map {
+                                        // Build exactly the requested number of unique usernames.
+                                        val uniqueUsernames = usedUsernames
+                                        val generatedUsers = ArrayList<UserManagerUser>(count)
+                                        var attempts = 0
+                                        val maxAttempts = count * 100
+                                        while (generatedUsers.size < count && attempts < maxAttempts) {
+                                            attempts++
                                             val uname = generateCardCode(
                                                 prefix = cleanPrefix,
                                                 suffix = cleanSuffix,
@@ -1017,22 +1048,28 @@ fun UserManagerBatchFullDialog(
                                                 pattern = selectedNamePattern,
                                                 excludedChars = excluded
                                             )
-
+                                            if (!uniqueUsernames.add(uname)) continue
                                             val pwd = when (selectedCardType) {
                                                 "كلمة سر فارغة" -> ""
                                                 "اسم المستخدم = كلمة السر" -> uname
                                                 "أرقام وحروف مدمجة" -> generateRandomAlphaNumeric(6, excluded)
                                                 else -> String.format(Locale.US, "%04d", Random.nextInt(1000, 9999))
                                             }
-
-                                            UserManagerUser(
-                                                username = uname,
-                                                password = pwd,
-                                                profile = selectedProfileName,
-                                                active = true,
-                                                uptimeUsed = "0s",
-                                                downloadLimit = "unlimited"
+                                            generatedUsers.add(
+                                                UserManagerUser(
+                                                    username = uname,
+                                                    password = pwd,
+                                                    profile = selectedProfileName,
+                                                    active = true,
+                                                    uptimeUsed = "0s",
+                                                    downloadLimit = "unlimited"
+                                                )
                                             )
+                                        }
+                                        if (generatedUsers.size != count) {
+                                            isGenerating = false
+                                            Toast.makeText(context, "تعذر إنشاء $count اسمًا فريدًا؛ زد طول الاسم أو غيّر نمطه.", Toast.LENGTH_LONG).show()
+                                            return@Button
                                         }
 
                                         val batchCode = if (cleanPrefix.isNotEmpty()) "${cleanPrefix}-x$count" else "BATCH-${System.currentTimeMillis() % 10000}"
@@ -1748,6 +1785,13 @@ fun UserManagerBatchFullDialog(
 // -------------------------------------------------------------
 // Generator Helpers
 // -------------------------------------------------------------
+private fun cardCodeCharacterPool(pattern: String, excludedChars: Set<Char>): String = when (pattern) {
+    "احرف وارقام" -> "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    "احرف صغيرة فقط" -> "abcdefghijkmnopqrstuvwxyz"
+    "احرف كبيرة فقط" -> "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    else -> "0123456789"
+}.filter { it !in excludedChars }
+
 private fun generateCardCode(
     prefix: String,
     suffix: String,
@@ -1758,17 +1802,9 @@ private fun generateCardCode(
     val cleanPrefix = prefix.toAsciiDigits()
     val cleanSuffix = suffix.toAsciiDigits()
     val allowedLength = (length - cleanPrefix.length - cleanSuffix.length).coerceAtLeast(3)
-    val pool = when (pattern) {
-        "احرف وارقام" -> "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-        "احرف صغيرة فقط" -> "abcdefghijkmnopqrstuvwxyz"
-        "احرف كبيرة فقط" -> "ABCDEFGHJKLMNPQRSTUVWXYZ"
-        else -> "0123456789"
-    }.filter { it !in excludedChars }
-
-    val core = (1..allowedLength).map {
-        pool.random()
-    }.joinToString("")
-
+    val pool = cardCodeCharacterPool(pattern, excludedChars)
+    require(pool.isNotEmpty()) { "No available username characters" }
+    val core = (1..allowedLength).map { pool.random() }.joinToString("")
     return "$cleanPrefix$core$cleanSuffix"
 }
 
