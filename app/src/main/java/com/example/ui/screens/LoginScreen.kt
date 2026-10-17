@@ -1518,7 +1518,7 @@ fun LoginScreen(
     if (isConnecting) {
         val activeConn = savedConnections.firstOrNull { it.id == selectedSavedRouterId }
         val targetName = activeConn?.name ?: "راوتر ميكروتك"
-        val targetHost = activeConn?.host ?: routerHost.ifBlank { "192.168.88.1" }
+        val targetHost = activeConn?.host ?: routerHost
         com.example.ui.components.AnimatedConnectingDialog(
             routerName = targetName,
             host = targetHost,

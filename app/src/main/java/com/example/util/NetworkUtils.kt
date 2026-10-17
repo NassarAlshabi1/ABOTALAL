@@ -85,8 +85,8 @@ object NetworkUtils {
             Log.w(TAG, "Error reading /proc/net/route", e)
         }
 
-        // Fallback to standard MikroTik default gateway
-        return "192.168.88.1"
+        // No gateway was detected; leave the field empty instead of guessing a router address.
+        return ""
     }
 
     private fun isValidIpv4(ip: String): Boolean {

@@ -178,7 +178,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                                 fontWeight = FontWeight.Bold
                                             )
                                             Text(
-                                                text = conn?.host?.takeIf { it.isNotBlank() } ?: "192.168.88.1",
+                                                text = conn?.host?.takeIf { it.isNotBlank() } ?: "-",
                                                 fontFamily = CairoFontFamily,
                                                 color = Color(0xFFE0F2FE),
                                                 fontSize = 10.sp

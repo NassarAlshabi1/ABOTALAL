@@ -481,10 +481,10 @@ fun UserManagerProfilesDialog(
             title = "إضافة باقة يوزرمانجر جديدة",
             initialProfile = UserManagerProfile(
                 name = "",
-                validity = "1 اسبوع",
-                price = 500.0,
-                downloadLimit = "2 جيجابايت",
-                uptimeLimit = "72 ساعات",
+                validity = "",
+                price = 0.0,
+                downloadLimit = "",
+                uptimeLimit = "",
                 templateName = "",
                 sharedUsers = 1
             ),
@@ -799,10 +799,10 @@ fun ProfileEditDialog(
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf(initialProfile.name) }
-    var price by remember { mutableStateOf(if (initialProfile.price > 0) initialProfile.price.toInt().toString() else "500") }
-    var downloadLimit by remember { mutableStateOf(initialProfile.downloadLimit.ifBlank { "2 جيجابايت" }) }
-    var uptimeLimit by remember { mutableStateOf(initialProfile.uptimeLimit.ifBlank { "72 ساعات" }) }
-    var validity by remember { mutableStateOf(initialProfile.validity.ifBlank { "10 ايام" }) }
+    var price by remember { mutableStateOf(if (initialProfile.price > 0) initialProfile.price.toInt().toString() else "") }
+    var downloadLimit by remember { mutableStateOf(initialProfile.downloadLimit) }
+    var uptimeLimit by remember { mutableStateOf(initialProfile.uptimeLimit) }
+    var validity by remember { mutableStateOf(initialProfile.validity) }
     var templateName by remember { mutableStateOf(initialProfile.templateName.ifBlank { initialProfile.name }) }
     var sharedUsers by remember { mutableIntStateOf(initialProfile.sharedUsers) }
 

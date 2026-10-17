@@ -145,7 +145,7 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
                 com.example.data.local.ActivityLog(
                     action = action,
                     details = details,
-                    routerHost = currentConnection.value?.host ?: "192.168.88.1"
+                    routerHost = currentConnection.value?.host.orEmpty()
                 )
             )
         }

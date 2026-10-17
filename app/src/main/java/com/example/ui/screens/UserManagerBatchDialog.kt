@@ -82,7 +82,7 @@ fun UserManagerBatchFullDialog(
     var profileDropdownExpanded by remember { mutableStateOf(false) }
     var showAddProfileDialog by remember { mutableStateOf(false) }
     var newProfileNameInput by remember { mutableStateOf("") }
-    var newProfilePriceInput by remember { mutableStateOf("500") }
+    var newProfilePriceInput by remember { mutableStateOf("") }
 
     // POS / نقطة البيع
     var posList by remember {
@@ -998,7 +998,7 @@ fun UserManagerBatchFullDialog(
                                         val len = nameLengthInput.toAsciiDigits().toIntOrNull()?.coerceIn(4, 30) ?: 9
                                         val cleanPrefix = cardPrefixInput.toAsciiDigits()
                                         val cleanSuffix = cardSuffixInput.toAsciiDigits()
-                                        val price = 500 // or derived from profile
+                                        val price = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price?.toInt() ?: 0
                                         val excluded = if (excludeCharEnabled) excludedCharInput.toAsciiDigits().toSet() else emptySet()
 
                                         isGenerating = true
@@ -1315,20 +1315,14 @@ fun UserManagerBatchFullDialog(
                                                             TextButton(
                                                                 onClick = {
                                                                     // Get users for this batch
-                                                                    val usersForBatch = userManagerUsers.filter { it.profile == batch.profileName || it.username.startsWith(batch.prefix) }
-                                                                        .ifEmpty {
-                                                                            // Fallback mock representation for printing
-                                                                            (1..batch.count).map {
-                                                                                UserManagerUser(
-                                                                                    username = "${batch.prefix}${1000 + it}",
-                                                                                    password = "${5000 + it}",
-                                                                                    profile = batch.profileName,
-                                                                                    active = true,
-                                                                                    uptimeUsed = "0s",
-                                                                                    downloadLimit = "unlimited"
-                                                                                )
-                                                                            }
-                                                                        }
+                                                                    val usersForBatch = userManagerUsers.filter {
+                                                                        it.profile == batch.profileName ||
+                                                                            (batch.prefix.isNotBlank() && it.username.startsWith(batch.prefix))
+                                                                    }
+                                                                    if (usersForBatch.isEmpty()) {
+                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
                                                                     val templateCfg = CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName)
                                                                     CardPrintAndExportHelper.printVoucherBatchDirectly(
                                                                         context = context,
@@ -1347,19 +1341,14 @@ fun UserManagerBatchFullDialog(
                                                             // 2. Export to PDF
                                                             TextButton(
                                                                 onClick = {
-                                                                    val usersForBatch = userManagerUsers.filter { it.profile == batch.profileName || it.username.startsWith(batch.prefix) }
-                                                                        .ifEmpty {
-                                                                            (1..batch.count).map {
-                                                                                UserManagerUser(
-                                                                                    username = "${batch.prefix}${1000 + it}",
-                                                                                    password = "${5000 + it}",
-                                                                                    profile = batch.profileName,
-                                                                                    active = true,
-                                                                                    uptimeUsed = "0s",
-                                                                                    downloadLimit = "unlimited"
-                                                                                )
-                                                                            }
-                                                                        }
+                                                                    val usersForBatch = userManagerUsers.filter {
+                                                                        it.profile == batch.profileName ||
+                                                                            (batch.prefix.isNotBlank() && it.username.startsWith(batch.prefix))
+                                                                    }
+                                                                    if (usersForBatch.isEmpty()) {
+                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
                                                                     val templateCfg = CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName)
                                                                     CardPrintAndExportHelper.saveBatchAsPdf(
                                                                         context = context,
@@ -1379,19 +1368,14 @@ fun UserManagerBatchFullDialog(
                                                             // 3. Export to Excel
                                                             TextButton(
                                                                 onClick = {
-                                                                    val usersForBatch = userManagerUsers.filter { it.profile == batch.profileName || it.username.startsWith(batch.prefix) }
-                                                                        .ifEmpty {
-                                                                            (1..batch.count).map {
-                                                                                UserManagerUser(
-                                                                                    username = "${batch.prefix}${1000 + it}",
-                                                                                    password = "${5000 + it}",
-                                                                                    profile = batch.profileName,
-                                                                                    active = true,
-                                                                                    uptimeUsed = "0s",
-                                                                                    downloadLimit = "unlimited"
-                                                                                )
-                                                                            }
-                                                                        }
+                                                                    val usersForBatch = userManagerUsers.filter {
+                                                                        it.profile == batch.profileName ||
+                                                                            (batch.prefix.isNotBlank() && it.username.startsWith(batch.prefix))
+                                                                    }
+                                                                    if (usersForBatch.isEmpty()) {
+                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
                                                                     CardPrintAndExportHelper.exportBatchToExcel(
                                                                         context = context,
                                                                         batch = batch,
@@ -1513,7 +1497,7 @@ fun UserManagerBatchFullDialog(
                                                             date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
                                                             profileName = selectedProfileName,
                                                             count = importedUsers.size,
-                                                            pricePerCard = 500,
+                                                            pricePerCard = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price?.toInt() ?: 0,
                                                             prefix = "IMP"
                                                         )
                                                         onUpdateBatches(listOf(record) + batchRecords)
@@ -1703,7 +1687,7 @@ fun UserManagerBatchFullDialog(
                     onClick = {
                         if (newProfileNameInput.isNotBlank()) {
                             val profName = newProfileNameInput.trim()
-                            val price = newProfilePriceInput.toIntOrNull() ?: 500
+                            val price = newProfilePriceInput.toIntOrNull() ?: 0
                             viewModel.addUserManagerProfile(
                                 profile = UserManagerProfile(
                                     name = profName,

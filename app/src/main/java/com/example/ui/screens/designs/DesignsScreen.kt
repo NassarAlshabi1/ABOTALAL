@@ -67,6 +67,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,10 +91,13 @@ import com.example.data.Design
 import com.example.data.ElementStyle
 import com.example.utils.A4
 import com.example.utils.cardSize
-import com.example.utils.sampleCode
 import com.example.viewmodel.DesignsViewModel
 import java.io.File
 import java.io.FileOutputStream
+import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
 
@@ -108,6 +112,7 @@ fun DesignsScreen(
     availableHotspotProfiles: List<String> = emptyList(),
     onBack: () -> Unit = {}
 ) {
+    val coroutineScope = rememberCoroutineScope()
     val designs by viewModel.designs.collectAsState()
     val selectedDesign by viewModel.selectedDesign.collectAsState()
     val draftDesign by viewModel.draftDesign.collectAsState()
@@ -1112,9 +1117,26 @@ fun DesignsScreen(
         BuiltInBackgroundsDialog(
             onDismiss = { showBuiltInBgDialog = false },
             onSelect = { bgStyle ->
-                activeDesign?.let { d ->
-                    deleteStoredBackgroundIfOwned(context, d.bgUrl)
-                    viewModel.saveDesign(d.copy(bgOn = true, bgType = BackgroundType.BUILT_IN, bgUrl = bgStyle))
+                val design = activeDesign
+                if (design != null) {
+                    coroutineScope.launch {
+                        try {
+                            val storedImage = withContext(Dispatchers.IO) {
+                                copyBackgroundToAppStorage(context, Uri.parse(bgStyle), design.id)
+                            }
+                            if (storedImage != null) {
+                                deleteStoredBackgroundIfOwned(context, design.bgUrl)
+                                viewModel.saveDesign(
+                                    design.copy(bgOn = true, bgType = BackgroundType.BUILT_IN, bgUrl = storedImage)
+                                )
+                                Toast.makeText(context, "تم حفظ الخلفية الجاهزة مع التصميم", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "تعذر تنزيل الخلفية الجاهزة", Toast.LENGTH_LONG).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "فشل حفظ الخلفية: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
                 showBuiltInBgDialog = false
             }
@@ -1130,7 +1152,11 @@ private fun copyBackgroundToAppStorage(context: Context, source: Uri, designId: 
     val directory = File(context.filesDir, "card_backgrounds").apply { mkdirs() }
     val target = File(directory, "${designId}_${System.currentTimeMillis()}.img")
     return try {
-        context.contentResolver.openInputStream(source)?.use { input ->
+        val inputStream = when (source.scheme?.lowercase(Locale.ROOT)) {
+            "http", "https" -> URL(source.toString()).openStream()
+            else -> context.contentResolver.openInputStream(source)
+        }
+        inputStream?.use { input ->
             FileOutputStream(target).use { output -> input.copyTo(output) }
         } ?: return null
         Uri.fromFile(target).toString()
@@ -1651,9 +1677,6 @@ fun CardPreview(
     val density = LocalDensity.current
     val (cardWidthMm, cardHeightMm) = cardSize(design)
     val scale = with(density) { width.dp.toPx() / maxOf(10f, cardWidthMm) }
-    val code = remember(design.digits, design.charset) {
-        sampleCode(design)
-    }
     
     Box(
         modifier = Modifier
@@ -1725,7 +1748,7 @@ fun CardPreview(
         // اسم المستخدم
         if (design.showUsername && design.username.show) {
             Text(
-                text = code,
+                text = "",
                 modifier = Modifier.padding(
                     start = with(density) { mmToPx(design.username.x).dp },
                     top = with(density) { mmToPx(design.username.y).dp }
@@ -1739,7 +1762,7 @@ fun CardPreview(
         // كلمة المرور
         if (design.password.show) {
             Text(
-                text = code,
+                text = "",
                 modifier = Modifier.padding(
                     start = with(density) { mmToPx(design.password.x).dp },
                     top = with(density) { mmToPx(design.password.y).dp }
@@ -1753,7 +1776,7 @@ fun CardPreview(
         // السعر
         if (design.price.show) {
             Text(
-                text = "500 YER",
+                text = design.price.text,
                 modifier = Modifier.padding(
                     start = with(density) { mmToPx(design.price.x).dp },
                     top = with(density) { mmToPx(design.price.y).dp }
@@ -1767,7 +1790,7 @@ fun CardPreview(
         // الرقم التسلسلي
         if (design.serial.show) {
             Text(
-                text = "SN: 0001",
+                text = design.serial.text,
                 modifier = Modifier.padding(
                     start = with(density) { mmToPx(design.serial.x).dp },
                     top = with(density) { mmToPx(design.serial.y).dp }
@@ -2057,7 +2080,6 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                     canvas.drawRect(left, top, right, bottom, paintBorder)
                 }
 
-                val dummyCode = sampleCode(design)
                 cardCount++
 
                 // العنوان
@@ -2072,28 +2094,28 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                     paintText.textSize = design.username.fontSize * 0.8f
                     paintText.isFakeBoldText = design.username.bold
                     paintText.color = try { android.graphics.Color.parseColor(design.username.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText(dummyCode, left + design.username.x * mmToPt, top + design.username.y * mmToPt + paintText.textSize, paintText)
+                    canvas.drawText("", left + design.username.x * mmToPt, top + design.username.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // كلمة المرور
                 if (design.password.show) {
                     paintText.textSize = design.password.fontSize * 0.8f
                     paintText.color = try { android.graphics.Color.parseColor(design.password.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText(dummyCode, left + design.password.x * mmToPt, top + design.password.y * mmToPt + paintText.textSize, paintText)
+                    canvas.drawText("", left + design.password.x * mmToPt, top + design.password.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // السعر
                 if (design.price.show) {
                     paintText.textSize = design.price.fontSize * 0.8f
                     paintText.color = try { android.graphics.Color.parseColor(design.price.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText("500 YER", left + design.price.x * mmToPt, top + design.price.y * mmToPt + paintText.textSize, paintText)
+                    canvas.drawText(design.price.text, left + design.price.x * mmToPt, top + design.price.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // الرقم التسلسلي
                 if (design.serial.show) {
                     paintText.textSize = design.serial.fontSize * 0.8f
                     paintText.color = try { android.graphics.Color.parseColor(design.serial.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText("SN: $cardCount", left + design.serial.x * mmToPt, top + design.serial.y * mmToPt + paintText.textSize, paintText)
+                    canvas.drawText(design.serial.text, left + design.serial.x * mmToPt, top + design.serial.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // الباركود المدمج

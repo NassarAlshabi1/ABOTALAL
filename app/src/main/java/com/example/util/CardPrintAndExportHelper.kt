@@ -123,7 +123,7 @@ data class CardTemplateConfig(
     val priceConfig: CardElementConfig = CardElementConfig(
         visible = false,
         showTitle = false,
-        titleText = "500 ر.ي",
+        titleText = "",
         xMm = 20f,
         yMm = 10f,
         xPercent = 0.88f,
@@ -340,7 +340,7 @@ object CardPrintAndExportHelper {
             priceConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_price_vis", false),
                 showTitle = prefs.getBoolean("${p}_price_title_on", false),
-                titleText = prefs.getString("${p}_price_title_text", "500 ر.ي") ?: "500 ر.ي",
+                titleText = prefs.getString("${p}_price_title_text", "").orEmpty(),
                 xMm = prefs.getFloat("${p}_price_x_mm", 20f),
                 yMm = prefs.getFloat("${p}_price_y_mm", 10f),
                 fontSize = prefs.getFloat("${p}_price_size", 9f),
@@ -577,25 +577,15 @@ object CardPrintAndExportHelper {
         batch: GeneratedBatchRecord? = null
     ): File? {
         return try {
-            val totalCards = (config.columns * config.rows).coerceAtLeast(1)
-            val realCards = if (users.isNotEmpty()) {
-                users
-            } else {
-                (1..totalCards).map { i ->
-                    val code = String.format(Locale.US, "%010d", (1000000000L + (i * 388954024L % 9000000000L)))
-                    UserManagerUser(
-                        username = code,
-                        password = String.format(Locale.US, "%04d", 5000 + i),
-                        profile = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                        active = true
-                    )
-                }
+            if (users.isEmpty()) {
+                Toast.makeText(context, "لا توجد كروت فعلية لمعاينتها أو تصديرها", Toast.LENGTH_LONG).show()
+                return null
             }
-
+            val realCards = users
             val curBatch = batch ?: GeneratedBatchRecord(
-                batchId = "معاينة",
-                profileName = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                pricePerCard = 100,
+                batchId = "",
+                profileName = realCards.firstOrNull()?.profile.orEmpty(),
+                pricePerCard = 0,
                 count = realCards.size,
                 date = SimpleDateFormat("yyyy/MM/dd", Locale.US).format(Date()),
                 prefix = ""
@@ -711,27 +701,17 @@ object CardPrintAndExportHelper {
         batch: GeneratedBatchRecord? = null
     ) {
         try {
-            val totalCards = (config.columns * config.rows).coerceAtLeast(1)
-            val realCards = if (users.isNotEmpty()) {
-                users
-            } else {
-                (1..totalCards).map { i ->
-                    val code = (1000000000L + (i * 388954024L % 9000000000L)).toString()
-                    UserManagerUser(
-                        username = code,
-                        password = (5000 + i).toString(),
-                        profile = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                        active = true
-                    )
-                }
+            if (users.isEmpty()) {
+                Toast.makeText(context, "لا توجد كروت فعلية للطباعة أو التصدير", Toast.LENGTH_LONG).show()
+                return
             }
-
+            val realCards = users
             val curBatch = batch ?: GeneratedBatchRecord(
-                batchId = "معاينة",
-                profileName = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                pricePerCard = 100,
+                batchId = "",
+                profileName = realCards.firstOrNull()?.profile.orEmpty(),
+                pricePerCard = 0,
                 count = realCards.size,
-                date = "2026/09/03",
+                date = SimpleDateFormat("yyyy/MM/dd", Locale.US).format(Date()),
                 prefix = ""
             )
 
@@ -782,7 +762,7 @@ object CardPrintAndExportHelper {
             }
 
             // 2. Open native print manager
-            previewDesignInSystemPrint(context, config, bgBitmap)
+            previewDesignInSystemPrint(context, config, bgBitmap, realCards, curBatch)
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(context, "فشل الطباعة: ${e.message}", Toast.LENGTH_LONG).show()
@@ -795,36 +775,19 @@ object CardPrintAndExportHelper {
     fun previewDesignInSystemPrint(
         context: Context,
         config: CardTemplateConfig,
-        customBgBitmap: Bitmap? = null
+        customBgBitmap: Bitmap? = null,
+        users: List<UserManagerUser>,
+        batch: GeneratedBatchRecord
     ) {
+        if (users.isEmpty()) {
+            Toast.makeText(context, "لا توجد كروت فعلية لمعاينتها", Toast.LENGTH_LONG).show()
+            return
+        }
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {
             Toast.makeText(context, "خدمة الطباعة غير متوفرة في هذا الجهاز!", Toast.LENGTH_LONG).show()
             return
         }
-
-        val totalCards = config.columns * config.rows
-        // Generate realistic sample cards matching the preview
-        val sampleCards = (1..totalCards).map { i ->
-            val code = (1000000000L + (i * 388954024L % 9000000000L)).toString()
-            UserManagerUser(
-                username = code,
-                password = (5000 + i).toString(),
-                profile = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                active = true,
-                uptimeUsed = "0s",
-                downloadLimit = "2GB"
-            )
-        }
-
-        val sampleBatch = GeneratedBatchRecord(
-            batchId = "معاينة",
-            profileName = "باقة VIP",
-            pricePerCard = 100,
-            count = totalCards,
-            date = "2026/09/03",
-            prefix = ""
-        )
 
         val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
 
@@ -864,10 +827,10 @@ object CardPrintAndExportHelper {
                         canvas = page.canvas,
                         pageIndex = 0,
                         totalPages = 1,
-                        users = sampleCards,
+                        users = users,
                         config = config,
                         bgBitmap = bgBitmap,
-                        batch = sampleBatch
+                        batch = batch
                     )
                     pdfDoc.finishPage(page)
 
@@ -1407,7 +1370,7 @@ object CardPrintAndExportHelper {
             } else if (batch.pricePerCard > 0) {
                 "${batch.pricePerCard} ر.ي"
             } else {
-                "500 ر.ي"
+                ""
             }
             drawTextItem(config.priceConfig, prText)
         }
