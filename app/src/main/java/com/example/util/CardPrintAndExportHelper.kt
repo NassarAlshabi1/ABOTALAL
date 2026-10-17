@@ -257,6 +257,8 @@ object CardPrintAndExportHelper {
                 if (uri.scheme == "file") uri.path else null
             }.getOrNull()
         }
+        // Saved designs come from the design screen, which measures x from the LEFT
+        // edge and anchors text at that point. Mirror that exactly (WYSIWYG).
         fun ElementStyle.toPrintElement() = CardElementConfig(
             visible = show,
             titleText = text,
@@ -265,7 +267,8 @@ object CardPrintAndExportHelper {
             fontSize = fontSize,
             isBold = bold,
             isItalic = italic,
-            colorHex = color
+            colorHex = color,
+            alignment = "left"
         )
 
         saveTemplateConfig(
@@ -386,7 +389,7 @@ object CardPrintAndExportHelper {
                 isBold = prefs.getBoolean("${p}_user_bold", true),
                 isItalic = prefs.getBoolean("${p}_user_italic", false),
                 colorHex = prefs.getString("${p}_user_color", "#0F172A") ?: "#0F172A",
-                alignment = prefs.getString("${p}_user_align", "right") ?: "right"
+                alignment = prefs.getString("${p}_user_align", "left") ?: "left"
             ),
             titleConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_title_vis", false),
@@ -398,7 +401,7 @@ object CardPrintAndExportHelper {
                 isBold = prefs.getBoolean("${p}_title_bold", true),
                 isItalic = prefs.getBoolean("${p}_title_italic", false),
                 colorHex = prefs.getString("${p}_title_color", "#0C5A60") ?: "#0C5A60",
-                alignment = prefs.getString("${p}_title_align", "right") ?: "right"
+                alignment = prefs.getString("${p}_title_align", "left") ?: "left"
             ),
             passwordConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_pass_vis", false),
@@ -410,7 +413,7 @@ object CardPrintAndExportHelper {
                 isBold = prefs.getBoolean("${p}_pass_bold", false),
                 isItalic = prefs.getBoolean("${p}_pass_italic", false),
                 colorHex = prefs.getString("${p}_pass_color", "#0F172A") ?: "#0F172A",
-                alignment = prefs.getString("${p}_pass_align", "right") ?: "right"
+                alignment = prefs.getString("${p}_pass_align", "left") ?: "left"
             ),
             priceConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_price_vis", false),
@@ -422,7 +425,7 @@ object CardPrintAndExportHelper {
                 isBold = prefs.getBoolean("${p}_price_bold", true),
                 isItalic = prefs.getBoolean("${p}_price_italic", false),
                 colorHex = prefs.getString("${p}_price_color", "#0C5A60") ?: "#0C5A60",
-                alignment = prefs.getString("${p}_price_align", "right") ?: "right"
+                alignment = prefs.getString("${p}_price_align", "left") ?: "left"
             ),
             profileConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_prof_vis", false),
@@ -434,7 +437,7 @@ object CardPrintAndExportHelper {
                 isBold = prefs.getBoolean("${p}_prof_bold", true),
                 isItalic = prefs.getBoolean("${p}_prof_italic", false),
                 colorHex = prefs.getString("${p}_prof_color", "#475569") ?: "#475569",
-                alignment = prefs.getString("${p}_prof_align", "right") ?: "right"
+                alignment = prefs.getString("${p}_prof_align", "left") ?: "left"
             ),
             paymentConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_payment_vis", false),
@@ -446,7 +449,7 @@ object CardPrintAndExportHelper {
                 isBold = prefs.getBoolean("${p}_payment_bold", false),
                 isItalic = prefs.getBoolean("${p}_payment_italic", false),
                 colorHex = prefs.getString("${p}_payment_color", "#64748B") ?: "#64748B",
-                alignment = prefs.getString("${p}_payment_align", "right") ?: "right"
+                alignment = prefs.getString("${p}_payment_align", "left") ?: "left"
             ),
             serialConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_ser_vis", false),
@@ -458,7 +461,7 @@ object CardPrintAndExportHelper {
                 isBold = prefs.getBoolean("${p}_ser_bold", false),
                 isItalic = prefs.getBoolean("${p}_ser_italic", false),
                 colorHex = prefs.getString("${p}_ser_color", "#64748B") ?: "#64748B",
-                alignment = prefs.getString("${p}_ser_align", "right") ?: "right"
+                alignment = prefs.getString("${p}_ser_align", "left") ?: "left"
             ),
             posConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_pos_vis", false),
@@ -470,7 +473,7 @@ object CardPrintAndExportHelper {
                 isBold = prefs.getBoolean("${p}_pos_bold", false),
                 isItalic = prefs.getBoolean("${p}_pos_italic", false),
                 colorHex = prefs.getString("${p}_pos_color", "#64748B") ?: "#64748B",
-                alignment = prefs.getString("${p}_pos_align", "right") ?: "right"
+                alignment = prefs.getString("${p}_pos_align", "left") ?: "left"
             ),
             barcodeConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_barcode_vis", false),
@@ -672,20 +675,27 @@ object CardPrintAndExportHelper {
             val sheetW = if (isLandscape) 842 else 595
             val sheetH = if (isLandscape) 595 else 842
 
-            val pdfDocument = android.graphics.pdf.PdfDocument()
-            val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(sheetW, sheetH, 1).create()
-            val page = pdfDocument.startPage(pageInfo)
+            // Render EVERY page for the requested batch so the preview honours the
+            // exact number of generated cards (e.g. 1000 cards => 20 pages of 51).
+            val cardsPerPage = config.columns.coerceAtLeast(1) * config.rows.coerceAtLeast(1)
+            val totalPages = Math.ceil(realCards.size.toDouble() / cardsPerPage.toDouble()).toInt().coerceAtLeast(1)
 
-            drawHighFidelityCardPage(
-                canvas = page.canvas,
-                pageIndex = 0,
-                totalPages = 1,
-                users = realCards,
-                config = config,
-                bgBitmap = bgBitmap,
-                batch = curBatch
-            )
-            pdfDocument.finishPage(page)
+            val pdfDocument = android.graphics.pdf.PdfDocument()
+            for (p in 0 until totalPages) {
+                val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(sheetW, sheetH, p + 1).create()
+                val page = pdfDocument.startPage(pageInfo)
+
+                drawHighFidelityCardPage(
+                    canvas = page.canvas,
+                    pageIndex = p,
+                    totalPages = totalPages,
+                    users = realCards,
+                    config = config,
+                    bgBitmap = bgBitmap,
+                    batch = curBatch
+                )
+                pdfDocument.finishPage(page)
+            }
 
             val cacheFile = File(context.cacheDir, "preview_${config.templateName}.pdf")
             val fos = FileOutputStream(cacheFile)
@@ -882,9 +892,13 @@ object CardPrintAndExportHelper {
                     return
                 }
 
+                // Report the REAL page count so printing honours the full requested
+                // batch (e.g. 1000 cards => 20 pages), not just the first page.
+                val cardsPerPage = config.columns.coerceAtLeast(1) * config.rows.coerceAtLeast(1)
+                val totalPages = Math.ceil(users.size.toDouble() / cardsPerPage.toDouble()).toInt().coerceAtLeast(1)
                 val info = PrintDocumentInfo.Builder("NetCraft_Preview_${config.templateName}.pdf")
                     .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                    .setPageCount(1)
+                    .setPageCount(totalPages)
                     .build()
                 callback.onLayoutFinished(info, true)
             }
@@ -897,20 +911,35 @@ object CardPrintAndExportHelper {
             ) {
                 val pdfDoc = mPdfDocument ?: return
                 try {
-                    val page = pdfDoc.startPage(0)
-                    drawHighFidelityCardPage(
-                        canvas = page.canvas,
-                        pageIndex = 0,
-                        totalPages = 1,
-                        users = users,
-                        config = config,
-                        bgBitmap = bgBitmap,
-                        batch = batch
-                    )
-                    pdfDoc.finishPage(page)
+                    val cardsPerPage = config.columns.coerceAtLeast(1) * config.rows.coerceAtLeast(1)
+                    val totalPages = Math.ceil(users.size.toDouble() / cardsPerPage.toDouble()).toInt().coerceAtLeast(1)
+
+                    // Honour the page ranges requested by the print spooler;
+                    // ALL_PAGES means render the entire batch.
+                    val wantsAll = pages.any { it == PageRange.ALL_PAGES }
+                    val pageIndices = (
+                        if (wantsAll) (0 until totalPages).toList()
+                        else pages.flatMap { r -> r.start..r.end }
+                            .distinct().sorted()
+                            .filter { it in 0 until totalPages }
+                        )
+
+                    for (p in pageIndices) {
+                        val page = pdfDoc.startPage(p)
+                        drawHighFidelityCardPage(
+                            canvas = page.canvas,
+                            pageIndex = p,
+                            totalPages = totalPages,
+                            users = users,
+                            config = config,
+                            bgBitmap = bgBitmap,
+                            batch = batch
+                        )
+                        pdfDoc.finishPage(page)
+                    }
 
                     pdfDoc.writeTo(FileOutputStream(destination.fileDescriptor))
-                    callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                    callback.onWriteFinished(pages)
                 } catch (e: Exception) {
                     e.printStackTrace()
                     callback.onWriteFailed(e.localizedMessage)
@@ -1383,11 +1412,9 @@ object CardPrintAndExportHelper {
                 color = parseColorSafe(elem.colorHex, AndroidColor.parseColor("#0F172A"))
                 isFakeBoldText = elem.isBold
             }
-            val posX = when (elem.alignment) {
-                "center" -> cardRect.right - (elem.xMm * scaleX)
-                "left" -> cardRect.left + (elem.xMm * scaleX)
-                else -> cardRect.right - (elem.xMm * scaleX)
-            }
+            // x is measured from the LEFT edge of the card, matching the design-screen
+            // preview (WYSIWYG). textAlign controls how the text flows around that point.
+            val posX = cardRect.left + (elem.xMm * scaleX)
             val posY = cardRect.top + (elem.yMm * scaleY) + (elem.fontSize * 0.85f)
             canvas.drawText(displayText, posX, posY, paint)
         }
@@ -1406,11 +1433,8 @@ object CardPrintAndExportHelper {
                 color = parseColorSafe(uCfg.colorHex, AndroidColor.parseColor("#0F172A"))
                 isFakeBoldText = uCfg.isBold
             }
-            val posX = when (uCfg.alignment) {
-                "center" -> cardRect.right - (uCfg.xMm * scaleX)
-                "left" -> cardRect.left + (uCfg.xMm * scaleX)
-                else -> cardRect.right - (uCfg.xMm * scaleX)
-            }
+            // x from the LEFT edge, matching the design-screen preview (WYSIWYG).
+            val posX = cardRect.left + (uCfg.xMm * scaleX)
             val posY = cardRect.top + (uCfg.yMm * scaleY) + (uCfg.fontSize * 0.85f)
 
             if (uCfg.showTitle && uCfg.titleText.isNotEmpty()) {
@@ -1497,7 +1521,8 @@ object CardPrintAndExportHelper {
             val bCfg = config.barcodeConfig
             val bw = (bCfg.widthMm * scaleX).coerceAtLeast(10f)
             val bh = (bCfg.heightMm * scaleY).coerceAtLeast(6f)
-            val bx = cardRect.right - (bCfg.xMm * scaleX) - bw
+            // x from the LEFT edge, matching the design-screen preview (WYSIWYG).
+            val bx = cardRect.left + (bCfg.xMm * scaleX)
             val by = cardRect.top + (bCfg.yMm * scaleY)
             val bRect = AndroidRectF(bx, by, bx + bw, by + bh)
 
@@ -1572,7 +1597,8 @@ object CardPrintAndExportHelper {
             val lCfg = config.logoConfig
             val lw = (lCfg.widthMm * scaleX).coerceAtLeast(8f)
             val lh = (lCfg.heightMm * scaleY).coerceAtLeast(8f)
-            val lx = cardRect.right - (lCfg.xMm * scaleX) - lw
+            // x from the LEFT edge, matching the design-screen preview (WYSIWYG).
+            val lx = cardRect.left + (lCfg.xMm * scaleX)
             val ly = cardRect.top + (lCfg.yMm * scaleY)
             val lRect = AndroidRectF(lx, ly, lx + lw, ly + lh)
 
