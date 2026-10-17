@@ -1750,7 +1750,7 @@ fun CardPreview(
                     start = with(density) { mmToPx(design.title.x).dp },
                     top = with(density) { mmToPx(design.title.y).dp }
                 ),
-                fontSize = with(density) { maxOf(6f, design.title.fontSize * 0.353f * scale).sp },
+                fontSize = maxOf(6f, design.title.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color(android.graphics.Color.parseColor(design.title.color)) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.title.bold) FontWeight.Bold else FontWeight.Normal
             )
@@ -1765,7 +1765,10 @@ fun CardPreview(
                     start = with(density) { mmToPx(design.username.x).dp },
                     top = with(density) { mmToPx(design.username.y).dp }
                 ),
-                fontSize = with(density) { maxOf(7f, design.username.fontSize * 0.353f * scale).sp },
+                fontSize = maxOf(7f, design.username.fontSize * width / (cardWidthMm * 2.83465f)).sp,
+                textAlign = TextAlign.Left,
+                maxLines = 1,
+                softWrap = false,
                 color = try { Color(android.graphics.Color.parseColor(design.username.color)) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.username.bold) FontWeight.Bold else FontWeight.Normal
             )
@@ -1779,7 +1782,7 @@ fun CardPreview(
                     start = with(density) { mmToPx(design.password.x).dp },
                     top = with(density) { mmToPx(design.password.y).dp }
                 ),
-                fontSize = with(density) { maxOf(7f, design.password.fontSize * 0.353f * scale).sp },
+                fontSize = maxOf(7f, design.password.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color(android.graphics.Color.parseColor(design.password.color)) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.password.bold) FontWeight.Bold else FontWeight.Normal
             )
@@ -1793,7 +1796,7 @@ fun CardPreview(
                     start = with(density) { mmToPx(design.price.x).dp },
                     top = with(density) { mmToPx(design.price.y).dp }
                 ),
-                fontSize = with(density) { maxOf(6f, design.price.fontSize * 0.353f * scale).sp },
+                fontSize = maxOf(6f, design.price.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color(android.graphics.Color.parseColor(design.price.color)) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.price.bold) FontWeight.Bold else FontWeight.Normal
             )
@@ -1807,7 +1810,7 @@ fun CardPreview(
                     start = with(density) { mmToPx(design.serial.x).dp },
                     top = with(density) { mmToPx(design.serial.y).dp }
                 ),
-                fontSize = with(density) { maxOf(5f, design.serial.fontSize * 0.353f * scale).sp },
+                fontSize = maxOf(5f, design.serial.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color(android.graphics.Color.parseColor(design.serial.color)) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.serial.bold) FontWeight.Bold else FontWeight.Normal
             )
@@ -1821,7 +1824,7 @@ fun CardPreview(
                     start = with(density) { mmToPx(design.payment.x).dp },
                     top = with(density) { mmToPx(design.payment.y).dp }
                 ),
-                fontSize = with(density) { maxOf(5f, design.payment.fontSize * 0.353f * scale).sp },
+                fontSize = maxOf(5f, design.payment.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color(android.graphics.Color.parseColor(design.payment.color)) } catch (_: Exception) { Color.Black }
             )
         }
@@ -1834,7 +1837,7 @@ fun CardPreview(
                     start = with(density) { mmToPx(design.pos.x).dp },
                     top = with(density) { mmToPx(design.pos.y).dp }
                 ),
-                fontSize = with(density) { maxOf(5f, design.pos.fontSize * 0.353f * scale).sp },
+                fontSize = maxOf(5f, design.pos.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color(android.graphics.Color.parseColor(design.pos.color)) } catch (_: Exception) { Color.Black }
             )
         }
