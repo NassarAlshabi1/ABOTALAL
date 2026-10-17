@@ -24,6 +24,8 @@ import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.example.data.Design
+import com.example.data.ElementStyle
 import com.example.R
 import com.example.data.model.UserManagerUser
 import com.example.ui.screens.GeneratedBatchRecord
@@ -238,18 +240,91 @@ object CardPrintAndExportHelper {
 
     fun getTemplatesList(context: Context): List<String> {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
-        val defaultList = listOf("افتراضي", "كروت_فئة_100", "كروت_فئة_200", "كروت_فئة_500", "تصميم_مخصص_1")
         val saved = prefs.getStringSet("all_templates_set", null)
-        return if (saved.isNullOrEmpty()) {
-            defaultList
-        } else {
-            saved.toList().sorted()
-        }
+        return saved.orEmpty().toList().sorted()
     }
 
     fun saveTemplatesList(context: Context, list: List<String>) {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
         prefs.edit().putStringSet("all_templates_set", list.toSet()).apply()
+    }
+
+    /** Persist a saved card design as the exact template consumed by voucher printing. */
+    fun saveDesignAsTemplate(context: Context, design: Design) {
+        val backgroundPath = design.bgUrl?.let { raw ->
+            runCatching {
+                val uri = Uri.parse(raw)
+                if (uri.scheme == "file") uri.path else null
+            }.getOrNull()
+        }
+        fun ElementStyle.toPrintElement() = CardElementConfig(
+            visible = show,
+            titleText = text,
+            xMm = x,
+            yMm = y,
+            fontSize = fontSize,
+            isBold = bold,
+            isItalic = italic,
+            colorHex = color
+        )
+
+        saveTemplateConfig(
+            context,
+            CardTemplateConfig(
+                templateName = design.name,
+                columns = design.columns.coerceAtLeast(1),
+                rows = design.rows.coerceAtLeast(1),
+                autoFitA4 = design.autoFit,
+                pageMarginMm = design.pageMargin,
+                horizontalMarginMm = design.marginH,
+                verticalMarginMm = design.marginV,
+                cardWidthMm = design.cardWidth,
+                cardHeightMm = design.cardHeight,
+                userManagerPackageId = design.userManagerPackageId.orEmpty(),
+                hotspotPackageId = design.hotspotPackageId.orEmpty(),
+                backgroundEnabled = design.bgOn && backgroundPath != null,
+                bgPreset = if (design.bgOn && backgroundPath != null) "custom" else "none",
+                customBgPath = backgroundPath,
+                borderEnabled = design.borderOn,
+                borderSizeMm = design.borderSize,
+                borderColorHex = design.borderColor,
+                pageNoteEnabled = design.pageNote.show,
+                pageNoteText = design.pageNote.text,
+                pageNoteX = design.pageNote.x,
+                pageNoteY = design.pageNote.y,
+                pageNoteSize = design.pageNote.fontSize,
+                pageNoteColorHex = design.pageNote.color,
+                pageNumberingEnabled = design.pageNumber.show,
+                pageNumberingText = design.pageNumber.text,
+                digits = design.digits,
+                charset = if (design.charset.name == "LETTERS_AND_NUMBERS") "أحرف وأرقام" else "أرقام فقط",
+                moveStep = design.moveStep,
+                showUsername = design.showUsername,
+                usernameConfig = design.username.toPrintElement(),
+                titleConfig = design.title.toPrintElement(),
+                passwordConfig = design.password.toPrintElement(),
+                priceConfig = design.price.toPrintElement(),
+                paymentConfig = design.payment.toPrintElement(),
+                serialConfig = design.serial.toPrintElement(),
+                posConfig = design.pos.toPrintElement(),
+                barcodeConfig = CardElementConfig(
+                    visible = design.barcodeOn,
+                    xMm = design.barcodeX,
+                    yMm = design.barcodeY,
+                    widthMm = design.barcodeWidth,
+                    heightMm = design.barcodeHeight,
+                    barcodeType = "barcode"
+                ),
+                logoUrl = design.logoUrl,
+                logoConfig = CardElementConfig(
+                    visible = design.logoOn,
+                    xMm = design.logoX,
+                    yMm = design.logoY,
+                    widthMm = design.logoWidth,
+                    heightMm = design.logoHeight
+                )
+            )
+        )
     }
 
     fun deleteTemplate(context: Context, templateName: String) {

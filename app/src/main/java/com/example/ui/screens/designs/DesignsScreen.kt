@@ -92,6 +92,7 @@ import com.example.data.ElementStyle
 import com.example.utils.A4
 import com.example.utils.cardSize
 import com.example.viewmodel.DesignsViewModel
+import com.example.util.CardPrintAndExportHelper
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
@@ -141,6 +142,7 @@ fun DesignsScreen(
                         )
                         // الحفظ الفوري يضمن بقاء الصورة مع الباقة المختارة حتى لو أُغلقت الشاشة.
                         viewModel.saveDesign(updatedDesign)
+                        CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
                         Toast.makeText(context, "تم حفظ الخلفية مع التصميم والباقة المختارة", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(context, "تعذر قراءة صورة الخلفية", Toast.LENGTH_LONG).show()
@@ -498,7 +500,9 @@ fun DesignsScreen(
                                         onClick = {
                                             activeDesign.let {
                                                 deleteStoredBackgroundIfOwned(context, it.bgUrl)
-                                                viewModel.saveDesign(it.copy(bgUrl = null, bgOn = false))
+                                                val updatedDesign = it.copy(bgUrl = null, bgOn = false)
+                                                viewModel.saveDesign(updatedDesign)
+                                                CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
                                             }
                                         }
                                     ) {
@@ -990,6 +994,7 @@ fun DesignsScreen(
                                 onClick = {
                                     activeDesign?.let {
                                         viewModel.saveDesign(it)
+                                        CardPrintAndExportHelper.saveDesignAsTemplate(context, it)
                                         Toast.makeText(context, "تم حفظ التصميم بنجاح ✅", Toast.LENGTH_SHORT).show()
                                     }
                                 },
@@ -1126,9 +1131,13 @@ fun DesignsScreen(
                             }
                             if (storedImage != null) {
                                 deleteStoredBackgroundIfOwned(context, design.bgUrl)
-                                viewModel.saveDesign(
-                                    design.copy(bgOn = true, bgType = BackgroundType.BUILT_IN, bgUrl = storedImage)
+                                val updatedDesign = design.copy(
+                                    bgOn = true,
+                                    bgType = BackgroundType.BUILT_IN,
+                                    bgUrl = storedImage
                                 )
+                                viewModel.saveDesign(updatedDesign)
+                                CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
                                 Toast.makeText(context, "تم حفظ الخلفية الجاهزة مع التصميم", Toast.LENGTH_SHORT).show()
                             } else {
                                 Toast.makeText(context, "تعذر تنزيل الخلفية الجاهزة", Toast.LENGTH_LONG).show()
@@ -1669,6 +1678,8 @@ fun MovePad(
 // 🎴 CardPreview - معاينة الكرت الثابتة في الأسفل
 // ============================================================
 
+private const val PREVIEW_CARD_NUMBER = "1234567890"
+
 @Composable
 fun CardPreview(
     design: Design,
@@ -1745,10 +1756,11 @@ fun CardPreview(
             )
         }
         
+        // رقم توضيحي للمعاينة فقط؛ لا يُستخدم في توليد أو طباعة بيانات الدفعات.
         // اسم المستخدم
         if (design.showUsername && design.username.show) {
             Text(
-                text = "",
+                text = PREVIEW_CARD_NUMBER,
                 modifier = Modifier.padding(
                     start = with(density) { mmToPx(design.username.x).dp },
                     top = with(density) { mmToPx(design.username.y).dp }
@@ -2094,7 +2106,7 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                     paintText.textSize = design.username.fontSize * 0.8f
                     paintText.isFakeBoldText = design.username.bold
                     paintText.color = try { android.graphics.Color.parseColor(design.username.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText("", left + design.username.x * mmToPt, top + design.username.y * mmToPt + paintText.textSize, paintText)
+                    canvas.drawText(PREVIEW_CARD_NUMBER, left + design.username.x * mmToPt, top + design.username.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // كلمة المرور

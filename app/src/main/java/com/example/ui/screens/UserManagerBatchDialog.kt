@@ -48,6 +48,7 @@ import com.example.data.model.UserManagerUser
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.CardPrintAndExportHelper
+import com.example.viewmodel.DesignsViewModel
 import com.example.util.toAsciiDigits
 import kotlinx.coroutines.launch
 import java.io.File
@@ -64,6 +65,10 @@ fun UserManagerBatchFullDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val designsViewModel: DesignsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        factory = DesignsViewModel.Factory(context)
+    )
+    val savedDesigns by designsViewModel.designs.collectAsState()
     val sharedPrefs = remember { context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE) }
     val userManagerProfiles by viewModel.userManagerProfiles.collectAsState()
     val userManagerUsers by viewModel.userManagerUsers.collectAsState()
@@ -1323,6 +1328,12 @@ fun UserManagerBatchFullDialog(
                                                                         Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
                                                                         return@TextButton
                                                                     }
+                                                                    val printDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
+                                                                    if (printDesign == null) {
+                                                                        Toast.makeText(context, "اختر تصميمًا محفوظًا من شاشة تصاميم الكروت أولًا", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
+                                                                    CardPrintAndExportHelper.saveDesignAsTemplate(context, printDesign)
                                                                     val templateCfg = CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName)
                                                                     CardPrintAndExportHelper.printVoucherBatchDirectly(
                                                                         context = context,
@@ -1349,6 +1360,12 @@ fun UserManagerBatchFullDialog(
                                                                         Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
                                                                         return@TextButton
                                                                     }
+                                                                    val printDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
+                                                                    if (printDesign == null) {
+                                                                        Toast.makeText(context, "اختر تصميمًا محفوظًا من شاشة تصاميم الكروت أولًا", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
+                                                                    CardPrintAndExportHelper.saveDesignAsTemplate(context, printDesign)
                                                                     val templateCfg = CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName)
                                                                     CardPrintAndExportHelper.saveBatchAsPdf(
                                                                         context = context,
@@ -1530,7 +1547,7 @@ fun UserManagerBatchFullDialog(
 
     // --- DIALOG: Link Template Dialog (ربط الباقة بقالب الطباعة المحفوظ) ---
     if (showLinkTemplateDialog) {
-        val availableTemplates = remember { CardPrintAndExportHelper.getTemplatesList(context) }
+        val availableTemplates = savedDesigns.map { it.name }.filter { it.isNotBlank() }.distinct()
 
         AlertDialog(
             onDismissRequest = { showLinkTemplateDialog = false },
@@ -1552,55 +1569,49 @@ fun UserManagerBatchFullDialog(
                         color = Color(0xFF64748B)
                     )
 
-                    availableTemplates.forEach { tmpl ->
-                        val isSelected = linkedTemplateName == tmpl
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    linkedTemplateName = tmpl
-                                    sharedPrefs.edit().putString("${selectedProfileName}_template", tmpl).apply()
-                                    showLinkTemplateDialog = false
-                                    Toast.makeText(context, "تم ربط الباقة $selectedProfileName بقالب $tmpl بنجاح!", Toast.LENGTH_SHORT).show()
-                                },
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(
-                                width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) Color(0xFF0C5A60) else Color(0xFFE2E8F0)
-                            ),
-                            colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFFF0FDF4) else Color.White)
-                        ) {
-                            Row(
+                    if (availableTemplates.isEmpty()) {
+                        Text(
+                            text = "لا توجد تصاميم محفوظة. أنشئ قالبًا واحفظه أولًا من شاشة تصاميم الكروت.",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = Color(0xFF64748B)
+                        )
+                    } else {
+                        availableTemplates.forEach { tmpl ->
+                            val isSelected = linkedTemplateName == tmpl
+                            Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                    .clickable {
+                                        savedDesigns.firstOrNull { it.name == tmpl }?.let { design ->
+                                            CardPrintAndExportHelper.saveDesignAsTemplate(context, design)
+                                        }
+                                        linkedTemplateName = tmpl
+                                        sharedPrefs.edit().putString("${selectedProfileName}_template", tmpl).apply()
+                                        showLinkTemplateDialog = false
+                                        Toast.makeText(context, "تم ربط الباقة $selectedProfileName بقالب التصميم $tmpl", Toast.LENGTH_SHORT).show()
+                                    },
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) Color(0xFF0C5A60) else Color(0xFFE2E8F0)
+                                ),
+                                colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFFF0FDF4) else Color.White)
                             ) {
                                 Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    val bgRes = when (tmpl) {
-                                        "كروت_فئة_200" -> R.drawable.bg_card_200
-                                        "كروت_فئة_500" -> R.drawable.bg_card_500
-                                        else -> R.drawable.bg_card_100
-                                    }
-                                    Image(
-                                        painter = painterResource(id = bgRes),
-                                        contentDescription = null,
-                                        modifier = Modifier
-                                            .size(50.dp, 32.dp)
-                                            .clip(RoundedCornerShape(6.dp)),
-                                        contentScale = ContentScale.FillBounds
-                                    )
                                     Column {
                                         Text(text = tmpl, fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF0F172A))
-                                        Text(text = "جاهز ومتزامن مع قسم التصاميم", fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF64748B))
+                                        Text(text = "تصميم محفوظ في شاشة تصاميم الكروت", fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF64748B))
                                     }
-                                }
-                                if (isSelected) {
-                                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(20.dp))
+                                    if (isSelected) {
+                                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(20.dp))
+                                    }
                                 }
                             }
                         }
