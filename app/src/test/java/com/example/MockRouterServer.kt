@@ -84,8 +84,11 @@ internal class ScriptableMockServer {
                 val client: Socket = try { server.accept() } catch (_: Exception) { break }
                 thread(isDaemon = true) {
                     try {
-                        val input = client.getInputStream()
-                        val out = client.getOutputStream()
+                        client.tcpNoDelay = true
+                        val input = java.io.BufferedInputStream(client.getInputStream())
+                        // Buffered so each sentence leaves as one packet (flushed in writeSentence);
+                        // unbuffered word-by-word writes hit Nagle + delayed-ACK (~40ms per reply).
+                        val out = java.io.BufferedOutputStream(client.getOutputStream())
                         while (true) {
                             val words = readSentence(input) ?: break
                             received.add(words)

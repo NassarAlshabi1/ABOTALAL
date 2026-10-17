@@ -205,7 +205,12 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.importUserManagerProfiles(onSuccess, onError)
     }
 
-    fun batchAddUserManagerUsers(users: List<UserManagerUser>, batchName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+    fun batchAddUserManagerUsers(
+        users: List<UserManagerUser>,
+        batchName: String,
+        onSuccess: (List<UserManagerUser>) -> Unit,
+        onError: (String, List<UserManagerUser>) -> Unit
+    ) {
         repository.batchAddUserManagerUsers(users, batchName, onSuccess, onError)
     }
 
