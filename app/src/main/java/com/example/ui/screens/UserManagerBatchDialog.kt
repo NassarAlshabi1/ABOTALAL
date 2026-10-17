@@ -124,7 +124,7 @@ fun UserManagerBatchFullDialog(
     val cardsPerPage = remember(templateCols, templateRows) { templateCols * templateRows }
 
     var pageCountInput by remember { mutableStateOf("1") }
-    var cardCountInput by remember { mutableStateOf("51") }
+    var cardCountInput by remember { mutableStateOf("1") }
     var cardPrefixInput by remember { mutableStateOf("") }
     var cardSuffixInput by remember { mutableStateOf("") }
 
@@ -882,7 +882,7 @@ fun UserManagerBatchFullDialog(
 
                                         // عدد الصفحات (Pages Count)
                                         Text(
-                                            text = "عدد الصفحات",
+                                            text = "عدد الصفحات (محسوب من عدد الكروت)",
                                             fontFamily = CairoFontFamily,
                                             fontSize = 12.sp,
                                             color = Color(0xFF475569),
@@ -890,11 +890,8 @@ fun UserManagerBatchFullDialog(
                                         )
                                         OutlinedTextField(
                                             value = pageCountInput,
-                                            onValueChange = {
-                                                pageCountInput = it
-                                                val p = it.toAsciiDigits().toIntOrNull()
-                                                if (p != null && p > 0) cardCountInput = "${p * cardsPerPage}"
-                                            },
+                                            onValueChange = {},
+                                            readOnly = true,
                                             singleLine = true,
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                             modifier = Modifier.fillMaxWidth(),
@@ -917,6 +914,8 @@ fun UserManagerBatchFullDialog(
                                                 val c = it.toAsciiDigits().toIntOrNull()
                                                 if (c != null && c > 0) {
                                                     pageCountInput = "${Math.ceil(c.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)}"
+                                                } else {
+                                                    pageCountInput = ""
                                                 }
                                             },
                                             singleLine = true,
