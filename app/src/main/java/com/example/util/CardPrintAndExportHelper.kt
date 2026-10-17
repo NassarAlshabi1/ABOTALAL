@@ -641,6 +641,23 @@ object CardPrintAndExportHelper {
         }
     }
 
+    /** Grid limits actually honoured by [drawHighFidelityCardPage]. */
+    const val MAX_COLUMNS = 10
+    const val MAX_ROWS = 30
+
+    /** Cards that really fit on one sheet for [config] (same clamp the renderer uses). */
+    fun cardsPerPage(config: CardTemplateConfig): Int =
+        config.columns.coerceIn(1, MAX_COLUMNS) * config.rows.coerceIn(1, MAX_ROWS)
+
+    /** Sheets needed to print exactly [cardCount] cards with [config]. */
+    fun pageCountFor(cardCount: Int, config: CardTemplateConfig): Int =
+        pageCountFor(cardCount, config.columns, config.rows)
+
+    fun pageCountFor(cardCount: Int, columns: Int, rows: Int): Int {
+        val perPage = columns.coerceIn(1, MAX_COLUMNS) * rows.coerceIn(1, MAX_ROWS)
+        return ((cardCount.coerceAtLeast(0) + perPage - 1) / perPage).coerceAtLeast(1)
+    }
+
     /**
      * Generates a preview PDF file in cache directory and returns the File.
      */
@@ -673,19 +690,21 @@ object CardPrintAndExportHelper {
             val sheetH = if (isLandscape) 595 else 842
 
             val pdfDocument = android.graphics.pdf.PdfDocument()
-            val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(sheetW, sheetH, 1).create()
-            val page = pdfDocument.startPage(pageInfo)
-
-            drawHighFidelityCardPage(
-                canvas = page.canvas,
-                pageIndex = 0,
-                totalPages = 1,
-                users = realCards,
-                config = config,
-                bgBitmap = bgBitmap,
-                batch = curBatch
-            )
-            pdfDocument.finishPage(page)
+            val totalPages = pageCountFor(realCards.size, config)
+            for (p in 0 until totalPages) {
+                val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(sheetW, sheetH, p + 1).create()
+                val page = pdfDocument.startPage(pageInfo)
+                drawHighFidelityCardPage(
+                    canvas = page.canvas,
+                    pageIndex = p,
+                    totalPages = totalPages,
+                    users = realCards,
+                    config = config,
+                    bgBitmap = bgBitmap,
+                    batch = curBatch
+                )
+                pdfDocument.finishPage(page)
+            }
 
             val cacheFile = File(context.cacheDir, "preview_${config.templateName}.pdf")
             val fos = FileOutputStream(cacheFile)
@@ -800,8 +819,7 @@ object CardPrintAndExportHelper {
                 val targetFile = File(downloadsDir, fileName)
 
                 val pdfDocument = android.graphics.pdf.PdfDocument()
-                val cardsPerPage = config.columns * config.rows
-                val totalPages = Math.ceil(realCards.size.toDouble() / cardsPerPage.toDouble()).toInt().coerceAtLeast(1)
+                val totalPages = pageCountFor(realCards.size, config)
 
                 val isLandscape = config.pageOrientation.equals("landscape", ignoreCase = true)
                 val sheetW = if (isLandscape) 842 else 595
@@ -810,15 +828,11 @@ object CardPrintAndExportHelper {
                 for (p in 0 until totalPages) {
                     val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(sheetW, sheetH, p + 1).create()
                     val page = pdfDocument.startPage(pageInfo)
-                    val startIdx = p * cardsPerPage
-                    val endIdx = (startIdx + cardsPerPage).coerceAtMost(realCards.size)
-                    val subList = if (startIdx < realCards.size) realCards.subList(startIdx, endIdx) else emptyList()
-
                     drawHighFidelityCardPage(
                         canvas = page.canvas,
                         pageIndex = p,
                         totalPages = totalPages,
-                        users = subList,
+                        users = realCards,
                         config = config,
                         bgBitmap = bgBitmap,
                         batch = curBatch
@@ -865,6 +879,7 @@ object CardPrintAndExportHelper {
         }
 
         val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
+        val totalPages = pageCountFor(users.size, config)
 
         val printAdapter = object : PrintDocumentAdapter() {
             private var mPdfDocument: PrintedPdfDocument? = null
@@ -884,7 +899,7 @@ object CardPrintAndExportHelper {
 
                 val info = PrintDocumentInfo.Builder("NetCraft_Preview_${config.templateName}.pdf")
                     .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                    .setPageCount(1)
+                    .setPageCount(totalPages)
                     .build()
                 callback.onLayoutFinished(info, true)
             }
@@ -897,17 +912,23 @@ object CardPrintAndExportHelper {
             ) {
                 val pdfDoc = mPdfDocument ?: return
                 try {
-                    val page = pdfDoc.startPage(0)
-                    drawHighFidelityCardPage(
-                        canvas = page.canvas,
-                        pageIndex = 0,
-                        totalPages = 1,
-                        users = users,
-                        config = config,
-                        bgBitmap = bgBitmap,
-                        batch = batch
-                    )
-                    pdfDoc.finishPage(page)
+                    for (pageNumber in 0 until totalPages) {
+                        if (cancellationSignal?.isCanceled == true) {
+                            callback.onWriteCancelled()
+                            return
+                        }
+                        val page = pdfDoc.startPage(pageNumber)
+                        drawHighFidelityCardPage(
+                            canvas = page.canvas,
+                            pageIndex = pageNumber,
+                            totalPages = totalPages,
+                            users = users,
+                            config = config,
+                            bgBitmap = bgBitmap,
+                            batch = batch
+                        )
+                        pdfDoc.finishPage(page)
+                    }
 
                     pdfDoc.writeTo(FileOutputStream(destination.fileDescriptor))
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
@@ -965,8 +986,7 @@ object CardPrintAndExportHelper {
             return
         }
 
-        val cardsPerPage = (config.columns * config.rows).coerceAtLeast(1)
-        val totalPages = Math.ceil(users.size.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)
+        val totalPages = pageCountFor(users.size, config)
         val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
 
         val printAdapter = object : PrintDocumentAdapter() {
@@ -1046,8 +1066,7 @@ object CardPrintAndExportHelper {
         onComplete: (File?) -> Unit
     ) {
         try {
-            val cardsPerPage = (config.columns * config.rows).coerceAtLeast(1)
-            val totalPages = Math.ceil(users.size.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)
+            val totalPages = pageCountFor(users.size, config)
             val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
 
             val isLandscape = config.pageOrientation.equals("landscape", ignoreCase = true)
@@ -1231,8 +1250,8 @@ object CardPrintAndExportHelper {
         val printableW = pageWidth - (marginX * 2)
         val printableH = pageHeight - (marginY * 2) - footerSpace
 
-        val cols = config.columns.coerceIn(1, 10)
-        val rows = config.rows.coerceIn(1, 30)
+        val cols = config.columns.coerceIn(1, MAX_COLUMNS)
+        val rows = config.rows.coerceIn(1, MAX_ROWS)
         val cardsPerPage = cols * rows
 
         val hSpacing = config.horizontalMarginMm * 2.83465f // Convert mm to pt
@@ -1253,7 +1272,10 @@ object CardPrintAndExportHelper {
             config.cardHeightMm * 2.83465f
         }
 
-        val startIndex = if (users.size <= cardsPerPage) 0 else pageIndex * cardsPerPage
+        // `users` is always the whole batch; each page draws only its own slice so
+        // the printed total equals the generated count exactly (no repeats, no padding).
+        val startIndex = pageIndex * cardsPerPage
+        if (startIndex >= users.size) return
         val endIndex = Math.min(startIndex + cardsPerPage, users.size)
         var cardIdx = startIndex
 

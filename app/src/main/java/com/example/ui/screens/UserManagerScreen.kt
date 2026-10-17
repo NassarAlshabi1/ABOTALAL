@@ -57,8 +57,23 @@ data class GeneratedBatchRecord(
     val profileName: String,
     val count: Int,
     val pricePerCard: Int,
-    val prefix: String
+    val prefix: String,
+    /** The exact cards created for this batch, in generation order. Printing/PDF/Excel use only these. */
+    val cards: List<UserManagerUser> = emptyList()
 )
+
+/**
+ * Returns exactly the cards that belong to [batch] — never every card that merely
+ * shares the same profile. Falls back to a prefix match (capped at the batch count)
+ * only for records created before cards were tracked.
+ */
+fun GeneratedBatchRecord.resolveCards(routerUsers: List<UserManagerUser>): List<UserManagerUser> {
+    if (cards.isNotEmpty()) return cards
+    if (prefix.isBlank()) return emptyList()
+    return routerUsers
+        .filter { it.username.startsWith(prefix) && (profileName.isBlank() || it.profile == profileName) }
+        .take(count.coerceAtLeast(0))
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

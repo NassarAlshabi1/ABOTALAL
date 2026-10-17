@@ -120,15 +120,18 @@ fun UserManagerBatchFullDialog(
 
     // Page count is derived from the selected saved design; only cardCountInput is user-editable.
     val linkedDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
-    val templateCols = linkedDesign?.columns?.coerceAtLeast(1)
-        ?: sharedPrefs.getInt("${linkedTemplateName}_columns", 3).coerceAtLeast(1)
-    val templateRows = linkedDesign?.rows?.coerceAtLeast(1)
-        ?: sharedPrefs.getInt("${linkedTemplateName}_rows", 17).coerceAtLeast(1)
-    val cardsPerPage = (templateCols * templateRows).coerceAtLeast(1)
+    // Same clamps the PDF renderer applies, so the displayed page count equals the printed one.
+    val templateCols = (linkedDesign?.columns
+        ?: sharedPrefs.getInt("${linkedTemplateName}_columns", 3))
+        .coerceIn(1, CardPrintAndExportHelper.MAX_COLUMNS)
+    val templateRows = (linkedDesign?.rows
+        ?: sharedPrefs.getInt("${linkedTemplateName}_rows", 17))
+        .coerceIn(1, CardPrintAndExportHelper.MAX_ROWS)
+    val cardsPerPage = templateCols * templateRows
     var cardCountInput by remember { mutableStateOf("1") }
     val pageCountDisplay = cardCountInput.toAsciiDigits().toIntOrNull()
         ?.takeIf { it > 0 }
-        ?.let { Math.ceil(it.toDouble() / cardsPerPage).toInt().coerceAtLeast(1).toString() }
+        ?.let { CardPrintAndExportHelper.pageCountFor(it, templateCols, templateRows).toString() }
         .orEmpty()
     var cardPrefixInput by remember { mutableStateOf("") }
     var cardSuffixInput by remember { mutableStateOf("") }
@@ -1074,23 +1077,37 @@ fun UserManagerBatchFullDialog(
                                         viewModel.batchAddUserManagerUsers(
                                             users = generatedUsers,
                                             batchName = batchCode,
-                                            onSuccess = {
+                                            onSuccess = { created ->
                                                 val newRecord = GeneratedBatchRecord(
                                                     batchId = batchCode,
                                                     date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date()),
                                                     profileName = selectedProfileName,
-                                                    count = count,
+                                                    count = created.size,
                                                     pricePerCard = price,
-                                                    prefix = cleanPrefix
+                                                    prefix = cleanPrefix,
+                                                    cards = created
                                                 )
                                                 onUpdateBatches(listOf(newRecord) + batchRecords)
                                                 isGenerating = false
-                                                successNotification = "تم توليد وإضافة $count كرت بنجاح في راوتر المايكروتيك!"
+                                                successNotification = "تم توليد وإضافة ${created.size} كرت بنجاح في راوتر المايكروتيك!"
                                                 previewBatchForPrint = newRecord
-                                                previewBatchUsers = generatedUsers
+                                                previewBatchUsers = created
                                             },
-                                            onError = { err ->
+                                            onError = { err, created ->
                                                 isGenerating = false
+                                                if (created.isNotEmpty()) {
+                                                    // Keep the cards the router did accept so they can still be printed.
+                                                    val partialRecord = GeneratedBatchRecord(
+                                                        batchId = batchCode,
+                                                        date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date()),
+                                                        profileName = selectedProfileName,
+                                                        count = created.size,
+                                                        pricePerCard = price,
+                                                        prefix = cleanPrefix,
+                                                        cards = created
+                                                    )
+                                                    onUpdateBatches(listOf(partialRecord) + batchRecords)
+                                                }
                                                 Toast.makeText(context, "خطأ في التوليد: $err", Toast.LENGTH_LONG).show()
                                             }
                                         )
@@ -1353,10 +1370,7 @@ fun UserManagerBatchFullDialog(
                                                             TextButton(
                                                                 onClick = {
                                                                     // Get users for this batch
-                                                                    val usersForBatch = userManagerUsers.filter {
-                                                                        it.profile == batch.profileName ||
-                                                                            (batch.prefix.isNotBlank() && it.username.startsWith(batch.prefix))
-                                                                    }
+                                                                    val usersForBatch = batch.resolveCards(userManagerUsers)
                                                                     if (usersForBatch.isEmpty()) {
                                                                         Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
                                                                         return@TextButton
@@ -1385,10 +1399,7 @@ fun UserManagerBatchFullDialog(
                                                             // 2. Export to PDF
                                                             TextButton(
                                                                 onClick = {
-                                                                    val usersForBatch = userManagerUsers.filter {
-                                                                        it.profile == batch.profileName ||
-                                                                            (batch.prefix.isNotBlank() && it.username.startsWith(batch.prefix))
-                                                                    }
+                                                                    val usersForBatch = batch.resolveCards(userManagerUsers)
                                                                     if (usersForBatch.isEmpty()) {
                                                                         Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
                                                                         return@TextButton
@@ -1418,10 +1429,7 @@ fun UserManagerBatchFullDialog(
                                                             // 3. Export to Excel
                                                             TextButton(
                                                                 onClick = {
-                                                                    val usersForBatch = userManagerUsers.filter {
-                                                                        it.profile == batch.profileName ||
-                                                                            (batch.prefix.isNotBlank() && it.username.startsWith(batch.prefix))
-                                                                    }
+                                                                    val usersForBatch = batch.resolveCards(userManagerUsers)
                                                                     if (usersForBatch.isEmpty()) {
                                                                         Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
                                                                         return@TextButton
@@ -1541,22 +1549,34 @@ fun UserManagerBatchFullDialog(
                                                 viewModel.batchAddUserManagerUsers(
                                                     users = importedUsers,
                                                     batchName = "IMPORT-${System.currentTimeMillis() % 1000}",
-                                                    onSuccess = {
+                                                    onSuccess = { created ->
                                                         val record = GeneratedBatchRecord(
                                                             batchId = "IMPORT-${System.currentTimeMillis() % 1000}",
                                                             date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
                                                             profileName = selectedProfileName,
-                                                            count = importedUsers.size,
+                                                            count = created.size,
                                                             pricePerCard = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price?.toInt() ?: 0,
-                                                            prefix = "IMP"
+                                                            prefix = "IMP",
+                                                            cards = created
                                                         )
                                                         onUpdateBatches(listOf(record) + batchRecords)
                                                         importRawText = ""
                                                         selectedTopTab = 0
                                                         successNotification = "تم استيراد ${importedUsers.size} كرت وإضافتها للراوتر بنجاح!"
                                                     },
-                                                    onError = {
-                                                        Toast.makeText(context, "خطأ أثناء الاستيراد: $it", Toast.LENGTH_LONG).show()
+                                                    onError = { err, created ->
+                                                        if (created.isNotEmpty()) {
+                                                            onUpdateBatches(listOf(GeneratedBatchRecord(
+                                                                batchId = "IMPORT-${System.currentTimeMillis() % 1000}",
+                                                                date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
+                                                                profileName = selectedProfileName,
+                                                                count = created.size,
+                                                                pricePerCard = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price?.toInt() ?: 0,
+                                                                prefix = "IMP",
+                                                                cards = created
+                                                            )) + batchRecords)
+                                                        }
+                                                        Toast.makeText(context, "خطأ أثناء الاستيراد: $err", Toast.LENGTH_LONG).show()
                                                     }
                                                 )
                                             },
@@ -1765,8 +1785,12 @@ fun UserManagerBatchFullDialog(
 
     // --- NATIVE PRINT PREVIEW TRIGGER ---
     if (showInAppPrintPreview && previewBatchForPrint != null) {
-        val cfg = remember(linkedTemplateName) { CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName) }
         LaunchedEffect(previewBatchForPrint) {
+            // Sync the saved design into the print template first so columns/rows match the design.
+            savedDesigns.firstOrNull { it.name == linkedTemplateName }?.let {
+                CardPrintAndExportHelper.saveDesignAsTemplate(context, it)
+            }
+            val cfg = CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName)
             CardPrintAndExportHelper.printVoucherBatchDirectly(
                 context = context,
                 batch = previewBatchForPrint!!,

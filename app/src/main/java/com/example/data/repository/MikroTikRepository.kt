@@ -1257,6 +1257,74 @@ class MikroTikRepository(
         return "admin"
     }
 
+    private enum class UmFlavor { V7, V6 }
+
+    private fun isNoSuchCommand(e: Exception?): Boolean =
+        e?.message?.contains("no such command", ignoreCase = true) == true
+
+    // Adds one user-manager user using the attribute set each RouterOS version
+    // actually accepts: v7 `/user-manager/user/add name=` (no customer), v6
+    // `/tool/user-manager/user/add customer= username=`. When [preferred] is
+    // known (from an earlier row of the same batch) only that path is used.
+    // Returns the flavor that succeeded; throws the router's meaningful error.
+    private fun umAddUser(
+        api: MikroTikNativeApi,
+        username: String,
+        password: String,
+        customer: () -> String,
+        extra: Map<String, String> = emptyMap(),
+        preferred: UmFlavor? = null
+    ): UmFlavor {
+        var v7Err: Exception? = null
+        if (preferred != UmFlavor.V6) {
+            try {
+                api.executeStrict("/user-manager/user/add", linkedMapOf(
+                    "name" to username,
+                    "password" to password
+                ) + extra)
+                return UmFlavor.V7
+            } catch (e: Exception) {
+                if (preferred == UmFlavor.V7) throw e
+                v7Err = e
+            }
+        }
+        try {
+            api.executeStrict("/tool/user-manager/user/add", linkedMapOf(
+                "customer" to customer(),
+                "username" to username,
+                "password" to password
+            ) + extra)
+            return UmFlavor.V6
+        } catch (e: Exception) {
+            // On v7 the legacy menu doesn't exist; surface the real v7 error instead.
+            throw if (isNoSuchCommand(e) && v7Err != null) v7Err else e
+        }
+    }
+
+    // Attaches a profile to an existing user-manager user.
+    // v7: /user-manager/user-profile/add user=<name> profile=<profile>
+    // v6: /tool/user-manager/user/create-and-activate-profile customer= numbers= profile=
+    private fun umAssignProfile(
+        api: MikroTikNativeApi,
+        flavor: UmFlavor,
+        username: String,
+        userId: String?,
+        profile: String,
+        customer: () -> String
+    ) {
+        when (flavor) {
+            UmFlavor.V7 -> api.executeStrict("/user-manager/user-profile/add", mapOf(
+                "user" to username,
+                "profile" to profile
+            ))
+            UmFlavor.V6 -> api.executeStrict("/tool/user-manager/user/create-and-activate-profile", mapOf(
+                "customer" to customer(),
+                "numbers" to (userId ?: username),
+                "profile" to profile
+            ))
+        }
+    }
+
     // Resolves a user-manager user's real .id on the router (numbers= accepts
     // .id reliably on both ROS v6 and v7, usernames not always).
     private fun umResolveUserId(api: MikroTikNativeApi, username: String): String? {
@@ -1280,15 +1348,15 @@ class MikroTikRepository(
                 return@launch
             }
             try {
-                val params = mutableMapOf(
-                    "username" to user.username,
-                    "password" to user.password,
-                    "customer" to umResolveCustomer(api)
-                )
-                if (user.profile.isNotEmpty()) params["profile"] = user.profile
-                if (user.comment.isNotEmpty()) params["comment"] = user.comment
-                if (user.active) params["disabled"] = "no"
-                umWrite(api, "user/add", params)
+                val customer by lazy { umResolveCustomer(api) }
+                val extra = mutableMapOf<String, String>()
+                if (user.comment.isNotEmpty()) extra["comment"] = user.comment
+                if (user.active) extra["disabled"] = "no"
+                val flavor = umAddUser(api, user.username, user.password, { customer }, extra)
+                if (user.profile.isNotEmpty()) {
+                    val uid = if (flavor == UmFlavor.V6) umResolveUserId(api, user.username) else null
+                    umAssignProfile(api, flavor, user.username, uid, user.profile) { customer }
+                }
                 _userManagerUsers.value = _userManagerUsers.value + user
                 insertActivityLog("يوزر مانجر", "تم إضافة مستخدم يوزر مانجر جديد '${user.username}' بالبروفايل '${user.profile}'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
@@ -1560,59 +1628,61 @@ class MikroTikRepository(
         }
     }
 
-    fun batchAddUserManagerUsers(users: List<UserManagerUser>, batchName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+    /**
+     * Adds exactly [users] (1..N) to User Manager and reports back the cards the
+     * router actually accepted. [onSuccess] fires only when every requested card
+     * was created; otherwise [onError] receives the real router error together
+     * with the subset that *was* created so the UI can still print/export them.
+     */
+    fun batchAddUserManagerUsers(
+        users: List<UserManagerUser>,
+        batchName: String,
+        onSuccess: (List<UserManagerUser>) -> Unit,
+        onError: (String, List<UserManagerUser>) -> Unit
+    ) {
         repositoryScope.launch {
+            val added = mutableListOf<UserManagerUser>()
             try {
-                // If connected to live router, execute commands via RouterOS API
                 val api = nativeApi
                 if (api == null) {
-                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر", emptyList()) }
                     return@launch
                 }
                 if (users.isEmpty()) {
-                    launch(Dispatchers.Main) { onError("لم يتم إدخال عدد صالح للكروت") }
+                    launch(Dispatchers.Main) { onError("لم يتم إدخال عدد صالح للكروت", emptyList()) }
                     return@launch
                 }
-                val added = mutableListOf<UserManagerUser>()
                 var firstErr: String? = null
-                val customer = umResolveCustomer(api)
+                val customer by lazy { umResolveCustomer(api) }
+                // Detected from the first accepted row so the remaining rows go
+                // straight to the right menu (no double round-trip per card).
+                var flavor: UmFlavor? = null
 
-                // Add the requested cards first. Do not re-fetch the full user table for every row.
                 users.forEach { user ->
                     try {
-                        umWrite(api, "user/add", mapOf(
-                            "customer" to customer,
-                            "username" to user.username,
-                            "password" to user.password
-                        ))
+                        flavor = umAddUser(api, user.username, user.password, { customer }, preferred = flavor)
                         added.add(user)
                     } catch (e: Exception) {
                         if (firstErr == null) firstErr = e.message
                     }
                 }
 
-                // Resolve IDs in one read for large batches, then attach each selected profile.
-                if (added.any { it.profile.isNotEmpty() }) {
-                    var routerUsers: List<Map<String, String>> = emptyList()
-                    for (path in listOf("/user-manager/user/print", "/tool/user-manager/user/print")) {
-                        val records = runCatching { api.executeStrict(path) }.getOrDefault(emptyList())
-                        if (records.isNotEmpty()) {
-                            routerUsers = records
-                            break
-                        }
-                    }
-                    val idByUsername = routerUsers.mapNotNull { record ->
-                        val username = record["name"] ?: record["username"]
-                        val id = record[".id"]
-                        if (username != null && id != null) username to id else null
-                    }.toMap()
-                    added.filter { it.profile.isNotEmpty() }.forEach { user ->
+                // Attach the selected profile. v6 needs .id, so resolve all IDs in one read.
+                val detected = flavor
+                val withProfile = added.filter { it.profile.isNotEmpty() }
+                if (detected != null && withProfile.isNotEmpty()) {
+                    val idByUsername: Map<String, String> = if (detected == UmFlavor.V6) {
+                        runCatching { api.executeStrict("/tool/user-manager/user/print") }
+                            .getOrDefault(emptyList())
+                            .mapNotNull { record ->
+                                val username = record["name"] ?: record["username"]
+                                val id = record[".id"]
+                                if (username != null && id != null) username to id else null
+                            }.toMap()
+                    } else emptyMap()
+                    withProfile.forEach { user ->
                         runCatching {
-                            umWrite(api, "user/create-and-activate-profile", mapOf(
-                                "customer" to customer,
-                                "numbers" to (idByUsername[user.username] ?: user.username),
-                                "profile" to user.profile
-                            ))
+                            umAssignProfile(api, detected, user.username, idByUsername[user.username], user.profile) { customer }
                         }.onFailure { e ->
                             if (firstErr == null) firstErr = e.message
                         }
@@ -1620,18 +1690,18 @@ class MikroTikRepository(
                 }
 
                 if (added.isNotEmpty()) {
-                    val list = _userManagerUsers.value.toMutableList()
                     // Prepend so new cards appear instantly at top
-                    list.addAll(0, added)
-                    _userManagerUsers.value = list
+                    _userManagerUsers.value = added + _userManagerUsers.value
                 }
                 insertActivityLog("توليد دفعة كروت", "تم توليد دفعة كروت ($batchName): نجح ${added.size} من ${users.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
+                val result = added.toList()
                 launch(Dispatchers.Main) {
-                    if (added.size == users.size) onSuccess()
-                    else onError("نجح ${added.size} من ${users.size}. خطأ: ${firstErr ?: "غير معروف"}")
+                    if (result.size == users.size && firstErr == null) onSuccess(result)
+                    else onError("نجح ${result.size} من ${users.size}. خطأ: ${firstErr ?: "غير معروف"}", result)
                 }
             } catch (e: Exception) {
-                launch(Dispatchers.Main) { onError(e.message ?: "خطأ في إضافة الكروت") }
+                val result = added.toList()
+                launch(Dispatchers.Main) { onError(e.message ?: "خطأ في إضافة الكروت", result) }
             }
         }
     }
