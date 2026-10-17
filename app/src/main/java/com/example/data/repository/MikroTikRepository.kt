@@ -1713,7 +1713,7 @@ class MikroTikRepository(
                 launch(Dispatchers.Main) { onSuccess(0) }
                 return@launch
             }
-            val toRemove = _userManagerUsers.value.filter { !it.active || it.uptimeUsed == "expired" }.map { it.username }
+            val toRemove = _userManagerUsers.value.filter { !it.active || it.uptimeUsed.contains("expired", ignoreCase = true) }.map { it.username }
             var removed = 0
             val succeeded = mutableSetOf<String>()
             toRemove.forEach { u ->
