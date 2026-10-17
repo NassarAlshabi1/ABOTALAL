@@ -118,13 +118,18 @@ fun UserManagerBatchFullDialog(
     var namePatternDropdownExpanded by remember { mutableStateOf(false) }
     var nameLengthInput by remember { mutableStateOf("9") }
 
-    // Page Calculation
-    val templateCols = remember(linkedTemplateName) { sharedPrefs.getInt("${linkedTemplateName}_columns", 3).coerceAtLeast(1) }
-    val templateRows = remember(linkedTemplateName) { sharedPrefs.getInt("${linkedTemplateName}_rows", 17).coerceAtLeast(1) }
-    val cardsPerPage = remember(templateCols, templateRows) { templateCols * templateRows }
-
-    var pageCountInput by remember { mutableStateOf("1") }
+    // Page count is derived from the selected saved design; only cardCountInput is user-editable.
+    val linkedDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
+    val templateCols = linkedDesign?.columns?.coerceAtLeast(1)
+        ?: sharedPrefs.getInt("${linkedTemplateName}_columns", 3).coerceAtLeast(1)
+    val templateRows = linkedDesign?.rows?.coerceAtLeast(1)
+        ?: sharedPrefs.getInt("${linkedTemplateName}_rows", 17).coerceAtLeast(1)
+    val cardsPerPage = (templateCols * templateRows).coerceAtLeast(1)
     var cardCountInput by remember { mutableStateOf("1") }
+    val pageCountDisplay = cardCountInput.toAsciiDigits().toIntOrNull()
+        ?.takeIf { it > 0 }
+        ?.let { Math.ceil(it.toDouble() / cardsPerPage).toInt().coerceAtLeast(1).toString() }
+        .orEmpty()
     var cardPrefixInput by remember { mutableStateOf("") }
     var cardSuffixInput by remember { mutableStateOf("") }
 
@@ -889,7 +894,7 @@ fun UserManagerBatchFullDialog(
                                             fontWeight = FontWeight.Medium
                                         )
                                         OutlinedTextField(
-                                            value = pageCountInput,
+                                            value = pageCountDisplay,
                                             onValueChange = {},
                                             readOnly = true,
                                             singleLine = true,
@@ -909,15 +914,7 @@ fun UserManagerBatchFullDialog(
                                         )
                                         OutlinedTextField(
                                             value = cardCountInput,
-                                            onValueChange = {
-                                                cardCountInput = it
-                                                val c = it.toAsciiDigits().toIntOrNull()
-                                                if (c != null && c > 0) {
-                                                    pageCountInput = "${Math.ceil(c.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)}"
-                                                } else {
-                                                    pageCountInput = ""
-                                                }
-                                            },
+                                            onValueChange = { cardCountInput = it },
                                             singleLine = true,
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                             modifier = Modifier.fillMaxWidth(),
