@@ -4,7 +4,9 @@ import java.util.Locale
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.widget.Toast
@@ -102,8 +104,8 @@ fun DesignsScreen(
     viewModel: DesignsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         factory = DesignsViewModel.Factory(context)
     ),
-    availableUmPackages: List<String> = listOf("1_Hour", "3_Hours", "Daily_500MB", "Weekly_2GB", "Monthly_10GB", "VIP_Unlimited"),
-    availableHotspotProfiles: List<String> = listOf("default", "1Hour_500MB", "Daily_Unlimited", "Weekly_Super", "Monthly_Fast"),
+    availableUmPackages: List<String> = emptyList(),
+    availableHotspotProfiles: List<String> = emptyList(),
     onBack: () -> Unit = {}
 ) {
     val designs by viewModel.designs.collectAsState()
@@ -123,7 +125,24 @@ fun DesignsScreen(
     val bgImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
             activeDesign?.let { d ->
-                viewModel.updateDraft(d.copy(bgOn = true, bgUrl = it.toString(), bgType = BackgroundType.CUSTOM))
+                try {
+                    val storedImage = copyBackgroundToAppStorage(context, it, d.id)
+                    if (storedImage != null) {
+                        deleteStoredBackgroundIfOwned(context, d.bgUrl)
+                        val updatedDesign = d.copy(
+                            bgOn = true,
+                            bgUrl = storedImage,
+                            bgType = BackgroundType.CUSTOM
+                        )
+                        // الحفظ الفوري يضمن بقاء الصورة مع الباقة المختارة حتى لو أُغلقت الشاشة.
+                        viewModel.saveDesign(updatedDesign)
+                        Toast.makeText(context, "تم حفظ الخلفية مع التصميم والباقة المختارة", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "تعذر قراءة صورة الخلفية", Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "فشل حفظ الخلفية: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -432,7 +451,16 @@ fun DesignsScreen(
                                 }
                                 
                                 OutlinedButton(
-                                    onClick = { bgImagePicker.launch("image/*") },
+                                    onClick = {
+                                        val design = activeDesign
+                                        if (design == null) {
+                                            Toast.makeText(context, "أنشئ أو اختر تصميماً أولاً", Toast.LENGTH_SHORT).show()
+                                        } else if (design.userManagerPackageId.isNullOrBlank() && design.hotspotPackageId.isNullOrBlank()) {
+                                            Toast.makeText(context, "اختر باقة User Manager أو Hotspot قبل إضافة الخلفية", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            bgImagePicker.launch("image/*")
+                                        }
+                                    },
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
@@ -464,7 +492,8 @@ fun DesignsScreen(
                                     IconButton(
                                         onClick = {
                                             activeDesign.let {
-                                                viewModel.updateDraft(it.copy(bgUrl = null, bgOn = false))
+                                                deleteStoredBackgroundIfOwned(context, it.bgUrl)
+                                                viewModel.saveDesign(it.copy(bgUrl = null, bgOn = false))
                                             }
                                         }
                                     ) {
@@ -970,8 +999,9 @@ fun DesignsScreen(
                             
                             Button(
                                 onClick = {
-                                    selectedDesign?.id?.let {
-                                        viewModel.deleteDesign(it)
+                                    selectedDesign?.let { design ->
+                                        deleteStoredBackgroundIfOwned(context, design.bgUrl)
+                                        viewModel.deleteDesign(design.id)
                                         Toast.makeText(context, "تم حذف التصميم", Toast.LENGTH_SHORT).show()
                                     }
                                 },
@@ -1083,7 +1113,8 @@ fun DesignsScreen(
             onDismiss = { showBuiltInBgDialog = false },
             onSelect = { bgStyle ->
                 activeDesign?.let { d ->
-                    viewModel.updateDraft(d.copy(bgOn = true, bgType = BackgroundType.BUILT_IN, bgUrl = bgStyle))
+                    deleteStoredBackgroundIfOwned(context, d.bgUrl)
+                    viewModel.saveDesign(d.copy(bgOn = true, bgType = BackgroundType.BUILT_IN, bgUrl = bgStyle))
                 }
                 showBuiltInBgDialog = false
             }
@@ -1094,6 +1125,34 @@ fun DesignsScreen(
 // ============================================================
 // 🧩 المكونات المساعدة (Dropdowns, Cards, Fields, Pad, Preview)
 // ============================================================
+
+private fun copyBackgroundToAppStorage(context: Context, source: Uri, designId: String): String? {
+    val directory = File(context.filesDir, "card_backgrounds").apply { mkdirs() }
+    val target = File(directory, "${designId}_${System.currentTimeMillis()}.img")
+    return try {
+        context.contentResolver.openInputStream(source)?.use { input ->
+            FileOutputStream(target).use { output -> input.copyTo(output) }
+        } ?: return null
+        Uri.fromFile(target).toString()
+    } catch (e: Exception) {
+        target.delete()
+        throw e
+    }
+}
+
+private fun deleteStoredBackgroundIfOwned(context: Context, url: String?) {
+    if (url.isNullOrBlank()) return
+    try {
+        val uri = Uri.parse(url)
+        val file = if (uri.scheme == "file") File(uri.path ?: "") else null
+        val ownedDirectory = File(context.filesDir, "card_backgrounds").canonicalFile
+        if (file != null && file.exists() && file.canonicalFile.parentFile == ownedDirectory) {
+            file.delete()
+        }
+    } catch (_: Exception) {
+        // A remote/built-in URL or an already removed file needs no cleanup.
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1968,6 +2027,10 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
         val pageMarginPt = design.pageMargin * mmToPt
         val marginHPt = design.marginH * mmToPt
         val marginVPt = design.marginV * mmToPt
+        val backgroundBitmap = loadStoredBackgroundBitmap(context, design)
+        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            isFilterBitmap = true
+        }
 
         var cardCount = 0
         for (r in 0 until rows) {
@@ -1976,6 +2039,16 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                 val top = pageMarginPt + r * (cardHPt + marginVPt)
                 val right = left + cardWPt
                 val bottom = top + cardHPt
+
+                // رسم الخلفية المحفوظة داخل كل كرت في ملف PDF أيضاً.
+                if (backgroundBitmap != null) {
+                    canvas.drawBitmap(
+                        backgroundBitmap,
+                        null,
+                        RectF(left, top, right, bottom),
+                        backgroundPaint
+                    )
+                }
 
                 // الإطار
                 if (design.borderOn) {
@@ -2059,5 +2132,21 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "فشل فتح PDF: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+    }
+}
+
+private fun loadStoredBackgroundBitmap(context: Context, design: Design): Bitmap? {
+    if (!design.bgOn || design.bgUrl.isNullOrBlank()) return null
+    return try {
+        val uri = Uri.parse(design.bgUrl)
+        when (uri.scheme) {
+            "file" -> BitmapFactory.decodeFile(uri.path)
+            "content" -> context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input)
+            }
+            else -> null
+        }
+    } catch (_: Exception) {
+        null
     }
 }

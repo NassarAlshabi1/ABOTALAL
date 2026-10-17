@@ -63,6 +63,8 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
     val isConnected by viewModel.isConnected.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val conn by viewModel.currentConnection.collectAsState()
+    val userManagerProfiles by viewModel.userManagerProfiles.collectAsState()
+    val hotspotProfiles by viewModel.hotspotProfiles.collectAsState()
 
     var showSplash by remember { mutableStateOf(true) }
     // 0 = الرئيسية, 1 = الخدمات, 2 = التقارير, 3 = الملف
@@ -72,7 +74,6 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
     var showPowerDialog by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
     var showExitAppDialog by remember { mutableStateOf(false) }
-    var showQuickActionDialog by remember { mutableStateOf(false) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
 
     // First: Splash Screen
@@ -387,41 +388,6 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                     )
                                 }
 
-                                // 3. زر إجراء سريع مركزي بتصميم كبسولة متدرجة فاخرة
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .clickable { showQuickActionDialog = true },
-                                    shadowElevation = 4.dp
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .background(
-                                                Brush.horizontalGradient(
-                                                    listOf(Color(0xFF063B40), Color(0xFF0C5A60), Color(0xFF0284C7))
-                                                )
-                                            )
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Add,
-                                            contentDescription = "إجراء سريع",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Text(
-                                            text = "إجراء سريع",
-                                            fontFamily = CairoFontFamily,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                    }
-                                }
-
                                 // 4. الأدوات
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -511,6 +477,8 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                             onBack = { currentTab = 0 }
                         )
                         5 -> DesignsScreen(
+                            availableUmPackages = userManagerProfiles.map { it.name },
+                            availableHotspotProfiles = hotspotProfiles.map { it.name },
                             onBack = { currentTab = 0 }
                         )
                         6 -> ToolsScreen(
@@ -525,79 +493,6 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                 }
             }
         }
-    }
-
-    // Quick Action Dialog (FAB +)
-    if (showQuickActionDialog) {
-        AlertDialog(
-            onDismissRequest = { showQuickActionDialog = false },
-            title = { Text("إجراء سريع", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = {
-                            showQuickActionDialog = false
-                            currentTab = 1
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Filled.AddCard, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("إضافة / توليد كروت هوتسبوت", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = {
-                            showQuickActionDialog = false
-                            currentTab = 4
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Filled.People, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("نظام اليوزرمانجر والكروت", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = {
-                            showQuickActionDialog = false
-                            currentTab = 5
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Filled.Palette, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("تصاميم وهوية الكروت VIP", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = {
-                            showQuickActionDialog = false
-                            viewModel.refreshAllData()
-                            actionMessage = "تم تحديث كافة بيانات الشبكة والراوتر بنجاح"
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Filled.Refresh, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("مزامنة وتحديث البيانات فوراً", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showQuickActionDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
     }
 
     // Power Dialog: Reboot or Shutdown Router
