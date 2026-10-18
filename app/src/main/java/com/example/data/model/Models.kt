@@ -40,7 +40,12 @@ data class UserManagerUser(
     val uptimeUsed: String = "0s",
     val downloadLimit: String = "unlimited",
     val serialNumber: String = "-",
-    val comment: String = ""
+    val comment: String = "",
+    // True when the router (RouterOS v6 /tool/user-manager) reports an assigned
+    // "profile" but an empty "actual-profile" — the router's real signal that the
+    // card's validity/limit has run out, even though it is still "active"
+    // (disabled == false). Defaults to false: unknown routers/paths never flag it.
+    val profileExpired: Boolean = false
 )
 
 data class UserManagerProfile(

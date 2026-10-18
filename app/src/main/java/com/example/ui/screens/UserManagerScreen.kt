@@ -779,7 +779,12 @@ fun UserManagerScreen(
 
     // --- 8. Dialog: صيانة الكروت المنتهية (Maintenance) ---
     if (showMaintenanceDialog) {
-        val expiredCount = userManagerUsers.count { !it.active || it.uptimeUsed == "expired" }
+        // Matches the criterion actually used by cleanExpiredUserManagerUsers() below:
+        // disabled cards, plus cards whose assigned profile ran out (profileExpired)
+        // and that have actually been used at least once.
+        val expiredCount = userManagerUsers.count {
+            !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
+        }
 
         AlertDialog(
             onDismissRequest = { showMaintenanceDialog = false },
@@ -813,10 +818,16 @@ fun UserManagerScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.cleanExpiredUserManagerUsers { count ->
-                            feedbackMessage = "تمت إزالة وتنظيف $count كرت منتهي بنجاح!"
-                            showMaintenanceDialog = false
-                        }
+                        viewModel.cleanExpiredUserManagerUsers(
+                            onSuccess = { count ->
+                                feedbackMessage = "تمت إزالة وتنظيف $count كرت منتهي بنجاح!"
+                                showMaintenanceDialog = false
+                            },
+                            onError = { err ->
+                                feedbackMessage = err
+                                showMaintenanceDialog = false
+                            }
+                        )
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
                 ) {

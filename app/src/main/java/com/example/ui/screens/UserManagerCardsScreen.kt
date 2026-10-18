@@ -167,7 +167,11 @@ fun UserManagerCardsScreen(
             val matchesScope = when (selectedScope) {
                 "الكروت المفعلة (النشطة)" -> user.active
                 "الكروت غير المفعلة" -> !user.active
-                "الكروت المنتهية" -> user.uptimeUsed.contains("expired", ignoreCase = true) || !user.active
+                // Same compound signal as cleanExpiredUserManagerUsers(): disabled, or the
+                // router cleared the active profile (profileExpired) on a card that was
+                // actually used at least once.
+                "الكروت المنتهية" -> !user.active ||
+                    (user.profileExpired && user.uptimeUsed.isNotBlank() && user.uptimeUsed != "0s")
                 else -> true
             }
 
@@ -716,9 +720,14 @@ fun UserManagerCardsScreen(
                                 DropdownMenuItem(
                                     text = { Text("تنظيف الكروت المنتهية", fontFamily = CairoFontFamily, fontSize = 12.sp) },
                                     onClick = {
-                                        viewModel.cleanExpiredUserManagerUsers { count ->
-                                            Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
-                                        }
+                                        viewModel.cleanExpiredUserManagerUsers(
+                                            onSuccess = { count ->
+                                                Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
+                                            },
+                                            onError = { err ->
+                                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                            }
+                                        )
                                         overflowMenuExpanded = false
                                     }
                                 )
@@ -1226,9 +1235,15 @@ fun UserManagerCardsScreen(
                 selectedCardForDetails = null
             },
             onToggleActive = {
-                viewModel.toggleUserManagerUser(user.username) {
-                    Toast.makeText(context, "تم تغيير حالة الكرت", Toast.LENGTH_SHORT).show()
-                }
+                viewModel.toggleUserManagerUser(
+                    username = user.username,
+                    onSuccess = {
+                        Toast.makeText(context, "تم تغيير حالة الكرت", Toast.LENGTH_SHORT).show()
+                    },
+                    onError = { err ->
+                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                    }
+                )
                 selectedCardForDetails = null
             },
             onDelete = {

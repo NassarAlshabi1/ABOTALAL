@@ -362,15 +362,18 @@ class MikroTikRepository(
                 }
                 val umUsers = umList.map {
                     val uname = it["name"] ?: it["username"] ?: ""
+                    val assignedProfile = it["profile"]
+                    val actualProfile = it["actual-profile"]
                     UserManagerUser(
                         username = uname,
                         password = it["password"] ?: uname,
-                        profile = it["actual-profile"] ?: it["profile"] ?: "default",
+                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
                         active = it["disabled"] != "true",
                         uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
                         downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
                         serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                        comment = it["comment"] ?: ""
+                        comment = it["comment"] ?: "",
+                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
                     )
                 }
                 if (umUsers.isNotEmpty()) {
@@ -533,15 +536,18 @@ class MikroTikRepository(
                     if (umList.isNotEmpty()) {
                         val umUsers = umList.map {
                             val uname = it["name"] ?: it["username"] ?: ""
+                            val assignedProfile = it["profile"]
+                            val actualProfile = it["actual-profile"]
                             UserManagerUser(
                                 username = uname,
                                 password = it["password"] ?: uname,
-                                profile = it["actual-profile"] ?: it["profile"] ?: "default",
+                                profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
                                 active = it["disabled"] != "true",
                                 uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
                                 downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
                                 serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                                comment = it["comment"] ?: ""
+                                comment = it["comment"] ?: "",
+                                profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
                             )
                         }
                         _userManagerUsers.value = umUsers
@@ -1389,7 +1395,7 @@ class MikroTikRepository(
                     runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to uid)) }
                 }
                 _userManagerUsers.value = _userManagerUsers.value.map {
-                    if (it.username == username) it.copy(profile = newProfile, active = true, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
+                    if (it.username == username) it.copy(profile = newProfile, active = true, profileExpired = false, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
                 }
                 insertActivityLog("تجديد كرت", "تم تجديد الكرت '$username' بالباقة '$newProfile'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
@@ -1706,14 +1712,23 @@ class MikroTikRepository(
         }
     }
 
-    fun cleanExpiredUserManagerUsers(onSuccess: (Int) -> Unit)  {
+    fun cleanExpiredUserManagerUsers(onSuccess: (Int) -> Unit, onError: (String) -> Unit = {})  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onSuccess(0) }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر، لا يمكن تنظيف الكروت المنتهية") }
                 return@launch
             }
-            val toRemove = _userManagerUsers.value.filter { !it.active || it.uptimeUsed.contains("expired", ignoreCase = true) }.map { it.username }
+            // Two independent, router-confirmed expiry signals:
+            // 1) disabled == true (admin manually disabled the card), or
+            // 2) profileExpired (router cleared "actual-profile" because the assigned
+            //    profile's validity/limit ran out — RouterOS v6 user-manager never flips
+            //    "disabled" by itself when this happens) combined with having actually
+            //    been used at least once, so a brand-new unused card is never swept up
+            //    by mistake while its profile activation is still pending.
+            val toRemove = _userManagerUsers.value.filter {
+                !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
+            }.map { it.username }
             var removed = 0
             val succeeded = mutableSetOf<String>()
             toRemove.forEach { u ->
@@ -1731,22 +1746,28 @@ class MikroTikRepository(
         }
     }
 
-    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit)  {
+    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit = {})  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
                 return@launch
             }
-            val current = _userManagerUsers.value.find { it.username == username } ?: return@launch
+            val current = _userManagerUsers.value.find { it.username == username }
+            if (current == null) {
+                launch(Dispatchers.Main) { onError("المستخدم '$username' غير موجود") }
+                return@launch
+            }
             val newActive = !current.active
             try {
                 umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, username) ?: username), "disabled" to if (newActive) "no" else "yes"))
                 _userManagerUsers.value = _userManagerUsers.value.map {
                     if (it.username == username) it.copy(active = newActive) else it
                 }
-            } catch (_: Exception) {}
-            launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل تغيير حالة المستخدم على الراوتر") }
+            }
         }
     }
 
@@ -1775,9 +1796,14 @@ class MikroTikRepository(
             val host = _currentConnection.value?.host ?: ""
             if (nativeApi != null) {
                 val ok = nativeApi?.reboot() ?: false
-                insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل عبر المنفذ 8728", host)
-                disconnect()
-                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة تشغيل الراوتر بنجاح!") }
+                if (ok) {
+                    insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل عبر المنفذ 8728", host)
+                    disconnect()
+                    launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة تشغيل الراوتر بنجاح!") }
+                } else {
+                    insertActivityLog("إعادة تشغيل", "فشل إرسال أمر إعادة التشغيل عبر المنفذ 8728", host)
+                    launch(Dispatchers.Main) { onError("فشل إرسال أمر إعادة التشغيل إلى الراوتر") }
+                }
                 return@launch
             }
             
@@ -1811,9 +1837,14 @@ class MikroTikRepository(
             val host = _currentConnection.value?.host ?: ""
             if (nativeApi != null) {
                 val ok = nativeApi?.shutdown() ?: false
-                insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف تشغيل الراوتر", host)
-                disconnect()
-                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                if (ok) {
+                    insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف تشغيل الراوتر", host)
+                    disconnect()
+                    launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                } else {
+                    insertActivityLog("إيقاف تشغيل", "فشل إرسال أمر إيقاف التشغيل للراوتر", host)
+                    launch(Dispatchers.Main) { onError("فشل إرسال أمر إيقاف التشغيل إلى الراوتر") }
+                }
                 return@launch
             }
             
