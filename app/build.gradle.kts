@@ -97,21 +97,21 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
-  implementation(libs.androidx.navigation.compose)
+  // implementation(libs.androidx.navigation.compose) // unused: screens are switched by a plain tab index, no NavHost
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
-  implementation(libs.firebase.ai)
+  // implementation(libs.converter.moshi) // unused: no Retrofit client in the app
+  // implementation(libs.firebase.ai) // unused: no Gemini/generative calls anywhere
   implementation(libs.firebase.appcheck.playintegrity)
   debugImplementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
+  // implementation(libs.logging.interceptor) // unused: no OkHttp logging interceptor wired up
+  // implementation(libs.moshi.kotlin) // unused: router JSON is parsed by hand with org.json
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
+  // implementation(libs.retrofit) // unused: all router calls go through MikroTikNativeApi/OkHttp directly
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -129,5 +129,5 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
+  // "ksp"(libs.moshi.kotlin.codegen) // unused: moshi.kotlin is commented out above
 }
