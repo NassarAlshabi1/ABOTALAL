@@ -1713,7 +1713,10 @@ class MikroTikRepository(
                 launch(Dispatchers.Main) { onError("غير متصل بالراوتر، لا يمكن تنظيف الكروت المنتهية") }
                 return@launch
             }
-            val toRemove = _userManagerUsers.value.filter { !it.active || it.uptimeUsed.contains("expired", ignoreCase = true) }.map { it.username }
+            // "uptimeUsed" is the raw duration the router reports (e.g. "15m", "1d00:00:00"),
+            // never the literal word "expired" — the router's only reliable expiry signal for
+            // a user-manager card is that it has been disabled (active == false).
+            val toRemove = _userManagerUsers.value.filter { !it.active }.map { it.username }
             var removed = 0
             val succeeded = mutableSetOf<String>()
             toRemove.forEach { u ->

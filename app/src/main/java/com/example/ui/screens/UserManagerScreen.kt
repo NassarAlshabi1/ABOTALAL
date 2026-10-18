@@ -779,7 +779,9 @@ fun UserManagerScreen(
 
     // --- 8. Dialog: صيانة الكروت المنتهية (Maintenance) ---
     if (showMaintenanceDialog) {
-        val expiredCount = userManagerUsers.count { !it.active || it.uptimeUsed.contains("expired", ignoreCase = true) }
+        // Matches the criterion actually used by cleanExpiredUserManagerUsers() below:
+        // the router has no "expired" status field, only the disabled flag.
+        val expiredCount = userManagerUsers.count { !it.active }
 
         AlertDialog(
             onDismissRequest = { showMaintenanceDialog = false },
