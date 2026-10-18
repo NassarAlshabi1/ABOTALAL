@@ -74,6 +74,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -132,13 +133,32 @@ fun UserManagerCardsScreen(
     val profiles by viewModel.userManagerProfiles.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
 
-    // Filter states
+    // Filter states (declared first — the router-side search effect below observes them)
     var selectedScope by remember { mutableStateOf("جميع الكروت من الروتر") }
     var scopeMenuExpanded by remember { mutableStateOf(false) }
 
     var searchQuery by remember { mutableStateOf("") }
     var searchFieldType by remember { mutableStateOf("الاسم") }
     var searchMenuExpanded by remember { mutableStateOf(false) }
+
+    // Router-side search results (?name~ / ?profile~ executed on the router itself).
+    // When null, the locally synced list is used; a non-empty query while connected
+    // triggers a live router search so huge card databases need no full sync first.
+    var routerSearchResults by remember { mutableStateOf<List<UserManagerUser>?>(null) }
+    LaunchedEffect(searchQuery, searchFieldType, isConnected) {
+        val q = searchQuery.trim()
+        if (q.length < 2 || !isConnected) {
+            routerSearchResults = null
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(500) // debounce
+        viewModel.searchUserManagerUsers(
+            query = q,
+            field = searchFieldType,
+            onSuccess = { routerSearchResults = it },
+            onError = { routerSearchResults = null } // fall back to local filter
+        )
+    }
 
     var isFullView by remember { mutableStateOf(false) }
     var overflowMenuExpanded by remember { mutableStateOf(false) }
@@ -160,9 +180,11 @@ fun UserManagerCardsScreen(
     // Rotation animation for refresh
     val rotationAnim = remember { Animatable(0f) }
 
-    // Filtered list computation
-    val filteredUsers = remember(rawUsers, selectedScope, searchQuery, searchFieldType) {
-        rawUsers.filter { user ->
+    // Filtered list computation — uses the router-side search results when a live
+    // search is active, otherwise the locally synced list.
+    val effectiveUsers = routerSearchResults ?: rawUsers
+    val filteredUsers = remember(effectiveUsers, selectedScope, searchQuery, searchFieldType) {
+        effectiveUsers.filter { user ->
             // 1. Scope filter
             val matchesScope = when (selectedScope) {
                 "الكروت المفعلة (النشطة)" -> user.active
@@ -200,6 +222,12 @@ fun UserManagerCardsScreen(
     val pagedUsers = remember(filteredUsers, safeCurrentPage, effectivePageSize) {
         val startIndex = (safeCurrentPage - 1) * effectivePageSize
         filteredUsers.drop(startIndex).take(effectivePageSize)
+    }
+
+    // Reset to the first page whenever the filters or result set change so the
+    // user never lands on an out-of-range page after narrowing the list.
+    LaunchedEffect(filteredUsers.size, selectedScope, searchQuery, searchFieldType) {
+        if (currentPage != 1) currentPage = 1
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {

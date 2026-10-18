@@ -5,6 +5,11 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.common.BitMatrix
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.oned.Code128Writer
 import android.graphics.Color as AndroidColor
 import android.graphics.DashPathEffect
 import android.graphics.Paint as AndroidPaint
@@ -12,6 +17,7 @@ import android.graphics.Rect as AndroidRect
 import android.graphics.RectF as AndroidRectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import android.util.Log
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Environment
@@ -332,16 +338,23 @@ object CardPrintAndExportHelper {
         val current = getTemplatesList(context).toMutableList()
         current.remove(templateName)
         saveTemplatesList(context, current)
-        // Also clear template specific keys
+        // Also clear template specific keys — exact sanitized prefix match so a
+        // template named "A" never deletes the keys of "A_1"/"A 1" as well.
         val editor = prefs.edit()
-        val allKeys = prefs.all.keys.filter { it.startsWith("${templateName}_") }
+        val keyPrefix = prefKey(templateName) + "_"
+        val allKeys = prefs.all.keys.filter { it.startsWith(keyPrefix) }
         allKeys.forEach { editor.remove(it) }
         editor.apply()
     }
 
+    /** SharedPreferences key for a template name — sanitized so spaces/dots in
+     *  design names can never produce colliding or ambiguous pref keys. */
+    private fun prefKey(name: String): String =
+        name.trim().replace(Regex("[^A-Za-z0-9_-]"), "_")
+
     fun loadTemplateConfig(context: Context, templateName: String): CardTemplateConfig {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
-        val p = templateName
+        val p = prefKey(templateName)
         val cardWMm = prefs.getFloat("${p}_card_w_mm", 65.0f)
         val cardHMm = prefs.getFloat("${p}_card_h_mm", 15.0f)
 
@@ -494,7 +507,7 @@ object CardPrintAndExportHelper {
 
     fun saveTemplateConfig(context: Context, config: CardTemplateConfig) {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
-        val p = config.templateName
+        val p = prefKey(config.templateName)
         val templates = getTemplatesList(context).toMutableList()
         if (!templates.contains(config.templateName)) {
             templates.add(config.templateName)
@@ -1364,6 +1377,51 @@ object CardPrintAndExportHelper {
         }
     }
 
+    /** Renders a ZXing [BitMatrix] (QR or Code128) scaled to fit [rect], keeping
+     *  square modules crisp for reliable scanning. */
+    private fun drawBitMatrix(
+        canvas: AndroidCanvas,
+        matrix: BitMatrix,
+        rect: AndroidRectF,
+        paint: AndroidPaint
+    ) {
+        val w = matrix.width
+        val h = matrix.height
+        if (w <= 0 || h <= 0) return
+        // Fit the matrix inside the rect while preserving module aspect ratio
+        val moduleSize = minOf(rect.width() / w, rect.height() / h)
+        val totalW = moduleSize * w
+        val totalH = moduleSize * h
+        val originX = rect.left + (rect.width() - totalW) / 2f
+        val originY = rect.top + (rect.height() - totalH) / 2f
+        for (x in 0 until w) {
+            var runStart = -1
+            for (y in 0 until h) {
+                if (matrix[x, y]) {
+                    if (runStart < 0) runStart = y
+                } else if (runStart >= 0) {
+                    canvas.drawRect(
+                        originX + x * moduleSize,
+                        originY + runStart * moduleSize,
+                        originX + (x + 1) * moduleSize,
+                        originY + y * moduleSize,
+                        paint
+                    )
+                    runStart = -1
+                }
+            }
+            if (runStart >= 0) {
+                canvas.drawRect(
+                    originX + x * moduleSize,
+                    originY + runStart * moduleSize,
+                    originX + (x + 1) * moduleSize,
+                    originY + h * moduleSize,
+                    paint
+                )
+            }
+        }
+    }
+
     private fun drawCardElements(
         canvas: AndroidCanvas,
         cardRect: AndroidRectF,
@@ -1514,7 +1572,9 @@ object CardPrintAndExportHelper {
             drawTextItem(config.posConfig, posText)
         }
 
-        // 9. Barcode / QR Code
+        // 9. Barcode / QR Code — REAL scannable codes via ZXing.
+        // QR encodes "username:password" (readable by any scanner app), the linear
+        // barcode encodes the username as Code128.
         if (config.barcodeConfig.visible) {
             val bCfg = config.barcodeConfig
             val bw = (bCfg.widthMm * scaleX).coerceAtLeast(10f)
@@ -1533,59 +1593,44 @@ object CardPrintAndExportHelper {
             val pad = (bCfg.paddingMm * scaleX).coerceIn(0f, bw * 0.25f)
             val innerRect = AndroidRectF(bRect.left + pad, bRect.top + pad, bRect.right - pad, bRect.bottom - pad)
 
-            if (bCfg.barcodeType == "qr") {
-                val qrPaint = AndroidPaint().apply {
-                    isAntiAlias = true
-                    color = AndroidColor.BLACK
-                    style = AndroidPaint.Style.FILL
-                }
-                val qrSize = Math.min(innerRect.width(), innerRect.height())
-                val qrLeft = innerRect.left + (innerRect.width() - qrSize) / 2f
-                val qrTop = innerRect.top + (innerRect.height() - qrSize) / 2f
+            val darkPaint = AndroidPaint().apply {
+                isAntiAlias = false // crisp module edges scan better
+                color = AndroidColor.BLACK
+                style = AndroidPaint.Style.FILL
+            }
 
-                // Corner finder patterns
-                fun drawFinder(cx: Float, cy: Float, size: Float) {
-                    qrPaint.color = AndroidColor.BLACK
-                    canvas.drawRect(AndroidRectF(cx, cy, cx + size, cy + size), qrPaint)
-                    qrPaint.color = AndroidColor.WHITE
-                    canvas.drawRect(AndroidRectF(cx + size * 0.2f, cy + size * 0.2f, cx + size * 0.8f, cy + size * 0.8f), qrPaint)
-                    qrPaint.color = AndroidColor.BLACK
-                    canvas.drawRect(AndroidRectF(cx + size * 0.35f, cy + size * 0.35f, cx + size * 0.65f, cy + size * 0.65f), qrPaint)
-                }
-
-                val cSize = qrSize * 0.28f
-                drawFinder(qrLeft, qrTop, cSize)
-                drawFinder(qrLeft + qrSize - cSize, qrTop, cSize)
-                drawFinder(qrLeft, qrTop + qrSize - cSize, cSize)
-
-                // Grid modules
-                val grid = 8
-                val cellSize = qrSize / grid
-                val seed = user.username.hashCode()
-                for (gx in 0 until grid) {
-                    for (gy in 0 until grid) {
-                        if ((gx < 3 && gy < 3) || (gx >= grid - 3 && gy < 3) || (gx < 3 && gy >= grid - 3)) continue
-                        if (((seed + gx * 11 + gy * 7) % 2) == 0) {
-                            val mx = qrLeft + gx * cellSize
-                            val my = qrTop + gy * cellSize
-                            qrPaint.color = AndroidColor.BLACK
-                            canvas.drawRect(AndroidRectF(mx, my, mx + cellSize * 0.85f, my + cellSize * 0.85f), qrPaint)
-                        }
+            try {
+                if (bCfg.barcodeType == "qr") {
+                    // Real QR code (ZXing) carrying the voucher credentials
+                    val content = if (user.password.isNotBlank()) {
+                        "${user.username}:${user.password}"
+                    } else {
+                        user.username
                     }
+                    val hints = mapOf(EncodeHintType.MARGIN to 0, EncodeHintType.CHARACTER_SET to "UTF-8")
+                    val matrix: BitMatrix = QRCodeWriter().encode(
+                        content, BarcodeFormat.QR_CODE,
+                        innerRect.width().toInt().coerceAtLeast(21),
+                        innerRect.height().toInt().coerceAtLeast(21),
+                        hints
+                    )
+                    drawBitMatrix(canvas, matrix, innerRect, darkPaint)
+                } else {
+                    // Real Code128 barcode (ZXing) carrying the username
+                    val content = user.username
+                    val hints = mapOf(EncodeHintType.MARGIN to 1)
+                    val matrix: BitMatrix = Code128Writer().encode(
+                        content, BarcodeFormat.CODE_128,
+                        innerRect.width().toInt().coerceAtLeast(40),
+                        innerRect.height().toInt().coerceAtLeast(12),
+                        hints
+                    )
+                    drawBitMatrix(canvas, matrix, innerRect, darkPaint)
                 }
-            } else {
-                val barPaint = AndroidPaint().apply {
-                    isAntiAlias = true
-                    color = AndroidColor.BLACK
-                }
-                val lineCount = 14
-                val step = innerRect.width() / (lineCount + 1)
-                val seed = user.username.hashCode()
-                for (i in 1..lineCount) {
-                    val lx = innerRect.left + (i * step)
-                    barPaint.strokeWidth = if ((seed + i) % 3 == 0) 2.2f else 1.1f
-                    canvas.drawLine(lx, innerRect.top + 1f, lx, innerRect.bottom - 1f, barPaint)
-                }
+            } catch (e: Exception) {
+                // Encoding failed (e.g. empty content) — draw an honest empty box
+                // instead of a fake decorative pattern.
+                Log.w("CardPrintHelper", "Barcode/QR encode failed for '${user.username}': ${e.message}")
             }
         }
 

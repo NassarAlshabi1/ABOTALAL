@@ -117,10 +117,23 @@ class NativeApiIntegrationTest {
                     writeSentence(out, listOf("!done"))
                 }
                 command.startsWith("/user-manager/user/print") -> {
+                    // Realistic ROS v6 router: the modern /user-manager menu does NOT
+                    // exist — answer with a !trap like a real 6.49 device would.
+                    writeSentence(out, listOf("!trap", "=message=no such command or directory"))
+                    writeSentence(out, listOf("!done"))
+                }
+                command.startsWith("/tool/user-manager/user/print") -> {
+                    // v6 user-manager menu actually lives under /tool/
                     writeSentence(out, listOf("!re", "=.id=*1", "=name=card_ahmed", "=password=1111", "=profile=1h_100MB", "=uptime-used=15m", "=disabled=false"))
                     writeSentence(out, listOf("!re", "=.id=*2", "=name=card_khalid", "=password=2222", "=profile=1h_100MB", "=uptime-used=30m", "=disabled=false"))
                     writeSentence(out, listOf("!done"))
                 }
+                command.startsWith("/tool/user-manager/profile/print") -> {
+                    writeSentence(out, listOf("!re", "=.id=*1", "=name=1h_100MB", "=name-for-users=1h 100MB"))
+                    writeSentence(out, listOf("!done"))
+                }
+                command.startsWith("/tool/user-manager/profile/profile-limitation/print") ->
+                    writeSentence(out, listOf("!done"))
                 command.startsWith("/system/identity/print") ->
                     writeSentence(out, listOf("!done", "=name=mock-router"))
                 else -> writeSentence(out, listOf("!done"))

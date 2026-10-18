@@ -55,7 +55,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.pow
-import kotlin.random.Random
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,11 +120,14 @@ fun UserManagerBatchFullDialog(
     // Page count is derived from the selected saved design; only cardCountInput is user-editable.
     val linkedDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
     // Same clamps the PDF renderer applies, so the displayed page count equals the printed one.
+    // Key sanitized exactly like CardPrintAndExportHelper.prefKey() so names with
+    // spaces/dots read the same template the renderer writes.
+    val templatePrefKey = linkedTemplateName.trim().replace(Regex("[^A-Za-z0-9_-]"), "_")
     val templateCols = (linkedDesign?.columns
-        ?: sharedPrefs.getInt("${linkedTemplateName}_columns", 3))
+        ?: sharedPrefs.getInt("${templatePrefKey}_columns", 3))
         .coerceIn(1, CardPrintAndExportHelper.MAX_COLUMNS)
     val templateRows = (linkedDesign?.rows
-        ?: sharedPrefs.getInt("${linkedTemplateName}_rows", 17))
+        ?: sharedPrefs.getInt("${templatePrefKey}_rows", 17))
         .coerceIn(1, CardPrintAndExportHelper.MAX_ROWS)
     val cardsPerPage = templateCols * templateRows
     var cardCountInput by remember { mutableStateOf("1") }
@@ -1052,7 +1054,7 @@ fun UserManagerBatchFullDialog(
                                                 "كلمة سر فارغة" -> ""
                                                 "اسم المستخدم = كلمة السر" -> uname
                                                 "أرقام وحروف مدمجة" -> generateRandomAlphaNumeric(6, excluded)
-                                                else -> String.format(Locale.US, "%04d", Random.nextInt(1000, 9999))
+                                                else -> String.format(Locale.US, "%04d", 1000 + secureRandom.nextInt(9000))
                                             }
                                             generatedUsers.add(
                                                 UserManagerUser(
@@ -1445,7 +1447,7 @@ fun UserManagerBatchFullDialog(
                                                             ) {
                                                                 Icon(Icons.Filled.FileDownload, contentDescription = null, tint = Color(0xFF0284C7), modifier = Modifier.size(16.dp))
                                                                 Spacer(modifier = Modifier.width(4.dp))
-                                                                Text("تصدير Excel", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0284C7))
+                                                                Text("تصدير CSV", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0284C7))
                                                             }
 
                                                             // 3. Delete Batch
@@ -1803,8 +1805,11 @@ fun UserManagerBatchFullDialog(
 }
 
 // -------------------------------------------------------------
-// Generator Helpers
+// Generator Helpers — card codes use a cryptographically secure
+// SecureRandom so voucher credentials cannot be predicted.
 // -------------------------------------------------------------
+private val secureRandom = java.security.SecureRandom()
+
 private fun cardCodeCharacterPool(pattern: String, excludedChars: Set<Char>): String = when (pattern) {
     "احرف وارقام" -> "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
     "احرف صغيرة فقط" -> "abcdefghijkmnopqrstuvwxyz"
@@ -1824,11 +1829,12 @@ private fun generateCardCode(
     val allowedLength = (length - cleanPrefix.length - cleanSuffix.length).coerceAtLeast(3)
     val pool = cardCodeCharacterPool(pattern, excludedChars)
     require(pool.isNotEmpty()) { "No available username characters" }
-    val core = (1..allowedLength).map { pool.random() }.joinToString("")
+    val core = (1..allowedLength).map { pool[secureRandom.nextInt(pool.length)] }.joinToString("")
     return "$cleanPrefix$core$cleanSuffix"
 }
 
 private fun generateRandomAlphaNumeric(length: Int, excludedChars: Set<Char>): String {
     val pool = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".filter { it !in excludedChars }
-    return (1..length).map { pool.random() }.joinToString("")
+    require(pool.isNotEmpty()) { "No available password characters" }
+    return (1..length).map { pool[secureRandom.nextInt(pool.length)] }.joinToString("")
 }

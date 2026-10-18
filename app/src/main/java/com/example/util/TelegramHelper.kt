@@ -184,7 +184,7 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
         }
     }
 
-    // Persistence
+    // Persistence (bot tokens encrypted at rest via CryptoManager/Android Keystore)
     fun loadSavedBots(context: Context): List<TelegramBotItem> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val jsonStr = prefs.getString(KEY_BOTS_JSON, null) ?: return defaultInitialBots()
@@ -197,7 +197,7 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
                     TelegramBotItem(
                         id = obj.optString("id"),
                         name = obj.optString("name"),
-                        token = obj.optString("token"),
+                        token = CryptoManager.decrypt(obj.optString("token")),
                         chatId = obj.optString("chatId"),
                         isDefault = obj.optBoolean("isDefault"),
                         isConnected = obj.optBoolean("isConnected"),
@@ -219,7 +219,7 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
             val obj = JSONObject().apply {
                 put("id", bot.id)
                 put("name", bot.name)
-                put("token", bot.token)
+                put("token", CryptoManager.encrypt(bot.token) ?: "")
                 put("chatId", bot.chatId)
                 put("isDefault", bot.isDefault)
                 put("isConnected", bot.isConnected)

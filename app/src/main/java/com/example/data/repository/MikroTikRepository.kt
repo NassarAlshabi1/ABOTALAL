@@ -23,14 +23,9 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 
 class MikroTikRepository(
     private val context: Context,
@@ -80,6 +75,38 @@ class MikroTikRepository(
     // Native Socket API instance for port 8728
     private var nativeApi: MikroTikNativeApi? = null
 
+    // Real RouterOS version detected from /system/resource/print after login.
+    // rosMajor = 6 → user-manager lives under /tool/user-manager
+    // rosMajor = 7 → user-manager lives under /user-manager
+    // 0 = not detected yet (fall back to probing both paths).
+    @Volatile
+    private var rosMajor: Int = 0
+
+    /** User-manager menu base for the DETECTED RouterOS version. */
+    private val umBase: String
+        get() = if (rosMajor == 6) "/tool/user-manager" else "/user-manager"
+
+    /** Ordered candidate bases for user-manager commands — detected version first. */
+    private val umBases: List<String>
+        get() = if (rosMajor == 6) listOf("/tool/user-manager", "/user-manager")
+                else listOf("/user-manager", "/tool/user-manager")
+
+    private fun detectRouterOsVersion(api: MikroTikNativeApi, connection: RouterConnection) {
+        try {
+            val res = api.execute("/system/resource/print").firstOrNull()
+            val ver = res?.get("version") ?: ""
+            val major = ver.split('.').firstOrNull()?.trim()?.toIntOrNull() ?: 0
+            if (major > 0) {
+                rosMajor = major
+                Log.i("NetCraft", "Detected RouterOS $ver on ${connection.host} → major=$major, umBase=$umBase")
+            } else {
+                Log.w("NetCraft", "Could not parse RouterOS version '$ver' — keeping probe fallback")
+            }
+        } catch (e: Exception) {
+            Log.w("NetCraft", "Version detection failed: ${e.message}")
+        }
+    }
+
     private val lastIfaceCounters = mutableMapOf<String, Triple<Long, Long, Long>>()
 
     private fun speedFromDelta(name: String, rx: Long, tx: Long): Pair<Double, Double> {
@@ -95,39 +122,23 @@ class MikroTikRepository(
     // Dynamic ticking job for dashboard updates
     private var isTickerRunning = false
 
-    // OkHttpClient that trusts self-signed certs (common for MikroTik)
+    // Plain OkHttp client with normal system trust — no trust-all certs, no
+    // hostname-verifier bypass. Router HTTPS endpoints with self-signed certs must
+    // be accessed over http (REST on port 80) or with a properly imported cert.
     private var okHttpClient: OkHttpClient? = null
 
     init {
-        setupUnsafeOkHttpClient()
-    }
-
-    private fun setupUnsafeOkHttpClient() {
-        try {
-            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            })
-
-            val sslContext = SSLContext.getInstance("SSL")
-            sslContext.init(null, trustAllCerts, SecureRandom())
-            
-            okHttpClient = OkHttpClient.Builder()
-                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-                .hostnameVerifier { _, _ -> true }
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
-                .build()
-        } catch (e: Exception) {
-            okHttpClient = OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
-                .build()
-        }
+        okHttpClient = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .build()
     }
 
     // Connect real router (Supports Port 8728 native binary API & HTTP/REST)
+    // Transport fallback chain: native API first (non-web ports), then REST on the
+    // configured web port, and finally native on the default API port 8728 when the
+    // configured port is a web port. Authentication failures are reported directly
+    // (the same credentials would fail on every transport).
     fun connectToRouter(connection: RouterConnection, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             _operationStatus.value = "جاري الاتصال بـ ${connection.host}..."
@@ -136,86 +147,154 @@ class MikroTikRepository(
                 return@launch
             }
 
-            // 1. Native MikroTik API Socket (default API ports 8728/8729, or any custom
-            // port that is not a web/REST port — e.g. when the `api` service is remapped)
+            val webPorts = listOf(80, 443, 8080, 8081)
+            var lastError = ""
+
+            // 1. Native MikroTik API Socket on the configured port (any non-web port,
+            //    or the explicit API ports even if they collide with the web list).
             if (connection.port == 8728 || connection.port == 8729 ||
-                connection.port !in listOf(80, 443, 8080, 8081)) {
-                try {
-                    val api = MikroTikNativeApi(
-                        host = connection.host,
-                        port = connection.port,
-                        connectTimeoutMs = 12000,
-                        commandTimeoutMs = 25000,
-                        useSsl = connection.useSsl
-                    )
-                    val (loginSuccess, loginMsg) = api.login(connection.username, connection.password)
-                    if (loginSuccess) {
-                        nativeApi = api
-                        _currentConnection.value = connection
-                        _isConnected.value = true
-
-                        insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر عبر المنفذ ${connection.port}", connection.host)
-
-                        // Fetch real initial data via native commands
-                        fetchRealNativeData(api, connection)
-                        startRealtimeTicker()
-
+                connection.port !in webPorts) {
+                val result = tryNativeConnect(connection)
+                when (result) {
+                    is NativeConnectResult.Success -> {
                         launch(Dispatchers.Main) { onSuccess() }
                         return@launch
-                    } else {
-                        launch(Dispatchers.Main) {
-                            onError(loginMsg.ifBlank { "خطأ في اسم المستخدم أو كلمة المرور" })
-                        }
+                    }
+                    is NativeConnectResult.AuthError -> {
+                        launch(Dispatchers.Main) { onError(result.message) }
                         return@launch
                     }
-                } catch (e: Exception) {
-                    Log.e("NetCraft", "Native API connection failed: ${e.message}")
-                    launch(Dispatchers.Main) {
-                        onError("تعذر الاتصال بـ ${connection.host}:${connection.port}. يرجى التحقق من اتصال الواي فاي أو تشغيل خدمة api في الراوتر.")
-                    }
-                    return@launch
+                    is NativeConnectResult.Failure -> lastError = result.message
                 }
             }
 
-            // 2. Fallback / REST API (Port 80 / 443 / 8080)
-            try {
-                val protocol = if (connection.useSsl) "https" else "http"
-                val url = "$protocol://${connection.host}:${connection.port}/rest/system/resource"
-                
-                val credential = Credentials.basic(connection.username, connection.password)
-                val request = Request.Builder()
-                    .url(url)
-                    .header("Authorization", credential)
-                    .build()
+            // 2. REST API on the configured (web) port
+            val restResult = tryRestConnect(connection)
+            if (restResult.first) {
+                launch(Dispatchers.Main) { onSuccess() }
+                return@launch
+            }
+            lastError = restResult.second
 
-                Log.d("NetCraft", "Connecting via REST: $url")
-                okHttpClient?.newCall(request)?.execute().use { response ->
-                    if (response != null && response.isSuccessful) {
-                        _currentConnection.value = connection
-                        _isConnected.value = true
-                        
-                        insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر ${connection.name} (${connection.host})", connection.host)
-                        
-                        fetchRealRouterData(connection)
-                        startRealtimeTicker()
-                        
+            // 3. Configured port was a web port and REST failed to reach it — try the
+            //    default native API port 8728 as a last resort.
+            if (connection.port in webPorts) {
+                val nativeAttempt = tryNativeConnect(connection, overridePort = 8728)
+                when (nativeAttempt) {
+                    is NativeConnectResult.Success -> {
                         launch(Dispatchers.Main) { onSuccess() }
-                    } else {
-                        val code = response?.code ?: 0
-                        val msg = when (code) {
-                            401 -> "خطأ في اسم المستخدم أو كلمة المرور (غير مصرح)"
-                            404 -> "لم يتم العثور على واجهة REST API. يرجى تفعيلها في الراوتر (ROS v7)"
-                            else -> "فشل الاتصال بالراوتر. رمز الخطأ: $code"
-                        }
-                        launch(Dispatchers.Main) { onError(msg) }
+                        return@launch
                     }
-                }
-            } catch (ioe: IOException) {
-                Log.e("NetCraft", "Connection error", ioe)
-                launch(Dispatchers.Main) { 
-                    onError("تعذر الوصول إلى الآيبي ${connection.host}. تأكد من اتصال هاتفك بشبكة الراوتر.") 
+                    is NativeConnectResult.AuthError -> {
+                        launch(Dispatchers.Main) { onError(nativeAttempt.message) }
+                        return@launch
+                    }
+                    is NativeConnectResult.Failure -> lastError = nativeAttempt.message
                 }
             }
+
+            launch(Dispatchers.Main) { onError(lastError.ifBlank { "تعذر الاتصال بالراوتر" }) }
+        }
+    }
+
+    private sealed class NativeConnectResult {
+        data class Success(val api: MikroTikNativeApi) : NativeConnectResult()
+        data class AuthError(val message: String) : NativeConnectResult()
+        data class Failure(val message: String) : NativeConnectResult()
+    }
+
+    private fun tryNativeConnect(
+        connection: RouterConnection,
+        overridePort: Int? = null
+    ): NativeConnectResult {
+        val port = overridePort ?: connection.port
+        return try {
+            val api = MikroTikNativeApi(
+                host = connection.host,
+                port = port,
+                connectTimeoutMs = 12000,
+                commandTimeoutMs = 25000,
+                useSsl = if (overridePort != null) port == 8729 else connection.useSsl
+            )
+            val (loginSuccess, loginMsg) = api.login(connection.username, connection.password)
+            if (loginSuccess) {
+                nativeApi = api
+                _currentConnection.value =
+                    if (overridePort != null) connection.copy(port = port) else connection
+                _isConnected.value = true
+
+                // Detect the real RouterOS version right after login so every
+                // user-manager command goes to the right menu from the start.
+                detectRouterOsVersion(api, _currentConnection.value!!)
+
+                insertActivityLog(
+                    "تسجيل الدخول",
+                    "تم الاتصال بنجاح بالراوتر عبر المنفذ $port" +
+                        (if (rosMajor > 0) " (RouterOS v$rosMajor)" else ""),
+                    connection.host
+                )
+
+                // Fetch real initial data via native commands
+                fetchRealNativeData(api, _currentConnection.value!!)
+                startRealtimeTicker()
+                NativeConnectResult.Success(api)
+            } else {
+                // The router answered and rejected the credentials — same credentials
+                // would fail on any transport, so report directly.
+                try { api.close() } catch (_: Exception) {}
+                if (loginMsg.contains("كلمة المرور") || loginMsg.contains("المستخدم") ||
+                    loginMsg.contains("not allowed", ignoreCase = true) ||
+                    loginMsg.contains("invalid", ignoreCase = true)
+                ) {
+                    NativeConnectResult.AuthError(loginMsg.ifBlank { "خطأ في اسم المستخدم أو كلمة المرور" })
+                } else {
+                    NativeConnectResult.Failure(loginMsg.ifBlank { "فشل تسجيل الدخول عبر المنفذ $port" })
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("NetCraft", "Native API connection failed on port $port: ${e.message}")
+            NativeConnectResult.Failure(
+                "تعذر الاتصال بـ ${connection.host}:$port عبر API. ${e.message ?: ""}".trim()
+            )
+        }
+    }
+
+    /** @return (success, errorMessage) — attempts the REST API on the connection port. */
+    private fun tryRestConnect(connection: RouterConnection): Pair<Boolean, String> {
+        return try {
+            val protocol = if (connection.useSsl) "https" else "http"
+            val url = "$protocol://${connection.host}:${connection.port}/rest/system/resource"
+
+            val credential = Credentials.basic(connection.username, connection.password)
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", credential)
+                .build()
+
+            Log.d("NetCraft", "Connecting via REST: $url")
+            okHttpClient?.newCall(request)?.execute().use { response ->
+                if (response != null && response.isSuccessful) {
+                    _currentConnection.value = connection
+                    _isConnected.value = true
+
+                    insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر ${connection.name} (${connection.host}) عبر REST", connection.host)
+
+                    fetchRealRouterData(connection)
+                    startRealtimeTicker()
+                    Pair(true, "")
+                } else {
+                    val code = response?.code ?: 0
+                    val msg = when (code) {
+                        401 -> "خطأ في اسم المستخدم أو كلمة المرور (غير مصرح)"
+                        404 -> "لم يتم العثور على واجهة REST API. يرجى تفعيلها في الراوتر (ROS v7) أو استخدام منفذ API 8728"
+                        else -> "فشل الاتصال بالراوتر. رمز الخطأ: $code"
+                    }
+                    Pair(false, msg)
+                }
+            }
+        } catch (ioe: IOException) {
+            Log.e("NetCraft", "REST connection error", ioe)
+            Pair(false, "تعذر الوصول إلى الآيبي ${connection.host} عبر REST. تأكد من اتصال هاتفك بشبكة الراوتر.")
         }
     }
 
@@ -305,12 +384,17 @@ class MikroTikRepository(
                 }
                 _activeHotspot.value = activeHotspot
 
-                // 5. User Manager Profiles (ROS v7 and ROS v6 fallback)
-                var umProfList = api.execute("/user-manager/profile/print")
-                var isV6UM = false
-                if (umProfList.isEmpty()) {
-                    umProfList = api.execute("/tool/user-manager/profile/print")
-                    if (umProfList.isNotEmpty()) isV6UM = true
+                // 5. User Manager Profiles — use the version-detected menu base; probe the
+                // other menu only when the version is still unknown.
+                var umProfList = api.execute("$umBase/profile/print")
+                var isV6UM = umBase == "/tool/user-manager"
+                if (umProfList.isEmpty() && rosMajor == 0) {
+                    val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
+                    umProfList = api.execute("$alt/profile/print")
+                    if (umProfList.isNotEmpty()) {
+                        isV6UM = !isV6UM
+                        rosMajor = if (isV6UM) 6 else 7
+                    }
                 }
                 if (umProfList.isEmpty()) {
                     insertActivityLog("باقات اليوزرمانجر", api.lastError
@@ -355,10 +439,13 @@ class MikroTikRepository(
                     })
                 }
 
-                // 6. User Manager Users
-                var umList = api.execute("/user-manager/user/print")
-                if (umList.isEmpty()) {
-                    umList = api.execute("/tool/user-manager/user/print")
+                // 6. User Manager Users — same version-aware base selection
+                var umList = api.execute("$umBase/user/print")
+                if (umList.isEmpty() && rosMajor == 0) {
+                    umList = api.execute(
+                        if (umBase == "/tool/user-manager") "/user-manager/user/print"
+                        else "/tool/user-manager/user/print"
+                    )
                 }
                 val umUsers = umList.map {
                     val uname = it["name"] ?: it["username"] ?: ""
@@ -481,12 +568,16 @@ class MikroTikRepository(
                 delay(600)
 
                 if (api != null && _isConnected.value) {
-                    // Fetch Profiles
-                    var umProfList = api.execute("/user-manager/profile/print")
-                    var isV6UM = false
-                    if (umProfList.isEmpty()) {
-                        umProfList = api.execute("/tool/user-manager/profile/print")
-                        if (umProfList.isNotEmpty()) isV6UM = true
+                    // Fetch Profiles — version-aware base, probe only when undetected
+                    var umProfList = api.execute("$umBase/profile/print")
+                    var isV6UM = umBase == "/tool/user-manager"
+                    if (umProfList.isEmpty() && rosMajor == 0) {
+                        val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
+                        umProfList = api.execute("$alt/profile/print")
+                        if (umProfList.isNotEmpty()) {
+                            isV6UM = !isV6UM
+                            rosMajor = if (isV6UM) 6 else 7
+                        }
                     }
                     if (umProfList.isEmpty()) {
                         insertActivityLog("باقات اليوزرمانجر", api.lastError
@@ -528,10 +619,13 @@ class MikroTikRepository(
                         })
                     }
 
-                    // Fetch Users / Cards
-                    var umList = api.execute("/user-manager/user/print")
-                    if (umList.isEmpty()) {
-                        umList = api.execute("/tool/user-manager/user/print")
+                    // Fetch Users / Cards — version-aware base
+                    var umList = api.execute("$umBase/user/print")
+                    if (umList.isEmpty() && rosMajor == 0) {
+                        umList = api.execute(
+                            if (umBase == "/tool/user-manager") "/user-manager/user/print"
+                            else "/tool/user-manager/user/print"
+                        )
                     }
                     if (umList.isNotEmpty()) {
                         val umUsers = umList.map {
@@ -847,6 +941,94 @@ class MikroTikRepository(
             fetchRealActive(connection)
             fetchRealProfiles(connection)
             fetchRealInterfaces(connection)
+            fetchRestUserManagerData(connection)
+        }
+    }
+
+    /** Reads User Manager profiles & users over the v7 REST API (read-only scope:
+     *  UM mutations require the native API port). 404 = router without user-manager
+     *  or pre-v7 RouterOS — silently skipped, the honest empty state stays. */
+    private suspend fun fetchRestUserManagerData(connection: RouterConnection) {
+        val protocol = if (connection.useSsl) "https" else "http"
+        val credential = Credentials.basic(connection.username, connection.password)
+        val base = "$protocol://${connection.host}:${connection.port}/rest"
+        try {
+            val profReq = Request.Builder()
+                .url("$base/user-manager/profile")
+                .header("Authorization", credential)
+                .build()
+            okHttpClient?.newCall(profReq)?.execute().use { res ->
+                if (res != null && res.isSuccessful) {
+                    val array = JSONArray(res.body?.string() ?: "[]")
+                    if (array.length() > 0) {
+                        val profiles = mutableListOf<UserManagerProfile>()
+                        for (i in 0 until array.length()) {
+                            val obj = array.getJSONObject(i)
+                            profiles.add(UserManagerProfile(
+                                name = obj.optString("name", obj.optString("name-for-users", "default")),
+                                validity = obj.optString("validity", "30d"),
+                                price = obj.optString("price", "0").toDoubleOrNull() ?: 0.0,
+                                sharedUsers = obj.optString("override-shared-users", "1").toIntOrNull() ?: 1,
+                                templateName = obj.optString("name", "")
+                            ))
+                        }
+                        _userManagerProfiles.value = profiles
+                        cacheDao.insertUserManagerProfiles(profiles.map {
+                            CachedUserManagerProfile(
+                                name = it.name,
+                                routerHost = connection.host,
+                                validity = it.validity,
+                                price = it.price,
+                                sharedUsers = it.sharedUsers,
+                                downloadLimit = it.downloadLimit,
+                                uptimeLimit = it.uptimeLimit,
+                                templateName = it.templateName
+                            )
+                        })
+                    }
+                }
+            }
+
+            val userReq = Request.Builder()
+                .url("$base/user-manager/user")
+                .header("Authorization", credential)
+                .build()
+            okHttpClient?.newCall(userReq)?.execute().use { res ->
+                if (res != null && res.isSuccessful) {
+                    val array = JSONArray(res.body?.string() ?: "[]")
+                    val users = mutableListOf<UserManagerUser>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val assigned = obj.optString("profile", "")
+                        val actual = obj.optString("actual-profile", "")
+                        users.add(UserManagerUser(
+                            username = obj.optString("name", ""),
+                            password = obj.optString("password", ""),
+                            profile = actual.ifBlank { assigned.ifBlank { "default" } },
+                            active = !obj.optBoolean("disabled", false),
+                            uptimeUsed = obj.optString("uptime-used", "0s"),
+                            serialNumber = obj.optString(".id", "-"),
+                            comment = obj.optString("comment", ""),
+                            profileExpired = assigned.isNotBlank() && actual.isBlank()
+                        ))
+                    }
+                    if (users.isNotEmpty()) {
+                        _userManagerUsers.value = users
+                        cacheDao.insertUserManagerUsers(users.map {
+                            CachedUserManagerUser(
+                                username = it.username,
+                                routerHost = connection.host,
+                                password = it.password,
+                                profile = it.profile,
+                                active = it.active,
+                                uptimeUsed = it.uptimeUsed
+                            )
+                        })
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("NetCraft", "REST user-manager read failed (OK on v6/pre-UM routers): ${e.message}")
         }
     }
 
@@ -1239,7 +1421,7 @@ class MikroTikRepository(
     // legacy ROS v6 /tool/user-manager path. Throws with the router's real error.
     private fun umWrite(api: MikroTikNativeApi, action: String, params: Map<String, String>): List<Map<String, String>> {
         var lastErr: Exception? = null
-        for (base in listOf("/user-manager", "/tool/user-manager")) {
+        for (base in umBases) {
             try {
                 return api.executeStrict("$base/$action", params)
             } catch (e: Exception) {
@@ -1252,7 +1434,7 @@ class MikroTikRepository(
     // Resolves the real user-manager customer on the router (v6: /tool/user-manager
     // customer/print). Defaults to "admin" only when the router reports none.
     private fun umResolveCustomer(api: MikroTikNativeApi): String {
-        for (base in listOf("/user-manager", "/tool/user-manager")) {
+        for (base in umBases) {
             try {
                 val list = api.execute("$base/customer/print")
                 val login = list.firstOrNull { it["login"] == "admin" }?.get("login")
@@ -1334,7 +1516,7 @@ class MikroTikRepository(
     // Resolves a user-manager user's real .id on the router (numbers= accepts
     // .id reliably on both ROS v6 and v7, usernames not always).
     private fun umResolveUserId(api: MikroTikNativeApi, username: String): String? {
-        for (base in listOf("/user-manager", "/tool/user-manager")) {
+        for (base in umBases) {
             try {
                 val list = api.execute("$base/user/print")
                 val hit = list.firstOrNull {
@@ -1350,7 +1532,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             try {
@@ -1376,7 +1558,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             try {
@@ -1409,7 +1591,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             var deleted = 0
@@ -1464,7 +1646,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             try {
@@ -1482,19 +1664,51 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(umRequiresNativeApiMessage()) }
                 return@launch
             }
             try {
-                val params = mutableMapOf("name" to profile.name)
-                if (profile.validity.isNotEmpty()) params["validity"] = profile.validity
-                if (profile.price > 0) params["price"] = profile.price.toInt().toString()
-                umWrite(api, "profile/add", params)
+                if (umBase == "/tool/user-manager") {
+                    // ROS v6 user-manager: validity/price are NOT profile attributes.
+                    // Real structure: profile (name/name-for-users/override-shared-users)
+                    // + limitation (uptime/download limits) + profile-limitation link
+                    // created with profile= and limitation= fields.
+                    val profParams = mutableMapOf(
+                        "name" to profile.name,
+                        "name-for-users" to profile.name,
+                        "override-shared-users" to profile.sharedUsers.toString()
+                    )
+                    umWrite(api, "profile/add", profParams)
+
+                    val limParams = mutableMapOf("name" to "${profile.name}-lim")
+                    // Map human duration strings ("30d", "1w", "12h") to uptime-limit
+                    val duration = Regex("^(\\d+)([smhdw])$", RegexOption.IGNORE_CASE)
+                        .find(profile.validity.trim())
+                    if (duration != null) limParams["uptime-limit"] = profile.validity.trim()
+                    if (profile.downloadLimit.isNotBlank() && profile.downloadLimit != "unlimited") {
+                        limParams["download-limit"] = profile.downloadLimit.trim()
+                    }
+                    umWrite(api, "limitation/add", limParams)
+
+                    // Link profile <-> limitation using profile=/limitation= fields
+                    // (NOT limitations[name] — that form does not exist in RouterOS).
+                    umWrite(api, "profile-limitation/add", mapOf(
+                        "profile" to profile.name,
+                        "limitation" to "${profile.name}-lim"
+                    ))
+                } else {
+                    // ROS v7: validity and price are direct /user-manager/profile attrs.
+                    val params = mutableMapOf("name" to profile.name)
+                    if (profile.validity.isNotEmpty()) params["validity"] = profile.validity
+                    if (profile.price > 0) params["price"] = profile.price.toInt().toString()
+                    if (profile.sharedUsers > 1) params["override-shared-users"] = profile.sharedUsers.toString()
+                    umWrite(api, "profile/add", params)
+                }
                 val list = _userManagerProfiles.value.toMutableList()
                 list.removeAll { it.name == profile.name }
                 list.add(profile)
                 _userManagerProfiles.value = list
-                insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' بسعر ${profile.price.toInt()} د.ع", _currentConnection.value?.host ?: "")
+                insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' على الراوتر", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { onError(e.message ?: "فشل إضافة الباقة على الراوتر") }
@@ -1506,7 +1720,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             try {
@@ -1539,7 +1753,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             try {
@@ -1571,11 +1785,15 @@ class MikroTikRepository(
 
             if (api != null && _isConnected.value) {
                 try {
-                    var umProfList = api.execute("/user-manager/profile/print")
-                    var isV6UM = false
-                    if (umProfList.isEmpty()) {
-                        umProfList = api.execute("/tool/user-manager/profile/print")
-                        if (umProfList.isNotEmpty()) isV6UM = true
+                    var umProfList = api.execute("$umBase/profile/print")
+                    var isV6UM = umBase == "/tool/user-manager"
+                    if (umProfList.isEmpty() && rosMajor == 0) {
+                        val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
+                        umProfList = api.execute("$alt/profile/print")
+                        if (umProfList.isNotEmpty()) {
+                            isV6UM = !isV6UM
+                            rosMajor = if (isV6UM) 6 else 7
+                        }
                     }
                     if (umProfList.isEmpty()) {
                         insertActivityLog("باقات اليوزرمانجر", api.lastError
@@ -1626,7 +1844,7 @@ class MikroTikRepository(
 
             // Router returned no profiles — report honestly; never fabricate built-ins
             if (api == null || !_isConnected.value) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             } else {
                 insertActivityLog("استيراد باقات", "الراوتر لم يرجع أي باقات يوزرمانجر", host)
                 launch(Dispatchers.Main) { onError("الراوتر لم يرجع أي باقات — أنشئ الباقات في User Manager على الراوتر أولاً") }
@@ -1750,7 +1968,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             val current = _userManagerUsers.value.find { it.username == username }
@@ -1776,7 +1994,7 @@ class MikroTikRepository(
             val filename = "userman-backup-${System.currentTimeMillis()}.umb"
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             try {
@@ -1786,6 +2004,261 @@ class MikroTikRepository(
             } catch (e: Exception) {
                 insertActivityLog("نسخ احتياطي", "فشل النسخ الاحتياطي: ${e.message}", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onError(e.message ?: "فشل النسخ الاحتياطي على الراوتر") }
+            }
+        }
+    }
+
+    // ==========================================
+    // USER MANAGER SESSIONS ($umBase/session/*)
+    // ==========================================
+
+    /** Live user-manager sessions from `$umBase/session/print` (v6 & v7). */
+    fun fetchUserManagerSessions(onSuccess: (List<UserManagerSession>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(umRequiresNativeApiMessage()) }
+                return@launch
+            }
+            try {
+                var sessions: List<Map<String, String>> = emptyList()
+                var lastErr: Exception? = null
+                for (base in umBases) {
+                    try {
+                        sessions = api.executeStrict("$base/session/print")
+                        break
+                    } catch (e: Exception) {
+                        lastErr = e
+                    }
+                }
+                // Both menus refused (or no sessions at all): surface the router's
+                // error only when even the first base threw — an empty list from a
+                // working menu simply means "no live sessions right now".
+                if (sessions.isEmpty() && lastErr != null && rosMajor == 0) {
+                    // Version unknown and both probes trapped — report the real error.
+                    throw lastErr
+                }
+                val mapped = sessions.mapIndexed { idx, s ->
+                    UserManagerSession(
+                        id = s[".id"] ?: idx.toString(),
+                        user = s["user"] ?: s["name"] ?: s["username"] ?: "unknown",
+                        address = s["address"] ?: s["user-address"] ?: "",
+                        uptime = s["uptime"] ?: "0s",
+                        bytesIn = s["bytes-in"]?.toLongOrNull() ?: 0L,
+                        bytesOut = s["bytes-out"]?.toLongOrNull() ?: 0L,
+                        started = s["started"] ?: ""
+                    )
+                }
+                launch(Dispatchers.Main) { onSuccess(mapped) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل جلب جلسات اليوزر مانجر") }
+            }
+        }
+    }
+
+    /**
+     * Disconnects a user-manager user's LIVE session via `$umBase/session/remove`
+     * (the user/card itself is NOT deleted — only the active connection is cut).
+     */
+    fun disconnectUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(umRequiresNativeApiMessage()) }
+                return@launch
+            }
+            try {
+                // Find the user's live session on the router
+                var sessionId: String? = null
+                for (base in umBases) {
+                    try {
+                        val list = api.executeStrict("$base/session/print")
+                        val hit = list.firstOrNull {
+                            it["user"] == username || it["name"] == username || it["username"] == username
+                        }
+                        if (hit != null) {
+                            sessionId = hit[".id"]
+                            break
+                        }
+                    } catch (_: Exception) {}
+                }
+                if (sessionId == null) {
+                    launch(Dispatchers.Main) { onError("لا توجد جلسة نشطة للمستخدم '$username' على الراوتر حالياً") }
+                    return@launch
+                }
+                umWrite(api, "session/remove", mapOf("numbers" to sessionId))
+                insertActivityLog("قطع جلسة", "تم قطع الجلسة النشطة للمستخدم '$username' من الراوتر", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل قطع الجلسة على الراوتر") }
+            }
+        }
+    }
+
+    private fun umRequiresNativeApiMessage(): String =
+        "عمليات User Manager تتطلب الاتصال عبر منفذ API الأصلي (8728 أو 8729) — " +
+        "غير متاحة في وضع REST الحالي. أعد الاتصال بمنفذ الـ API ثم أعد المحاولة."
+
+    /** Generic variant of the native-API requirement message for tool operations. */
+    private fun requiresNativeApiMessage(): String =
+        "هذه العملية تتطلب الاتصال عبر منفذ API الأصلي (8728 أو 8729) — " +
+        "غير متاحة في وضع REST الحالي. أعد الاتصال بمنفذ الـ API ثم أعد المحاولة."
+
+    // ==========================================
+    // QUICK SERVICES STATE (real router reads)
+    // ==========================================
+
+    /** Reads the REAL router state for the quick-services switches:
+     *  - freeHotspot: every hotspot server row is disabled (open network), and
+     *  - antiShare: the ABO_TALAL_ANTI_SHARE mangle rule exists. */
+    fun fetchQuickServicesState(
+        onResult: (freeHotspotEnabled: Boolean, antiShareEnabled: Boolean) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val servers = api.execute("/ip/hotspot/print")
+                val freeEnabled = servers.isNotEmpty() && servers.all { it["disabled"] == "true" }
+                val rules = api.execute("/ip/firewall/mangle/print")
+                val antiShare = rules.any { it["comment"]?.contains("ABO_TALAL_ANTI_SHARE") == true }
+                launch(Dispatchers.Main) { onResult(freeEnabled, antiShare) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "تعذر قراءة حالة الخدمات من الراوتر") }
+            }
+        }
+    }
+
+    // ==========================================
+    // ROUTER LOGS (/log/print)
+    // ==========================================
+
+    /** Reads the router's own log buffer via /log/print. */
+    fun fetchRouterLogs(onSuccess: (List<RouterLogEntry>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر — سجلات الراوتر تتطلب منفذ API") }
+                return@launch
+            }
+            try {
+                val rows = api.execute("/log/print")
+                if (rows.isEmpty() && api.lastError != null) {
+                    throw java.io.IOException(api.lastError)
+                }
+                val logs = rows.mapIndexed { idx, r ->
+                    RouterLogEntry(
+                        id = r[".id"] ?: idx.toString(),
+                        time = r["time"] ?: "",
+                        topics = r["topics"] ?: "",
+                        message = r["message"] ?: ""
+                    )
+                }
+                launch(Dispatchers.Main) { onSuccess(logs) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل جلب سجلات الراوتر") }
+            }
+        }
+    }
+
+    // ==========================================
+    // HOTSPOT IP BINDINGS (/ip/hotspot/ip-binding)
+    // ==========================================
+
+    /** Adds a REAL hotspot IP binding (blocked / bypassed / regular) on the router. */
+    fun addHotspotIpBinding(
+        macAddress: String,
+        address: String,
+        type: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val params = mutableMapOf(
+                    "mac-address" to macAddress.trim(),
+                    "type" to type
+                )
+                if (address.isNotBlank()) params["address"] = address.trim()
+                api.executeStrict("/ip/hotspot/ip-binding/add", params)
+                insertActivityLog(
+                    "IP Binding",
+                    "تمت إضافة قيد ${if (type == "blocked") "حظر" else if (type == "bypassed") "تجاوز" else "عادي"} للجهاز $macAddress على الراوتر",
+                    _currentConnection.value?.host ?: ""
+                )
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إضافة القيد على الراوتر") }
+            }
+        }
+    }
+
+    // ==========================================
+    // ROUTER-SIDE SEARCH (query words ?key~value)
+    // ==========================================
+
+    /** Searches user-manager users ON THE ROUTER with `?`-query words
+     *  (`?name~x`, `?username~x`, `?profile~x`, `?comment~x`) so huge card
+     *  databases don't have to be synced to the phone first. */
+    fun searchUserManagerUsers(
+        query: String,
+        field: String,
+        onSuccess: (List<UserManagerUser>) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            val q = query.trim()
+            if (q.isEmpty()) {
+                launch(Dispatchers.Main) { onSuccess(emptyList()) }
+                return@launch
+            }
+            try {
+                val props: List<String> = when (field) {
+                    "الباقة" -> listOf("profile")
+                    "الرقم التسلسلي" -> listOf("comment")
+                    else -> listOf("name", "username") // v7 uses name, v6 uses username
+                }
+                var rows: List<Map<String, String>> = emptyList()
+                for (base in umBases) {
+                    for (prop in props) {
+                        rows = api.execute("$base/user/print", "?$prop~$q")
+                        if (rows.isNotEmpty()) break
+                    }
+                    if (rows.isNotEmpty()) break
+                }
+                val users = rows.map {
+                    val uname = it["name"] ?: it["username"] ?: ""
+                    val assignedProfile = it["profile"]
+                    val actualProfile = it["actual-profile"]
+                    UserManagerUser(
+                        username = uname,
+                        password = it["password"] ?: uname,
+                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
+                        active = it["disabled"] != "true",
+                        uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
+                        downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
+                        serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
+                        comment = it["comment"] ?: "",
+                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
+                    )
+                }
+                launch(Dispatchers.Main) { onSuccess(users) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل البحث على الراوتر") }
             }
         }
     }
@@ -1818,14 +2291,32 @@ class MikroTikRepository(
                             .build()
 
                         okHttpClient?.newCall(req)?.execute().use { res ->
-                            insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل للراوتر", conn.host)
-                            disconnect()
-                            launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة التشغيل للراوتر بنجاح!") }
+                            if (res != null && res.isSuccessful) {
+                                insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل للراوتر (REST)", conn.host)
+                                disconnect()
+                                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة التشغيل للراوتر بنجاح!") }
+                            } else {
+                                insertActivityLog("إعادة تشغيل", "فشل إرسال أمر إعادة التشغيل — رمز ${res?.code}", conn.host)
+                                launch(Dispatchers.Main) { onError("فشل إرسال أمر إعادة التشغيل. رمز الخطأ: ${res?.code}") }
+                            }
                         }
-                    } catch (e: Exception) {
-                        insertActivityLog("إعادة تشغيل", "تم بث طلب إعادة التشغيل للراوتر", conn.host)
+                    } catch (e: java.net.SocketTimeoutException) {
+                        // Read timeout AFTER the request was sent: the router usually
+                        // reboots without answering — report sent-with-note, not failure.
+                        insertActivityLog("إعادة تشغيل", "أُرسل أمر إعادة التشغيل ولم يصل رد (الراوتر يعيد التشغيل عادةً)", conn.host)
                         disconnect()
-                        launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة التشغيل للراوتر بنجاح!") }
+                        launch(Dispatchers.Main) { onSuccess("تم إرسال الأمر — لم يصل رد من الراوتر (يقوم بإعادة التشغيل عادةً)") }
+                    } catch (e: Exception) {
+                        val msg = (e.message ?: "").lowercase()
+                        if (msg.contains("reset") || msg.contains("econnreset")) {
+                            // Connection torn down right after the request — router going down.
+                            insertActivityLog("إعادة تشغيل", "أُرسل أمر إعادة التشغيل وانقطع الاتصال (الراوتر يعيد التشغيل)", conn.host)
+                            disconnect()
+                            launch(Dispatchers.Main) { onSuccess("تم إرسال الأمر — انقطع الاتصال بالراوتر (دليل على بدء إعادة التشغيل)") }
+                        } else {
+                            insertActivityLog("إعادة تشغيل", "فشل إرسال أمر إعادة التشغيل: ${e.message}", conn.host)
+                            launch(Dispatchers.Main) { onError("تعذر إرسال أمر إعادة التشغيل إلى الراوتر: ${e.message}") }
+                        }
                     }
                 }
             
@@ -1859,14 +2350,29 @@ class MikroTikRepository(
                             .build()
 
                         okHttpClient?.newCall(req)?.execute().use { res ->
-                            insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف التشغيل للراوتر", conn.host)
-                            disconnect()
-                            launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                            if (res != null && res.isSuccessful) {
+                                insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف التشغيل للراوتر (REST)", conn.host)
+                                disconnect()
+                                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                            } else {
+                                insertActivityLog("إيقاف تشغيل", "فشل إرسال أمر إيقاف التشغيل — رمز ${res?.code}", conn.host)
+                                launch(Dispatchers.Main) { onError("فشل إرسال أمر إيقاف التشغيل. رمز الخطأ: ${res?.code}") }
+                            }
                         }
-                    } catch (e: Exception) {
-                        insertActivityLog("إيقاف تشغيل", "تم بث أمر إيقاف التشغيل للراوتر", conn.host)
+                    } catch (e: java.net.SocketTimeoutException) {
+                        insertActivityLog("إيقاف تشغيل", "أُرسل أمر إيقاف التشغيل ولم يصل رد (الراوتر يتوقف عادةً)", conn.host)
                         disconnect()
-                        launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                        launch(Dispatchers.Main) { onSuccess("تم إرسال الأمر — لم يصل رد من الراوتر (الجهاز يتوقف عن العمل عادةً)") }
+                    } catch (e: Exception) {
+                        val msg = (e.message ?: "").lowercase()
+                        if (msg.contains("reset") || msg.contains("econnreset")) {
+                            insertActivityLog("إيقاف تشغيل", "أُرسل أمر إيقاف التشغيل وانقطع الاتصال (الراوتر يتوقف)", conn.host)
+                            disconnect()
+                            launch(Dispatchers.Main) { onSuccess("تم إرسال الأمر — انقطع الاتصال بالراوتر (دليل على بدء الإيقاف)") }
+                        } else {
+                            insertActivityLog("إيقاف تشغيل", "فشل إرسال أمر إيقاف التشغيل: ${e.message}", conn.host)
+                            launch(Dispatchers.Main) { onError("تعذر إرسال أمر إيقاف التشغيل إلى الراوتر: ${e.message}") }
+                        }
                     }
                 }
             
@@ -1927,7 +2433,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("فشل تغيير حالة السيرفر: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -1964,7 +2470,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("فشل تعديل قاعدة المانجل: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -1981,7 +2487,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("تعذر تعديل المنفذ: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -1997,7 +2503,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("فشل تصفير العدادات: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2033,7 +2539,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("فشل جلب حسابات البروباند: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2057,7 +2563,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("فشل إضافة المستخدم: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2074,7 +2580,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("فشل حذف المستخدم: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2093,7 +2599,10 @@ class MikroTikRepository(
                         api.executeStrict(
                             "/system/script/add",
                             "=name=$scriptName",
-                            "=policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive",
+                            // Minimal least-privilege policy: the notification script only
+                            // reads state and sends one /tool fetch — no reboot, ftp,
+                            // password, sniff or sensitive privileges.
+                            "=policy=read,write,policy,test",
                             "=source=$scriptSource"
                         )
                     }
@@ -2103,7 +2612,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("تعذر حفظ السكربت على الراوتر: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2166,12 +2675,20 @@ class MikroTikRepository(
                         "layer7" -> "/ip/firewall/layer7-protocol/print"
                         "bandwidth_test" -> "/tool/bandwidth-server/print"
                         "sniffer" -> "/tool/sniffer/print"
-                        "torch" -> "/tool/traffic-monitor/print"
+                        "torch" -> "" // interactive tool — see honest error below
                         "netwatch" -> "/tool/netwatch/print"
                         "graphing" -> "/tool/graphing/print"
+                        "graphing_interface" -> "/tool/graphing/interface/print"
+                        "ppp_active" -> "/ppp/active/print"
                         "email" -> "/tool/e-mail/print"
                         "sms" -> "/tool/sms/print"
                         else -> "/interface/print"
+                    }
+                    if (cmd.isEmpty()) {
+                        launch(Dispatchers.Main) {
+                            onError("Torch أداة مراقبة تفاعلية مستمرة لا يمكن عرضها كقائمة — استخدم WinBox لتشغيلها مباشرة على الراوتر")
+                        }
+                        return@launch
                     }
                     val resList = api.execute(cmd)
                     val spec = sectionFieldSpecs[categoryKey] ?: SectionFieldSpec()
@@ -2196,7 +2713,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("خطأ أثناء قراءة البيانات من الراوتر: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2235,6 +2752,8 @@ class MikroTikRepository(
         "torch" to SectionFieldSpec(listOf("name", "trigger"), listOf("trigger", "threshold", "chain", "timeout")),
         "netwatch" to SectionFieldSpec(listOf("host", "name"), listOf("interval", "timeout", "status", "comment")),
         "graphing" to SectionFieldSpec(listOf("interface", "allow-address"), listOf("allow-address", "store-on-disk", "comment")),
+        "graphing_interface" to SectionFieldSpec(listOf("interface", "allow-address"), listOf("allow-address", "store-on-disk", "comment")),
+        "ppp_active" to SectionFieldSpec(listOf("name", "service"), listOf("address", "uptime", "caller-id", "encoding")),
         "email" to SectionFieldSpec(listOf("server", "from"), listOf("from", "port", "user")),
         "sms" to SectionFieldSpec(listOf("port", "number"), listOf("channel", "secret", "allowed-number"))
     )
@@ -2288,7 +2807,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل جلب بيانات الكلاود") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2306,7 +2825,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل تحديث الكلاود") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2324,7 +2843,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل حفظ إعدادات الكلاود") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2363,7 +2882,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل رفع النسخة السحابية") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -2380,7 +2899,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل حذف النسخة السحابية") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }

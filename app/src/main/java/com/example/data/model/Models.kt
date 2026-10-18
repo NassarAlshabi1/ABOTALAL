@@ -58,6 +58,25 @@ data class UserManagerProfile(
     val templateName: String = ""
 )
 
+/** A live user-manager session read from `$umBase/session/print` (v6 and v7). */
+data class UserManagerSession(
+    val id: String,
+    val user: String,
+    val address: String = "",
+    val uptime: String = "0s",
+    val bytesIn: Long = 0L,
+    val bytesOut: Long = 0L,
+    val started: String = ""
+)
+
+/** One row of the router's own log buffer (/log/print). */
+data class RouterLogEntry(
+    val id: String,
+    val time: String = "",
+    val topics: String = "",
+    val message: String = ""
+)
+
 data class InterfaceStats(
     val name: String,
     val type: String,

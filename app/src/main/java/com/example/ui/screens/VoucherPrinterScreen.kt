@@ -171,7 +171,11 @@ fun VoucherPrinterScreen(
     var isGeneratingAndAdding by remember { mutableStateOf(false) }
     var generationProgress by remember { mutableStateOf(0f) }
 
-    // Re-trigger visual placeholder generation for live preview
+    // Re-trigger visual placeholder generation for live preview.
+    // NOTE: the credentials generated here are the REAL ones sent to the router
+    // when the user confirms, so they come from a cryptographically secure
+    // SecureRandom — not kotlin.random.
+    val secureRandom = remember { java.security.SecureRandom() }
     LaunchedEffect(selectedMode, selectedProfile, qtyToGenerate, prefixText, usernameLength, generationTypeSeq, startSeqNum, matchPasswordWithUsername, bindMacOnFirstLogin) {
         generatedVouchersList.clear()
         for (i in 0 until qtyToGenerate) {
@@ -179,11 +183,11 @@ fun VoucherPrinterScreen(
                 "$prefixText${startSeqNum + i}"
             } else {
                 val allowedChars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ" // Easy readability, skip 0/O/1/I
-                val randomSeq = (1..usernameLength).map { allowedChars.random() }.joinToString("")
+                val randomSeq = (1..usernameLength).map { allowedChars[secureRandom.nextInt(allowedChars.length)] }.joinToString("")
                 "$prefixText$randomSeq"
             }
             val passStr = if (matchPasswordWithUsername) userStr else {
-                val randomSeq = (1..5).map { ('0'..'9').random() }.joinToString("")
+                val randomSeq = (1..5).map { ('0' + secureRandom.nextInt(10)) }.joinToString("")
                 randomSeq
             }
             generatedVouchersList.add(
