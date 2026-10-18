@@ -35,7 +35,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.UserManagerProfile
+import com.example.data.model.UserManagerSession
 import com.example.data.model.UserManagerUser
+import com.example.data.model.isExpiredCard
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import kotlinx.coroutines.launch
@@ -96,14 +98,17 @@ fun UserManagerScreen(
     var showAdvancedDialog by remember { mutableStateOf(false) }
     var showMaintenanceDialog by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
-    var showAddServiceDialog by remember { mutableStateOf(false) }
 
     var showPowerDialog by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
     var feedbackMessage by remember { mutableStateOf<String?>(null) }
 
-    // Batch records tracking
-    var batchRecords by remember { mutableStateOf(listOf<GeneratedBatchRecord>()) }
+    // Batch records — persisted in Room (survive navigation & restarts)
+    val batchRecords by viewModel.generatedBatches.collectAsState()
+
+    // Live router sessions for the device-reports dialog ($umBase/session/print)
+    var routerSessions by remember { mutableStateOf<List<UserManagerSession>>(emptyList()) }
+    var sessionsLoading by remember { mutableStateOf(false) }
 
     // 10 Cards strictly mapped to the screenshot
     val menuItems = remember {
@@ -170,14 +175,9 @@ fun UserManagerScreen(
                 icon = Icons.Filled.CloudDownload,
                 gradientColors = listOf(Color(0xFFDCEEF8), Color(0xFFBEDFF2)),
                 iconTint = Color(0xFF0284C7)
-            ),
-            UserManagerMenuItem(
-                id = 10,
-                title = "إضافة خدمة",
-                icon = Icons.Filled.AddCircleOutline,
-                gradientColors = listOf(Color(0xFFF1F5F9), Color(0xFFE2E8F0)),
-                iconTint = Color(0xFF475569)
             )
+            // id 10 "إضافة خدمة" removed — it was a fake success toast with no
+            // router command behind it (audit item 24).
         )
     }
 
@@ -194,7 +194,7 @@ fun UserManagerScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color.White)
+                            .background(if (isDarkMode) Color(0xFF1E293B) else Color.White)
                             .statusBarsPadding()
                     ) {
                         Row(
@@ -351,7 +351,7 @@ fun UserManagerScreen(
                     }
                 }
             },
-            containerColor = Color(0xFFF8FAFC)
+            containerColor = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
         ) { innerPadding ->
             LazyColumn(
                 modifier = Modifier
@@ -425,7 +425,6 @@ fun UserManagerScreen(
                                         7 -> showAdvancedDialog = true
                                         8 -> showMaintenanceDialog = true
                                         9 -> showBackupDialog = true
-                                        10 -> showAddServiceDialog = true
                                     }
                                 }
                             )
@@ -450,7 +449,8 @@ fun UserManagerScreen(
             viewModel = viewModel,
             batchRecords = batchRecords,
             onUpdateBatches = { updated ->
-                batchRecords = updated
+                // Persist the full list (additions & deletions) into Room
+                viewModel.applyBatchRecordsUpdate(updated)
             },
             onDismiss = { showAddCardsDialog = false }
         )
@@ -551,8 +551,17 @@ fun UserManagerScreen(
         )
     }
 
-    // --- 5. Dialog: تقارير الاجهزة (Device Reports) ---
+    // --- 5. Dialog: تقارير الاجهزة (Device Reports — REAL router sessions) ---
     if (showDeviceReportsDialog) {
+        // Fetch live sessions every time the dialog opens
+        LaunchedEffect(Unit) {
+            sessionsLoading = true
+            routerSessions = emptyList()
+            viewModel.fetchUserManagerSessions(
+                onSuccess = { sessionsLoading = false; routerSessions = it },
+                onError = { sessionsLoading = false }
+            )
+        }
         AlertDialog(
             onDismissRequest = { showDeviceReportsDialog = false },
             title = {
@@ -566,43 +575,65 @@ fun UserManagerScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "الجلسات النشطة المتصلة عبر اليوزرمانجر:",
+                        text = "الجلسات النشطة المتصلة عبر اليوزرمانجر (من الراوتر مباشرة):",
                         fontFamily = CairoFontFamily,
                         fontSize = 12.sp,
                         color = Color(0xFF64748B)
                     )
 
-                    val activeUsers = userManagerUsers.filter { it.active }.take(6)
-                    if (activeUsers.isEmpty()) {
-                        Text("لا توجد أجهزة متصلة حالياً.", fontFamily = CairoFontFamily)
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(activeUsers) { user ->
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = Color(0xFFF1F5F9),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(10.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                    when {
+                        sessionsLoading -> {
+                            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.5.dp)
+                            }
+                        }
+                        routerSessions.isEmpty() -> {
+                            Text(
+                                "لا توجد جلسات نشطة حالياً على الراوتر.",
+                                fontFamily = CairoFontFamily,
+                                fontSize = 13.sp,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+                        else -> {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(routerSessions, key = { it.id }) { session ->
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = Color(0xFFF1F5F9),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Column {
-                                            Text(text = "المستخدم: ${user.username}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            Text(text = "الباقة: ${user.profile} | مدة الاتصال: ${user.uptimeUsed}", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFF64748B))
-                                        }
-                                        Button(
-                                            onClick = {
-                                                viewModel.deleteUserManagerUser(user.username, onSuccess = {}, onError = {})
-                                                feedbackMessage = "تم قطع اتصال المستخدم ${user.username}"
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(10.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("قطع", fontFamily = CairoFontFamily, fontSize = 11.sp)
+                                            Column(Modifier.weight(1f)) {
+                                                Text(text = "المستخدم: ${session.user}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                Text(
+                                                    text = "المدة: ${session.uptime}${if (session.address.isNotBlank()) " | IP: ${session.address}" else ""}",
+                                                    fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFF64748B)
+                                                )
+                                            }
+                                            Button(
+                                                onClick = {
+                                                    viewModel.disconnectUserManagerSession(
+                                                        sessionId = session.id,
+                                                        username = session.user,
+                                                        onSuccess = {
+                                                            feedbackMessage = "تم قطع جلسة ${session.user} — الكرت ما زال صالحاً"
+                                                            routerSessions = routerSessions.filter { it.id != session.id }
+                                                        },
+                                                        onError = { err -> feedbackMessage = err }
+                                                    )
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("قطع الجلسة", fontFamily = CairoFontFamily, fontSize = 11.sp)
+                                            }
                                         }
                                     }
                                 }
@@ -684,8 +715,20 @@ fun UserManagerScreen(
                 Button(
                     onClick = {
                         if (bindingMac.isNotBlank()) {
-                            feedbackMessage = "تم إضافة قيد الحظر بنجاح للجهاز $bindingMac"
-                            showIpBindingsDialog = false
+                            // Real /ip/hotspot/ip-binding/add on the router
+                            viewModel.addHotspotIpBinding(
+                                type = bindingType,
+                                mac = bindingMac.trim(),
+                                address = bindingIp.trim(),
+                                comment = "أضيف من NetCraft",
+                                onSuccess = {
+                                    feedbackMessage = "تمت إضافة قيد $bindingType للجهاز $bindingMac على الراوتر"
+                                    showIpBindingsDialog = false
+                                },
+                                onError = { err -> feedbackMessage = err }
+                            )
+                        } else {
+                            feedbackMessage = "أدخل عنوان MAC صحيحاً للجهاز"
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
@@ -761,12 +804,22 @@ fun UserManagerScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        feedbackMessage = "تم حفظ إعدادات اليوزرمانجر المتقدمة بنجاح!"
-                        showAdvancedDialog = false
+                        // Real /radius/set on the router's RADIUS entry
+                        viewModel.setRadiusSettings(
+                            authPort = radiusPort.trim(),
+                            acctPort = radiusAcctPort.trim(),
+                            sharedSecret = sharedSecret.trim(),
+                            interimUpdate = interimUpdate.trim(),
+                            onSuccess = {
+                                feedbackMessage = "تم تحديث إعدادات RADIUS على الراوتر بنجاح"
+                                showAdvancedDialog = false
+                            },
+                            onError = { err -> feedbackMessage = err }
+                        )
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
                 ) {
-                    Text("حفظ الإعدادات", fontFamily = CairoFontFamily)
+                    Text("حفظ على الراوتر", fontFamily = CairoFontFamily)
                 }
             },
             dismissButton = {
@@ -782,9 +835,7 @@ fun UserManagerScreen(
         // Matches the criterion actually used by cleanExpiredUserManagerUsers() below:
         // disabled cards, plus cards whose assigned profile ran out (profileExpired)
         // and that have actually been used at least once.
-        val expiredCount = userManagerUsers.count {
-            !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
-        }
+        val expiredCount = userManagerUsers.count { it.isExpiredCard() }
 
         AlertDialog(
             onDismissRequest = { showMaintenanceDialog = false },
@@ -896,60 +947,10 @@ fun UserManagerScreen(
         )
     }
 
-    // --- 10. Dialog: إضافة خدمة (Add Service) ---
-    if (showAddServiceDialog) {
-        var serviceName by remember { mutableStateOf("") }
-        var servicePort by remember { mutableStateOf("80") }
-
-        AlertDialog(
-            onDismissRequest = { showAddServiceDialog = false },
-            title = {
-                Text("إضافة خدمة جديدة", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "ربط خدمة أو منفذ جديد في لوحة التحكم:",
-                        fontFamily = CairoFontFamily,
-                        fontSize = 12.sp,
-                        color = Color(0xFF64748B)
-                    )
-                    OutlinedTextField(
-                        value = serviceName,
-                        onValueChange = { serviceName = it },
-                        label = { Text("اسم الخدمة", fontFamily = CairoFontFamily) },
-                        placeholder = { Text("مثال: بوابة الدفع، الويب كاش") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                    OutlinedTextField(
-                        value = servicePort,
-                        onValueChange = { servicePort = it },
-                        label = { Text("المنفذ (Port)", fontFamily = CairoFontFamily) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        feedbackMessage = "تم تفعيل الخدمة $serviceName بنجاح!"
-                        showAddServiceDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
-                ) {
-                    Text("إضافة وتفعيل", fontFamily = CairoFontFamily)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddServiceDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
-    }
+    // --- 10. Dialog: إضافة خدمة — REMOVED: was a fake success toast with no
+    // router command behind it. (Per audit item 24: wire to real RouterOS
+    // commands or remove the button.) Re-enable only with a real /ip/service
+    // implementation behind it.
 
     // Power Dialog
     if (showPowerDialog) {

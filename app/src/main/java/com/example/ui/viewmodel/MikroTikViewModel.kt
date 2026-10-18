@@ -6,24 +6,33 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
+import com.example.data.local.GeneratedBatchEntity
 import com.example.data.local.RouterConnection
 import com.example.data.model.HotspotProfile
 import com.example.data.model.HotspotUser
+import com.example.data.model.RouterLogEntry
 import com.example.data.model.UserManagerProfile
+import com.example.data.model.UserManagerSession
 import com.example.data.model.UserManagerUser
 import com.example.data.repository.MikroTikRepository
+import com.example.ui.screens.GeneratedBatchRecord
+import com.example.util.CryptoBox
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MikroTikViewModel(application: Application) : AndroidViewModel(application) {
     
     private val database = AppDatabase.getDatabase(application)
     private val routerDao = database.routerDao()
     private val logDao = database.activityLogDao()
+    private val batchDao = database.generatedBatchDao()
     
     val repository = MikroTikRepository(application, logDao, database.cacheDao())
 
@@ -35,13 +44,98 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         _isDarkMode.value = !_isDarkMode.value
     }
 
-    // Local saved router list (observed reactively)
+    init {
+        // One-time at-rest migration: encrypt legacy plaintext router passwords.
+        viewModelScope.launch {
+            try {
+                routerDao.getAllConnectionsOnce().forEach { conn ->
+                    if (!CryptoBox.isEncrypted(conn.password) && conn.password.isNotEmpty()) {
+                        routerDao.insertConnection(conn.copy(password = CryptoBox.encryptIfPlain(conn.password)))
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Local saved router list (observed reactively). Passwords are stored encrypted
+    // in Room and decrypted only in memory for the UI/connection flow.
     val savedConnections: StateFlow<List<RouterConnection>> = routerDao.getAllConnections()
+        .map { list -> list.map { it.copy(password = CryptoBox.decrypt(it.password)) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // All logs
     val activityLogs = logDao.getAllLogs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Generated card batches, persisted in Room (survive navigation & restarts)
+    val generatedBatches: StateFlow<List<GeneratedBatchRecord>> = batchDao.getAll()
+        .map { entities -> entities.map { it.toRecord() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Persists the latest batch list from the generator dialog (add/delete diffs). */
+    fun applyBatchRecordsUpdate(updated: List<GeneratedBatchRecord>) {
+        viewModelScope.launch {
+            batchDao.replaceAll(updated.mapIndexed { idx, record ->
+                record.toEntity(System.currentTimeMillis() - idx)
+            })
+        }
+    }
+
+    private fun GeneratedBatchRecord.toEntity(createdAt: Long): GeneratedBatchEntity {
+        val arr = JSONArray()
+        cards.forEach { u ->
+            arr.put(JSONObject().apply {
+                put("username", u.username)
+                put("password", u.password)
+                put("profile", u.profile)
+                put("active", u.active)
+                put("uptimeUsed", u.uptimeUsed)
+                put("downloadLimit", u.downloadLimit)
+                put("serialNumber", u.serialNumber)
+                put("comment", u.comment)
+            })
+        }
+        return GeneratedBatchEntity(
+            batchId = batchId,
+            createdAt = createdAt,
+            date = date,
+            profileName = profileName,
+            count = count,
+            pricePerCard = pricePerCard,
+            prefix = prefix,
+            cardsJson = arr.toString()
+        )
+    }
+
+    private fun GeneratedBatchEntity.toRecord(): GeneratedBatchRecord {
+        val users = try {
+            val arr = JSONArray(cardsJson)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                UserManagerUser(
+                    username = o.optString("username"),
+                    password = o.optString("password"),
+                    profile = o.optString("profile", "default"),
+                    active = o.optBoolean("active", true),
+                    uptimeUsed = o.optString("uptimeUsed", "0s"),
+                    downloadLimit = o.optString("downloadLimit", "unlimited"),
+                    serialNumber = o.optString("serialNumber", "-"),
+                    comment = o.optString("comment", "")
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return GeneratedBatchRecord(
+            batchId = batchId,
+            date = date,
+            profileName = profileName,
+            count = count,
+            pricePerCard = pricePerCard,
+            prefix = prefix,
+            cards = users
+        )
+    }
 
     // UI exposed states from repository
     val isConnected = repository.isConnected
@@ -76,9 +170,14 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             connection = connection,
             onSuccess = {
                 _isConnecting.value = false
-                // Save/update connection timestamp in DB
+                // Save/update connection timestamp in DB (password encrypted at rest)
                 viewModelScope.launch {
-                    routerDao.insertConnection(connection.copy(lastConnected = System.currentTimeMillis()))
+                    routerDao.insertConnection(
+                        connection.copy(
+                            lastConnected = System.currentTimeMillis(),
+                            password = CryptoBox.encryptIfPlain(connection.password)
+                        )
+                    )
                 }
                 onSuccess()
             },
@@ -107,9 +206,14 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             connection = conn,
             onSuccess = {
                 _isConnecting.value = false
-                // Persist to local contacts list in SQLite
+                // Persist to local contacts list in SQLite (password encrypted at rest)
                 viewModelScope.launch {
-                    routerDao.insertConnection(conn.copy(lastConnected = System.currentTimeMillis()))
+                    routerDao.insertConnection(
+                        conn.copy(
+                            lastConnected = System.currentTimeMillis(),
+                            password = CryptoBox.encryptIfPlain(conn.password)
+                        )
+                    )
                 }
                 onSuccess()
             },
@@ -225,6 +329,48 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
     fun backupUserManagerDatabase(onSuccess: (String) -> Unit, onError: (String) -> Unit = {}) {
         repository.backupUserManagerDatabase(onSuccess, onError)
     }
+
+    /* User-Manager live sessions (device reports) */
+    fun fetchUserManagerSessions(onSuccess: (List<UserManagerSession>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchUserManagerSessions(onSuccess, onError)
+    }
+
+    fun disconnectUserManagerSession(sessionId: String, username: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.disconnectUserManagerSession(sessionId, username, onSuccess, onError)
+    }
+
+    /* Router-side card search via RouterOS query words (?name~=) */
+    fun fetchUserManagerUsersByQuery(query: String, onSuccess: (List<UserManagerUser>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchUserManagerUsersByQuery(query, onSuccess, onError)
+    }
+
+    /* Router's own /log/print, clearly labelled in the UI */
+    fun fetchRouterLogs(onSuccess: (List<RouterLogEntry>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchRouterLogs(onSuccess, onError)
+    }
+
+    /* Real router state for the tools switches (free hotspot / TTL anti-share) */
+    fun fetchHotspotServerState(onResult: (Boolean?) -> Unit) {
+        repository.fetchHotspotServerState(onResult)
+    }
+
+    fun fetchTtlBypassState(onResult: (Boolean?) -> Unit) {
+        repository.fetchTtlBypassState(onResult)
+    }
+
+    /* IP Bindings (real /ip/hotspot/ip-binding) */
+    fun addHotspotIpBinding(type: String, mac: String, address: String, comment: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.addHotspotIpBinding(type, mac, address, comment, onSuccess, onError)
+    }
+
+    fun fetchHotspotIpBindings(onSuccess: (List<com.example.data.model.RouterGenericItem>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchHotspotIpBindings(onSuccess, onError)
+    }
+
+    /* Advanced User-Manager (RADIUS) settings on the router */
+    fun setRadiusSettings(authPort: String, acctPort: String, sharedSecret: String, interimUpdate: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.setRadiusSettings(authPort, acctPort, sharedSecret, interimUpdate, onSuccess, onError)
+    }
     /* Test Connection */
     fun testConnection(host: String, port: Int, onResult: (Boolean, String) -> Unit) {
         repository.testConnection(host, port, onResult)
@@ -242,7 +388,7 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
     /* Save Router Connection without connecting */
     fun saveRouterConnection(connection: RouterConnection) {
         viewModelScope.launch {
-            routerDao.insertConnection(connection)
+            routerDao.insertConnection(connection.copy(password = CryptoBox.encryptIfPlain(connection.password)))
         }
     }
 

@@ -80,6 +80,63 @@ class MikroTikRepository(
     // Native Socket API instance for port 8728
     private var nativeApi: MikroTikNativeApi? = null
 
+    // ---- Detected RouterOS version & transport state (set after every successful login) ----
+    // rosMajor: 6 or 7 parsed once from /system/resource/print (NOT inferred from empty lists).
+    // umBase: v7 -> "/user-manager", v6 -> "/tool/user-manager".
+    @Volatile private var rosMajor: Int? = null
+    @Volatile private var umBasePath: String? = null
+    // Non-null ("http(s)://host:port") only while connected through the REST transport.
+    @Volatile private var restBase: String? = null
+
+    val umBase: String? get() = umBasePath
+    val routerOsMajor: Int? get() = rosMajor
+    val isRestTransport: Boolean get() = restBase != null
+
+    private fun clearTransportState() {
+        rosMajor = null
+        umBasePath = null
+        restBase = null
+    }
+
+    /** Reads /system/resource/print once and derives [rosMajor]/[umBasePath]. */
+    private fun detectRosVersion(api: MikroTikNativeApi) {
+        val version = api.execute("/system/resource/print").data.firstOrNull()?.get("version")
+        val major = version?.trim()?.substringBefore('.')?.toIntOrNull()
+        if (major != null) {
+            rosMajor = major
+            umBasePath = if (major >= 7) "/user-manager" else "/tool/user-manager"
+            Log.i("NetCraft", "Detected RouterOS $version -> major=$major, umBase=$umBasePath")
+        } else {
+            rosMajor = null
+            umBasePath = null
+            Log.w("NetCraft", "Could not parse RouterOS version from '$version' — UM paths will be probed")
+        }
+    }
+
+    /** REST counterpart of [detectRosVersion] (REST only exists on ROS v7). */
+    private fun detectRosVersionRest(conn: RouterConnection) {
+        try {
+            val credential = Credentials.basic(conn.username, conn.password)
+            val req = Request.Builder()
+                .url("$restBase/rest/system/resource")
+                .header("Authorization", credential)
+                .build()
+            restClientFor(restBase ?: "http")?.newCall(req)?.execute().use { res ->
+                if (res != null && res.isSuccessful) {
+                    val json = JSONObject(res.body?.string() ?: "{}")
+                    val version = json.optString("version", "")
+                    val major = version.trim().substringBefore('.').toIntOrNull()
+                    if (major != null) {
+                        rosMajor = major
+                        umBasePath = if (major >= 7) "/user-manager" else "/tool/user-manager"
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("NetCraft", "REST version detect failed: ${e.message}")
+        }
+    }
+
     private val lastIfaceCounters = mutableMapOf<String, Triple<Long, Long, Long>>()
 
     private fun speedFromDelta(name: String, rx: Long, tx: Long): Pair<Double, Double> {
@@ -95,39 +152,52 @@ class MikroTikRepository(
     // Dynamic ticking job for dashboard updates
     private var isTickerRunning = false
 
-    // OkHttpClient that trusts self-signed certs (common for MikroTik)
+    // OkHttp clients — certificate policy:
+    // - [okHttpClient]: default system trust, used for ALL http (cleartext) REST calls.
+    // - [okHttpSslOptInClient]: relaxes certificate verification ONLY for connections
+    //   where the user explicitly selected SSL — the per-connection opt-in for router
+    //   self-signed certificates (mirrors the native API-SSL policy).
     private var okHttpClient: OkHttpClient? = null
+    private var okHttpSslOptInClient: OkHttpClient? = null
 
     init {
-        setupUnsafeOkHttpClient()
+        setupOkHttpClients()
     }
 
-    private fun setupUnsafeOkHttpClient() {
+    private fun setupOkHttpClients() {
+        val base = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .build()
+        okHttpClient = base
         try {
-            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+            val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
                 override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
                 override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
                 override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
             })
-
-            val sslContext = SSLContext.getInstance("SSL")
-            sslContext.init(null, trustAllCerts, SecureRandom())
-            
-            okHttpClient = OkHttpClient.Builder()
-                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-                .hostnameVerifier { _, _ -> true }
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
+            val sslContext = SSLContext.getInstance("TLS")
+            sslContext.init(null, trustAll, SecureRandom())
+            okHttpSslOptInClient = base.newBuilder()
+                .sslSocketFactory(sslContext.socketFactory, trustAll[0] as X509TrustManager)
+                .hostnameVerifier { _, _ -> true } // explicit SSL opt-in connections only
                 .build()
         } catch (e: Exception) {
-            okHttpClient = OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
-                .build()
+            Log.w("NetCraft", "SSL opt-in client unavailable, falling back to default trust", e)
+            okHttpSslOptInClient = base
         }
     }
 
+    /** The OkHttp client to use for a REST call with the given scheme — the
+     *  relaxed-trust client is only handed out for explicitly-selected https. */
+    private fun restClientFor(protocol: String): OkHttpClient? =
+        if (protocol.equals("https", ignoreCase = true)) okHttpSslOptInClient ?: okHttpClient
+        else okHttpClient
+
     // Connect real router (Supports Port 8728 native binary API & HTTP/REST)
+    // Automatic transport fallback: native login failure (connection-level) -> try REST;
+    // REST connection/404 failure -> try native on 8728/8729. Credential rejections
+    // are terminal — the same credentials would fail on the other transport too.
     fun connectToRouter(connection: RouterConnection, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             _operationStatus.value = "جاري الاتصال بـ ${connection.host}..."
@@ -136,10 +206,11 @@ class MikroTikRepository(
                 return@launch
             }
 
-            // 1. Native MikroTik API Socket (default API ports 8728/8729, or any custom
-            // port that is not a web/REST port — e.g. when the `api` service is remapped)
-            if (connection.port == 8728 || connection.port == 8729 ||
-                connection.port !in listOf(80, 443, 8080, 8081)) {
+            val isWebPort = connection.port in listOf(80, 443, 8080, 8081)
+            var fallbackError: String? = null
+
+            // 1. Native MikroTik API Socket first for API ports (and custom/unknown ports)
+            if (!isWebPort) {
                 try {
                     val api = MikroTikNativeApi(
                         host = connection.host,
@@ -150,73 +221,125 @@ class MikroTikRepository(
                     )
                     val (loginSuccess, loginMsg) = api.login(connection.username, connection.password)
                     if (loginSuccess) {
-                        nativeApi = api
-                        _currentConnection.value = connection
-                        _isConnected.value = true
-
-                        insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر عبر المنفذ ${connection.port}", connection.host)
-
-                        // Fetch real initial data via native commands
-                        fetchRealNativeData(api, connection)
-                        startRealtimeTicker()
-
-                        launch(Dispatchers.Main) { onSuccess() }
-                        return@launch
-                    } else {
-                        launch(Dispatchers.Main) {
-                            onError(loginMsg.ifBlank { "خطأ في اسم المستخدم أو كلمة المرور" })
-                        }
+                        onNativeConnected(api, connection, onSuccess)
                         return@launch
                     }
+                    val msg = loginMsg.ifBlank { "خطأ في اسم المستخدم أو كلمة المرور" }
+                    if (isAuthRejection(msg)) {
+                        launch(Dispatchers.Main) { onError(msg) }
+                        return@launch
+                    }
+                    // Connection-level failure (closed port / timeout) — REST might still work
+                    fallbackError = "اتصال API الأصلي على المنفذ ${connection.port} فشل: $msg"
+                    Log.w("NetCraft", "Native login failed, will try REST: $msg")
                 } catch (e: Exception) {
                     Log.e("NetCraft", "Native API connection failed: ${e.message}")
-                    launch(Dispatchers.Main) {
-                        onError("تعذر الاتصال بـ ${connection.host}:${connection.port}. يرجى التحقق من اتصال الواي فاي أو تشغيل خدمة api في الراوتر.")
-                    }
-                    return@launch
+                    fallbackError = "تعذر الاتصال بـ ${connection.host}:${connection.port}"
                 }
             }
 
-            // 2. Fallback / REST API (Port 80 / 443 / 8080)
+            // 2. REST API (web port, or native connection-level fallback)
+            val protocol = if (connection.useSsl) "https" else "http"
+            val restBaseCandidate = "$protocol://${connection.host}:${connection.port}"
             try {
-                val protocol = if (connection.useSsl) "https" else "http"
-                val url = "$protocol://${connection.host}:${connection.port}/rest/system/resource"
-                
                 val credential = Credentials.basic(connection.username, connection.password)
                 val request = Request.Builder()
-                    .url(url)
+                    .url("$restBaseCandidate/rest/system/resource")
                     .header("Authorization", credential)
                     .build()
 
-                Log.d("NetCraft", "Connecting via REST: $url")
-                okHttpClient?.newCall(request)?.execute().use { response ->
+                Log.d("NetCraft", "Connecting via REST: $restBaseCandidate/rest/system/resource")
+                restClientFor(protocol)?.newCall(request)?.execute().use { response ->
                     if (response != null && response.isSuccessful) {
+                        restBase = restBaseCandidate
                         _currentConnection.value = connection
                         _isConnected.value = true
-                        
-                        insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر ${connection.name} (${connection.host})", connection.host)
-                        
+                        detectRosVersionRest(connection)
+
+                        insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر ${connection.name} (${connection.host}) عبر REST", connection.host)
+
                         fetchRealRouterData(connection)
+                        fetchRealUserManagerDataRest(connection)
                         startRealtimeTicker()
-                        
+
                         launch(Dispatchers.Main) { onSuccess() }
-                    } else {
-                        val code = response?.code ?: 0
-                        val msg = when (code) {
-                            401 -> "خطأ في اسم المستخدم أو كلمة المرور (غير مصرح)"
-                            404 -> "لم يتم العثور على واجهة REST API. يرجى تفعيلها في الراوتر (ROS v7)"
-                            else -> "فشل الاتصال بالراوتر. رمز الخطأ: $code"
-                        }
-                        launch(Dispatchers.Main) { onError(msg) }
+                        return@launch
                     }
+                    val code = response?.code ?: 0
+                    val msg = when (code) {
+                        401 -> "خطأ في اسم المستخدم أو كلمة المرور (غير مصرح)"
+                        404 -> "لم يتم العثور على واجهة REST API. يرجى تفعيلها في الراوتر (ROS v7)"
+                        else -> "فشل الاتصال بالراوتر. رمز الخطأ: $code"
+                    }
+                    if (code == 401) {
+                        launch(Dispatchers.Main) { onError(msg) }
+                        return@launch
+                    }
+                    fallbackError = (fallbackError?.plus("\n") ?: "") + "اتصال REST فشل: $msg"
                 }
             } catch (ioe: IOException) {
-                Log.e("NetCraft", "Connection error", ioe)
-                launch(Dispatchers.Main) { 
-                    onError("تعذر الوصول إلى الآيبي ${connection.host}. تأكد من اتصال هاتفك بشبكة الراوتر.") 
+                Log.e("NetCraft", "REST connection error", ioe)
+                fallbackError = (fallbackError?.plus("\n") ?: "") + "تعذر الوصول إلى الآيبي ${connection.host} عبر REST"
+            }
+
+            // 3. REST failed on a web port — the router may still expose the native API
+            if (isWebPort || fallbackError != null) {
+                for (apiPort in intArrayOf(8728, 8729)) {
+                    if (connection.port == apiPort) continue
+                    try {
+                        val api = MikroTikNativeApi(
+                            host = connection.host,
+                            port = apiPort,
+                            connectTimeoutMs = 8000,
+                            commandTimeoutMs = 25000,
+                            useSsl = apiPort == 8729
+                        )
+                        val (loginSuccess, loginMsg) = api.login(connection.username, connection.password)
+                        if (loginSuccess) {
+                            Log.i("NetCraft", "Auto-fallback to native API on port $apiPort succeeded")
+                            onNativeConnected(api, connection, onSuccess)
+                            return@launch
+                        }
+                        // Credentials rejected on the API — terminal
+                        if (isAuthRejection(loginMsg)) {
+                            launch(Dispatchers.Main) { onError(loginMsg.ifBlank { "خطأ في اسم المستخدم أو كلمة المرور" }) }
+                            return@launch
+                        }
+                    } catch (e: Exception) {
+                        Log.w("NetCraft", "Native fallback on $apiPort failed: ${e.message}")
+                    }
                 }
             }
+
+            launch(Dispatchers.Main) {
+                onError(fallbackError ?: "تعذر الوصول إلى الآيبي ${connection.host}. تأكد من اتصال هاتفك بشبكة الراوتر.")
+            }
         }
+    }
+
+    /** Credential rejections are identical on every transport — no point falling back. */
+    private fun isAuthRejection(msg: String): Boolean {
+        val m = msg.trim()
+        return m.contains("اسم المستخدم أو كلمة المرور") ||
+            m.contains("غير مصرح") ||
+            m.contains("invalid user", ignoreCase = true) ||
+            m.contains("not allowed", ignoreCase = true)
+    }
+
+    private fun onNativeConnected(api: MikroTikNativeApi, connection: RouterConnection, onSuccess: () -> Unit) {
+        nativeApi = api
+        _currentConnection.value = connection
+        _isConnected.value = true
+        clearTransportState()
+        detectRosVersion(api)
+
+        insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر عبر المنفذ ${connection.port}", connection.host)
+
+        // Fetch real initial data via native commands
+        fetchRealNativeData(api, connection)
+        startRealtimeTicker()
+
+        repositoryScope.launch(Dispatchers.Main) { onSuccess() }
     }
 
     // Fast socket connection test without logging in
@@ -234,8 +357,7 @@ class MikroTikRepository(
         repositoryScope.launch {
             try {
                 // 1. System Resource
-                val resList = api.execute("/system/resource/print")
-                val res = resList.firstOrNull() ?: emptyMap()
+                val res = api.execute("/system/resource/print").data.firstOrNull() ?: emptyMap()
                 val totalMem = res["total-memory"]?.toLongOrNull() ?: 0L
                 val freeMem = res["free-memory"]?.toLongOrNull() ?: 0L
                 val cpu = res["cpu-load"]?.toIntOrNull() ?: 0
@@ -244,9 +366,9 @@ class MikroTikRepository(
                 val board = res["board-name"] ?: "-"
 
                 // 2. Hotspot User Profiles
-                var hsProfList = api.execute("/ip/hotspot/user/profile/print")
+                var hsProfList = api.execute("/ip/hotspot/user/profile/print").data
                 if (hsProfList.isEmpty()) {
-                    hsProfList = api.execute("/ip/hotspot/profile/print")
+                    hsProfList = api.execute("/ip/hotspot/profile/print").data
                 }
                 val hsProfiles = if (hsProfList.isNotEmpty()) {
                     hsProfList.map {
@@ -272,7 +394,7 @@ class MikroTikRepository(
                 }
 
                 // 3. Hotspot Users
-                val hsList = api.execute("/ip/hotspot/user/print")
+                val hsList = api.execute("/ip/hotspot/user/print").data
                 val hsUsers = hsList.map {
                     HotspotUser(
                         id = it[".id"] ?: UUID.randomUUID().toString(),
@@ -291,7 +413,7 @@ class MikroTikRepository(
                 }
 
                 // 4. Active Hotspot
-                val actList = api.execute("/ip/hotspot/active/print")
+                val actList = api.execute("/ip/hotspot/active/print").data
                 val activeHotspot = actList.map {
                     HotspotActive(
                         id = it[".id"] ?: UUID.randomUUID().toString(),
@@ -305,40 +427,16 @@ class MikroTikRepository(
                 }
                 _activeHotspot.value = activeHotspot
 
-                // 5. User Manager Profiles (ROS v7 and ROS v6 fallback)
-                var umProfList = api.execute("/user-manager/profile/print")
-                var isV6UM = false
-                if (umProfList.isEmpty()) {
-                    umProfList = api.execute("/tool/user-manager/profile/print")
-                    if (umProfList.isNotEmpty()) isV6UM = true
-                }
+                // 5. User Manager Profiles — via the detected $umBase (version-aware,
+                // probe fallback only when detection was impossible)
+                val umProfList = umRead(api, "profile/print")
                 if (umProfList.isEmpty()) {
                     insertActivityLog("باقات اليوزرمانجر", api.lastError
                         ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر", connection.host)
                 }
-                val limitations = if (isV6UM) {
-                    api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
-                } else {
-                    api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
-                }
+                val limitations = umLimitations(api)
 
-                val umProfiles = umProfList.map { p ->
-                    val name = p["name"] ?: p["name-for-users"] ?: "default"
-                    val lim = limitations[name] ?: emptyMap()
-                    val validity = p["validity"] ?: p["starts-at"] ?: "30d"
-                    val priceVal = p["price"]?.toDoubleOrNull() ?: 0.0
-                    val dlLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited"
-                    val upLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited"
-                    UserManagerProfile(
-                        name = name,
-                        validity = validity,
-                        price = priceVal,
-                        downloadLimit = dlLimit,
-                        uptimeLimit = upLimit,
-                        templateName = name,
-                        sharedUsers = p["override-shared-users"]?.toIntOrNull() ?: 1
-                    )
-                }
+                val umProfiles = umProfList.map { p -> parseUmProfileRow(p, limitations) }
                 if (umProfiles.isNotEmpty()) {
                     _userManagerProfiles.value = umProfiles
                     cacheDao.insertUserManagerProfiles(umProfiles.map {
@@ -356,32 +454,14 @@ class MikroTikRepository(
                 }
 
                 // 6. User Manager Users
-                var umList = api.execute("/user-manager/user/print")
-                if (umList.isEmpty()) {
-                    umList = api.execute("/tool/user-manager/user/print")
-                }
-                val umUsers = umList.map {
-                    val uname = it["name"] ?: it["username"] ?: ""
-                    val assignedProfile = it["profile"]
-                    val actualProfile = it["actual-profile"]
-                    UserManagerUser(
-                        username = uname,
-                        password = it["password"] ?: uname,
-                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
-                        active = it["disabled"] != "true",
-                        uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
-                        downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
-                        serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                        comment = it["comment"] ?: "",
-                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
-                    )
-                }
+                val umList = umRead(api, "user/print")
+                val umUsers = umList.map { parseUmUserRow(it) }
                 if (umUsers.isNotEmpty()) {
                     _userManagerUsers.value = umUsers
                 }
 
                 // 7. Interfaces
-                val ifList = api.execute("/interface/print")
+                val ifList = api.execute("/interface/print").data
                 if (ifList.isNotEmpty()) {
                     _interfaces.value = ifList.map {
                         val rx = it["rx-byte"]?.toLongOrNull() ?: 0L
@@ -481,38 +561,17 @@ class MikroTikRepository(
                 delay(600)
 
                 if (api != null && _isConnected.value) {
-                    // Fetch Profiles
-                    var umProfList = api.execute("/user-manager/profile/print")
-                    var isV6UM = false
-                    if (umProfList.isEmpty()) {
-                        umProfList = api.execute("/tool/user-manager/profile/print")
-                        if (umProfList.isNotEmpty()) isV6UM = true
-                    }
+                    // Fetch Profiles — version-aware via $umBase
+                    val umProfList = umRead(api, "profile/print")
                     if (umProfList.isEmpty()) {
                         insertActivityLog("باقات اليوزرمانجر", api.lastError
                             ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر",
                             _currentConnection.value?.host ?: "")
                     }
-                    val limitations = if (isV6UM) {
-                        api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
-                    } else {
-                        api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
-                    }
+                    val limitations = umLimitations(api)
 
                     if (umProfList.isNotEmpty()) {
-                        val umProfiles = umProfList.map { p ->
-                            val name = p["name"] ?: p["name-for-users"] ?: "default"
-                            val lim = limitations[name] ?: emptyMap()
-                            UserManagerProfile(
-                                name = name,
-                                validity = p["validity"] ?: p["starts-at"] ?: "30d",
-                                price = p["price"]?.toDoubleOrNull() ?: 0.0,
-                                downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
-                                uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
-                                templateName = name,
-                                sharedUsers = p["override-shared-users"]?.toIntOrNull() ?: 1
-                            )
-                        }
+                        val umProfiles = umProfList.map { p -> parseUmProfileRow(p, limitations) }
                         _userManagerProfiles.value = umProfiles
                         cacheDao.insertUserManagerProfiles(umProfiles.map {
                             CachedUserManagerProfile(
@@ -529,27 +588,9 @@ class MikroTikRepository(
                     }
 
                     // Fetch Users / Cards
-                    var umList = api.execute("/user-manager/user/print")
-                    if (umList.isEmpty()) {
-                        umList = api.execute("/tool/user-manager/user/print")
-                    }
+                    val umList = umRead(api, "user/print")
                     if (umList.isNotEmpty()) {
-                        val umUsers = umList.map {
-                            val uname = it["name"] ?: it["username"] ?: ""
-                            val assignedProfile = it["profile"]
-                            val actualProfile = it["actual-profile"]
-                            UserManagerUser(
-                                username = uname,
-                                password = it["password"] ?: uname,
-                                profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
-                                active = it["disabled"] != "true",
-                                uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
-                                downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
-                                serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                                comment = it["comment"] ?: "",
-                                profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
-                            )
-                        }
+                        val umUsers = umList.map { parseUmUserRow(it) }
                         _userManagerUsers.value = umUsers
                         cacheDao.insertUserManagerUsers(umUsers.map {
                             CachedUserManagerUser(
@@ -569,9 +610,9 @@ class MikroTikRepository(
                 delay(600)
 
                 if (api != null && _isConnected.value) {
-                    var hsProfList = api.execute("/ip/hotspot/user/profile/print")
+                    var hsProfList = api.execute("/ip/hotspot/user/profile/print").data
                     if (hsProfList.isEmpty()) {
-                        hsProfList = api.execute("/ip/hotspot/profile/print")
+                        hsProfList = api.execute("/ip/hotspot/profile/print").data
                     }
                     if (hsProfList.isNotEmpty()) {
                         val hsProfiles = hsProfList.map {
@@ -594,7 +635,7 @@ class MikroTikRepository(
                         })
                     }
 
-                    val hsList = api.execute("/ip/hotspot/user/print")
+                    val hsList = api.execute("/ip/hotspot/user/print").data
                     if (hsList.isNotEmpty()) {
                         val hsUsers = hsList.map {
                             HotspotUser(
@@ -626,7 +667,7 @@ class MikroTikRepository(
                         })
                     }
 
-                    val actList = api.execute("/ip/hotspot/active/print")
+                    val actList = api.execute("/ip/hotspot/active/print").data
                     if (actList.isNotEmpty()) {
                         _activeHotspot.value = actList.map {
                             HotspotActive(
@@ -647,7 +688,7 @@ class MikroTikRepository(
                 delay(600)
 
                 if (api != null && _isConnected.value) {
-                    val ifList = api.execute("/interface/print")
+                    val ifList = api.execute("/interface/print").data
                     if (ifList.isNotEmpty()) {
                         _interfaces.value = ifList.map {
                             val rx = it["rx-byte"]?.toLongOrNull() ?: 0L
@@ -666,7 +707,7 @@ class MikroTikRepository(
                         }
                     }
 
-                    val res = api.execute("/system/resource/print").firstOrNull()
+                    val res = api.execute("/system/resource/print").data.firstOrNull()
                     if (res != null) {
                         val freeMem = (res["free-memory"]?.toLongOrNull() ?: 0L)
                         val totalMem = (res["total-memory"]?.toLongOrNull() ?: 0L)
@@ -729,6 +770,7 @@ class MikroTikRepository(
             nativeApi?.close()
         } catch (_: Exception) {}
         nativeApi = null
+        clearTransportState()
         lastIfaceCounters.clear()
         _currentConnection.value = null
         _routerStats.value = null
@@ -772,7 +814,7 @@ class MikroTikRepository(
     private fun tickNativeDashboard(api: MikroTikNativeApi, connection: RouterConnection, counter: Int) {
         try {
             // Heartbeat + CPU / Resource update (Every 3 seconds)
-            val resList = api.execute("/system/resource/print")
+            val resList = api.execute("/system/resource/print").data
             if (resList.isNotEmpty()) {
                 val res = resList.first()
                 val totalMem = res["total-memory"]?.toLongOrNull() ?: 0L
@@ -797,7 +839,7 @@ class MikroTikRepository(
 
             // Every 9 seconds: Refresh active users & interfaces
             if (counter % 3 == 0) {
-                val actList = api.execute("/ip/hotspot/active/print")
+                val actList = api.execute("/ip/hotspot/active/print").data
                 if (actList.isNotEmpty()) {
                     _activeHotspot.value = actList.map {
                         HotspotActive(
@@ -812,7 +854,7 @@ class MikroTikRepository(
                     }
                 }
 
-                val ifList = api.execute("/interface/print")
+                val ifList = api.execute("/interface/print").data
                 if (ifList.isNotEmpty()) {
                     _interfaces.value = ifList.map {
                         val ifName = it["name"] ?: "ether1"
@@ -850,6 +892,156 @@ class MikroTikRepository(
         }
     }
 
+    /** Fetches User-Manager users & profiles over REST (v7) — REST connects used to
+     *  carry no UM data at all, leaving the UM screens empty for no honest reason. */
+    private fun fetchRealUserManagerDataRest(connection: RouterConnection) {
+        repositoryScope.launch {
+            try {
+                val profRows = restUmRead("profile", connection)
+                if (profRows.isNotEmpty()) {
+                    val umProfiles = profRows.map { p -> parseUmProfileRow(p, emptyMap()) }
+                    _userManagerProfiles.value = umProfiles
+                    cacheDao.insertUserManagerProfiles(umProfiles.map {
+                        CachedUserManagerProfile(
+                            name = it.name,
+                            routerHost = connection.host,
+                            validity = it.validity,
+                            price = it.price,
+                            sharedUsers = it.sharedUsers,
+                            downloadLimit = it.downloadLimit,
+                            uptimeLimit = it.uptimeLimit,
+                            templateName = it.templateName
+                        )
+                    })
+                }
+                val userRows = restUmRead("user", connection)
+                if (userRows.isNotEmpty()) {
+                    val umUsers = userRows.map { parseUmUserRow(it) }
+                    _userManagerUsers.value = umUsers
+                    cacheDao.insertUserManagerUsers(umUsers.map {
+                        CachedUserManagerUser(
+                            username = it.username,
+                            routerHost = connection.host,
+                            password = it.password,
+                            profile = it.profile,
+                            active = it.active,
+                            uptimeUsed = it.uptimeUsed
+                        )
+                    })
+                }
+            } catch (e: Exception) {
+                Log.w("NetCraft", "REST UM fetch failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Router-side search of user-manager cards via RouterOS query words
+     *  (?name~=...) — far cheaper than printing thousands of rows on big routers. */
+    fun fetchUserManagerUsersByQuery(query: String, onSuccess: (List<UserManagerUser>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val clean = query.trim()
+            if (clean.isEmpty()) {
+                launch(Dispatchers.Main) { onError("اكتب نص البحث أولاً") }
+                return@launch
+            }
+            if (api == null) {
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val rows = restUmRead("user", conn)
+                    val hits = rows.filter {
+                        (it["name"] ?: it["username"] ?: "").contains(clean, ignoreCase = true)
+                    }.map { parseUmUserRow(it) }
+                    launch(Dispatchers.Main) { onSuccess(hits) }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل البحث") }
+                }
+                return@launch
+            }
+            try {
+                val base = umBasePath ?: "/user-manager"
+                val res = api.execute("$base/user/print", "?name~=$clean")
+                val rows = when (res) {
+                    is ApiResult.Success -> res.data
+                    else -> {
+                        // fall back to the other menu or plain client-side filter
+                        val other = if (base == "/user-manager") "/tool/user-manager" else "/user-manager"
+                        val res2 = api.execute("$other/user/print", "?username~=$clean")
+                        when (res2) {
+                            is ApiResult.Success -> res2.data
+                            else -> emptyList()
+                        }
+                    }
+                }
+                val hits = if (rows.isNotEmpty()) {
+                    rows.map { parseUmUserRow(it) }
+                } else {
+                    // Query unsupported/empty — filter the already-known list honestly
+                    _userManagerUsers.value.filter { it.username.contains(clean, ignoreCase = true) }
+                }
+                launch(Dispatchers.Main) { onSuccess(hits) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل البحث على الراوتر") }
+            }
+        }
+    }
+
+    /** Reads the router's own /log/print — clearly labelled in the UI as router log. */
+    fun fetchRouterLogs(onSuccess: (List<RouterLogEntry>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val req = Request.Builder()
+                        .url("$restBase/rest/log")
+                        .header("Authorization", restAuth(conn))
+                        .build()
+                    restClientFor(restBase ?: "http")?.newCall(req)?.execute().use { res ->
+                        val body = res?.body?.string() ?: throw IOException("لا يوجد رد")
+                        if (!res.isSuccessful) throw IOException("فشل جلب سجل الراوتر (${res.code})")
+                        val arr = JSONArray(body)
+                        val entries = (0 until arr.length()).map { i ->
+                            val obj = arr.getJSONObject(i)
+                            RouterLogEntry(
+                                id = obj.optString(".id", i.toString()),
+                                time = obj.optString("time", ""),
+                                topics = obj.optString("topics", ""),
+                                message = obj.optString("message", "")
+                            )
+                        }
+                        launch(Dispatchers.Main) { onSuccess(entries) }
+                    }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل جلب سجل الراوتر") }
+                }
+                return@launch
+            }
+            try {
+                val rows = api.execute("/log/print").data
+                val entries = rows.mapIndexed { idx, r ->
+                    RouterLogEntry(
+                        id = r[".id"] ?: idx.toString(),
+                        time = r["time"] ?: "",
+                        topics = r["topics"] ?: "",
+                        message = r["message"] ?: ""
+                    )
+                }
+                launch(Dispatchers.Main) { onSuccess(entries) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل جلب سجل الراوتر") }
+            }
+        }
+    }
+
     private fun fetchRealRouterDashboard(connection: RouterConnection) {
         // Fetch resource and status lists
         val protocol = if (connection.useSsl) "https" else "http"
@@ -862,7 +1054,7 @@ class MikroTikRepository(
                 .header("Authorization", credential)
                 .build()
 
-            okHttpClient?.newCall(reqResource)?.execute().use { response ->
+            restClientFor(if (connection.useSsl) "https" else "http")?.newCall(reqResource)?.execute().use { response ->
                 if (response != null && response.isSuccessful) {
                     val body = response.body?.string() ?: ""
                     val json = JSONObject(body)
@@ -906,7 +1098,7 @@ class MikroTikRepository(
                 .header("Authorization", credential)
                 .build()
 
-            okHttpClient?.newCall(req)?.execute().use { res ->
+            restClientFor(protocol)?.newCall(req)?.execute().use { res ->
                 if (res != null && res.isSuccessful) {
                     val array = JSONArray(res.body?.string() ?: "[]")
                     val list = mutableListOf<HotspotUser>()
@@ -941,7 +1133,7 @@ class MikroTikRepository(
                 .header("Authorization", credential)
                 .build()
 
-            okHttpClient?.newCall(req)?.execute().use { res ->
+            restClientFor(protocol)?.newCall(req)?.execute().use { res ->
                 if (res != null && res.isSuccessful) {
                     val array = JSONArray(res.body?.string() ?: "[]")
                     val list = mutableListOf<HotspotActive>()
@@ -974,7 +1166,7 @@ class MikroTikRepository(
                 .header("Authorization", credential)
                 .build()
 
-            okHttpClient?.newCall(req)?.execute().use { res ->
+            restClientFor(protocol)?.newCall(req)?.execute().use { res ->
                 if (res != null && res.isSuccessful) {
                     val array = JSONArray(res.body?.string() ?: "[]")
                     val list = mutableListOf<HotspotProfile>()
@@ -1004,7 +1196,7 @@ class MikroTikRepository(
                 .header("Authorization", credential)
                 .build()
 
-            okHttpClient?.newCall(req)?.execute().use { res ->
+            restClientFor(protocol)?.newCall(req)?.execute().use { res ->
                 if (res != null && res.isSuccessful) {
                     val array = JSONArray(res.body?.string() ?: "[]")
                     val list = mutableListOf<InterfaceStats>()
@@ -1077,7 +1269,7 @@ class MikroTikRepository(
                             .header("Authorization", credential)
                             .build()
 
-                        okHttpClient?.newCall(req)?.execute().use { res ->
+                        restClientFor(protocol)?.newCall(req)?.execute().use { res ->
                             if (res != null && res.isSuccessful) {
                                 insertActivityLog("إضافة مستخدم هوتسبوت", "تم إضافة المستخدم '${user.name}' على الراوتر", conn.host)
                                 fetchRealUsers(conn)
@@ -1119,7 +1311,7 @@ class MikroTikRepository(
                             .header("Authorization", credential)
                             .build()
 
-                        okHttpClient?.newCall(req)?.execute().use { res ->
+                        restClientFor(protocol)?.newCall(req)?.execute().use { res ->
                             if (res != null && res.isSuccessful) {
                                 insertActivityLog("حذف مستخدم هوتسبوت", "تم حذف المستخدم '$name' من الراوتر", conn.host)
                                 fetchRealUsers(conn)
@@ -1160,7 +1352,7 @@ class MikroTikRepository(
                             .header("Authorization", credential)
                             .build()
 
-                        okHttpClient?.newCall(req)?.execute().use { res ->
+                        restClientFor(protocol)?.newCall(req)?.execute().use { res ->
                             if (res != null && res.isSuccessful) {
                                 insertActivityLog("فصل مستخدم", "تم فصل المستخدم النشط '$username' من الراوتر", conn.host)
                                 fetchRealActive(conn)
@@ -1217,7 +1409,7 @@ class MikroTikRepository(
                             .header("Authorization", credential)
                             .build()
 
-                        okHttpClient?.newCall(req)?.execute().use { res ->
+                        restClientFor(protocol)?.newCall(req)?.execute().use { res ->
                             if (res != null && res.isSuccessful) {
                                 insertActivityLog("إضافة بروفايل", "تم إضافة بروفايل '${profile.name}' على الراوتر", conn.host)
                                 fetchRealProfiles(conn)
@@ -1235,11 +1427,50 @@ class MikroTikRepository(
     }
 
     // User Manager Operations
-    // Runs a user-manager write on the router: ROS v7 menu first, then the
-    // legacy ROS v6 /tool/user-manager path. Throws with the router's real error.
+    private val UM_BASES = listOf("/user-manager", "/tool/user-manager")
+
+    /** Base-path order for UM commands: detected $umBase first, the other as safety net. */
+    private fun umBaseOrder(): List<String> {
+        val base = umBasePath
+        return if (base != null) listOf(base) + UM_BASES.filter { it != base } else UM_BASES
+    }
+
+    /** Trap messages meaning "this RouterOS has no such menu" — safe to probe the other base. */
+    private fun isMenuAbsentTrap(msg: String): Boolean =
+        msg.contains("no such command", ignoreCase = true) ||
+            msg.contains("bad command", ignoreCase = true) ||
+            msg.contains("no such menu", ignoreCase = true)
+
+    /**
+     * Version-aware UM read via $umBase. A success (even with zero rows) settles the
+     * menu immediately; menu-absence traps ("no such command") fall through to the
+     * other base; transport errors and real traps abort with the router's message.
+     */
+    private fun umRead(api: MikroTikNativeApi, action: String, params: Map<String, String> = emptyMap()): List<Map<String, String>> {
+        for (base in umBaseOrder()) {
+            when (val res = api.execute("$base/$action", params)) {
+                is ApiResult.Success -> {
+                    umBasePath = base
+                    return res.data
+                }
+                is ApiResult.Error -> throw java.io.IOException(res.message)
+                is ApiResult.Trap -> {
+                    if (!isMenuAbsentTrap(res.message)) {
+                        // Real refusal (permissions, syntax…) — do not probe further.
+                        return emptyList()
+                    }
+                    // wrong menu for this RouterOS — try the other base
+                }
+            }
+        }
+        return emptyList()
+    }
+
+    /** Runs a user-manager write on the router via $umBase (other base as fallback).
+     *  Throws with the router's real error. */
     private fun umWrite(api: MikroTikNativeApi, action: String, params: Map<String, String>): List<Map<String, String>> {
         var lastErr: Exception? = null
-        for (base in listOf("/user-manager", "/tool/user-manager")) {
+        for (base in umBaseOrder()) {
             try {
                 return api.executeStrict("$base/$action", params)
             } catch (e: Exception) {
@@ -1249,12 +1480,139 @@ class MikroTikRepository(
         throw lastErr ?: java.io.IOException("user-manager غير متوفر على الراوتر")
     }
 
+    /**
+     * Limitations map keyed by profile name (v6 links profiles to limitations via the
+     * profile-limitation table's own profile=/limitation= fields — never by name guess).
+     */
+    private fun umLimitations(api: MikroTikNativeApi): Map<String, Map<String, String>> {
+        return try {
+            // v6: rows carry profile=<name> limitation=<lim>; v7: limitation rows keyed by name.
+            val isV6 = umBasePath == "/tool/user-manager"
+            if (isV6) {
+                val links = umRead(api, "profile/profile-limitation/print")
+                val lims = umRead(api, "limitation/print").associateBy { it["name"] ?: "" }
+                links.mapNotNull { link ->
+                    val profile = link["profile"] ?: return@mapNotNull null
+                    val limName = link["limitation"] ?: ""
+                    val lim = lims[limName]
+                    if (lim != null) profile to lim else null
+                }.toMap()
+            } else {
+                val links = umRead(api, "profile-limitation/print")
+                val lims = umRead(api, "limitation/print").associateBy { it["name"] ?: "" }
+                links.mapNotNull { link ->
+                    val profile = link["profile"] ?: return@mapNotNull null
+                    val limName = link["limitation"] ?: ""
+                    val lim = lims[limName]
+                    if (lim != null) profile to lim else null
+                }.toMap()
+            }
+        } catch (e: Exception) {
+            Log.w("NetCraft", "umLimitations failed: ${e.message}")
+            emptyMap()
+        }
+    }
+
+    /** One parser for UM profile rows — used by every fetch path in the app. */
+    private fun parseUmProfileRow(p: Map<String, String>, limitations: Map<String, Map<String, String>>): UserManagerProfile {
+        val name = p["name"] ?: p["name-for-users"] ?: "default"
+        val lim = limitations[name] ?: emptyMap()
+        return UserManagerProfile(
+            name = name,
+            validity = p["validity"] ?: p["starts-at"] ?: "30d",
+            price = p["price"]?.toDoubleOrNull() ?: 0.0,
+            downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
+            uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
+            templateName = name,
+            sharedUsers = p["override-shared-users"]?.toIntOrNull() ?: 1
+        )
+    }
+
+    /** One parser for UM user rows — used by every fetch path in the app. */
+    private fun parseUmUserRow(it: Map<String, String>): UserManagerUser {
+        val uname = it["name"] ?: it["username"] ?: ""
+        val assignedProfile = it["profile"]
+        val actualProfile = it["actual-profile"]
+        return UserManagerUser(
+            username = uname,
+            password = it["password"] ?: uname,
+            profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
+            active = it["disabled"] != "true",
+            uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
+            downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
+            serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
+            comment = it["comment"] ?: "",
+            profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
+        )
+    }
+
+    // ---- REST (v7) User-Manager layer — used when the app is connected via REST ----
+
+    private fun restAuth(conn: RouterConnection): String = Credentials.basic(conn.username, conn.password)
+
+    private fun restUmUrl(path: String): String = "$restBase/rest/user-manager/$path"
+
+    /** GET /rest/user-manager/<path> -> list of maps. */
+    private fun restUmRead(path: String, conn: RouterConnection): List<Map<String, String>> {
+        val req = Request.Builder().url(restUmUrl(path)).header("Authorization", restAuth(conn)).build()
+        restClientFor(restBase ?: "http")?.newCall(req)?.execute().use { res ->
+            if (res == null || !res.isSuccessful) {
+                throw IOException("REST $path فشل (${res?.code}): ${res?.body?.string() ?: "لا يوجد رد"}")
+            }
+            val body = res.body?.string() ?: throw IOException("لا يوجد رد من الراوتر")
+            val arr = JSONArray(body)
+            val rows = mutableListOf<Map<String, String>>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                rows.add(obj.keys().asSequence().associateWith { k -> obj.optString(k) })
+            }
+            return rows
+        }
+        throw IOException("تعذر تنفيذ طلب REST: لا يوجد عميل")
+    }
+
+    /** POST/PATCH/DELETE /rest/user-manager/<path>. Throws with the REST error. */
+    private fun restUmWrite(path: String, method: String, body: JSONObject?, conn: RouterConnection): List<Map<String, String>> {
+        val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
+        val reqBody = body?.let { okhttp3.RequestBody.create(mediaType, it.toString()) }
+        val req = Request.Builder()
+            .url(restUmUrl(path))
+            .header("Authorization", restAuth(conn))
+            .method(method, reqBody)
+            .build()
+        restClientFor(restBase ?: "http")?.newCall(req)?.execute().use { res ->
+            val text = res?.body?.string() ?: ""
+            if (res == null || !res.isSuccessful) throw IOException("REST $path فشل (${res?.code}): $text")
+            return try {
+                val arr = JSONArray(text)
+                val rows = mutableListOf<Map<String, String>>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    rows.add(obj.keys().asSequence().associateWith { k -> obj.optString(k) })
+                }
+                rows
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        throw IOException("تعذر تنفيذ طلب REST: لا يوجد عميل")
+    }
+
+    private fun restConnectedOrError(onError: (String) -> Unit): RouterConnection? {
+        val conn = _currentConnection.value
+        if (conn == null || !_isConnected.value) {
+            onError("غير متصل بالراوتر")
+            return null
+        }
+        return conn
+    }
+
     // Resolves the real user-manager customer on the router (v6: /tool/user-manager
     // customer/print). Defaults to "admin" only when the router reports none.
     private fun umResolveCustomer(api: MikroTikNativeApi): String {
-        for (base in listOf("/user-manager", "/tool/user-manager")) {
+        for (base in umBaseOrder()) {
             try {
-                val list = api.execute("$base/customer/print")
+                val list = api.execute("$base/customer/print").data
                 val login = list.firstOrNull { it["login"] == "admin" }?.get("login")
                     ?: list.firstOrNull()?.get("login") ?: list.firstOrNull()?.get("name")
                 if (login != null) return login
@@ -1270,9 +1628,10 @@ class MikroTikRepository(
 
     // Adds one user-manager user using the attribute set each RouterOS version
     // actually accepts: v7 `/user-manager/user/add name=` (no customer), v6
-    // `/tool/user-manager/user/add customer= username=`. When [preferred] is
-    // known (from an earlier row of the same batch) only that path is used.
-    // Returns the flavor that succeeded; throws the router's meaningful error.
+    // `/tool/user-manager/user/add customer= username=`. The v7 menu is probed
+    // once per batch (test-pinned contract); when [preferred] is known from an
+    // earlier row only that path is used. Returns the flavor that succeeded;
+    // throws the router's meaningful error.
     private fun umAddUser(
         api: MikroTikNativeApi,
         username: String,
@@ -1334,23 +1693,51 @@ class MikroTikRepository(
     // Resolves a user-manager user's real .id on the router (numbers= accepts
     // .id reliably on both ROS v6 and v7, usernames not always).
     private fun umResolveUserId(api: MikroTikNativeApi, username: String): String? {
-        for (base in listOf("/user-manager", "/tool/user-manager")) {
-            try {
-                val list = api.execute("$base/user/print")
-                val hit = list.firstOrNull {
-                    it["name"] == username || it["username"] == username
-                }
-                if (hit != null) return hit[".id"]
-            } catch (_: Exception) {}
+        return try {
+            umRead(api, "user/print").firstOrNull { row ->
+                row["name"] == username || row["username"] == username
+            }?.get(".id")
+        } catch (_: Exception) {
+            null
         }
-        return null
+    }
+
+    /** Current REST connection, or null when not connected via REST. */
+    private fun restConnOrNull(): RouterConnection? {
+        val conn = _currentConnection.value
+        return if (conn != null && restBase != null && _isConnected.value) conn else null
     }
 
     fun addUserManagerUser(user: UserManagerUser, onSuccess: () -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                // REST (v7) transport
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val body = JSONObject().apply {
+                        put("name", user.username)
+                        put("password", user.password)
+                        if (user.comment.isNotEmpty()) put("comment", user.comment)
+                        if (!user.active) put("disabled", true)
+                    }
+                    restUmWrite("user", "POST", body, conn)
+                    if (user.profile.isNotEmpty()) {
+                        restUmWrite("user-profile", "POST", JSONObject().apply {
+                            put("user", user.username)
+                            put("profile", user.profile)
+                        }, conn)
+                    }
+                    _userManagerUsers.value = _userManagerUsers.value + user
+                    insertActivityLog("يوزر مانجر", "تم إضافة مستخدم يوزر مانجر جديد '${user.username}' بالبروفايل '${user.profile}' (REST)", conn.host)
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل إضافة المستخدم على الراوتر") }
+                }
                 return@launch
             }
             try {
@@ -1376,7 +1763,36 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                // REST (v7): re-attach the profile via user-profile, re-enable, reset counters
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val uid = restUmRead("user", conn).firstOrNull {
+                        it["name"] == username || it["username"] == username
+                    }?.get(".id")
+                    restUmWrite("user-profile", "POST", JSONObject().apply {
+                        put("user", username)
+                        put("profile", newProfile)
+                    }, conn)
+                    if (uid != null) {
+                        runCatching {
+                            restUmWrite("user/$uid", "PATCH", JSONObject().put("disabled", false), conn)
+                            if (resetUptime) {
+                                runCatching { restUmWrite("user/reset-counters", "POST", JSONObject().put("numbers", uid), conn) }
+                            }
+                        }
+                    }
+                    _userManagerUsers.value = _userManagerUsers.value.map {
+                        if (it.username == username) it.copy(profile = newProfile, active = true, profileExpired = false, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
+                    }
+                    insertActivityLog("تجديد كرت", "تم تجديد الكرت '$username' بالباقة '$newProfile' (REST)", conn.host)
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل تجديد الكرت على الراوتر") }
+                }
                 return@launch
             }
             try {
@@ -1409,7 +1825,35 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                var deleted = 0
+                val succeeded = mutableSetOf<String>()
+                var firstErr: String? = null
+                try {
+                    val idByName = restUmRead("user", conn).mapNotNull { row ->
+                        val n = row["name"] ?: row["username"]
+                        row[".id"]?.let { n to it }
+                    }.toMap()
+                    usernames.forEach { u ->
+                        try {
+                            val id = idByName[u] ?: u
+                            restUmWrite("user/$id", "DELETE", null, conn)
+                            deleted++; succeeded.add(u)
+                        } catch (e: Exception) { if (firstErr == null) firstErr = e.message }
+                    }
+                } catch (e: Exception) { firstErr = e.message }
+                if (deleted > 0) {
+                    _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in succeeded }
+                }
+                insertActivityLog("حذف جماعي", "تم حذف $deleted كرت من نظام اليوزر مانجر (REST)", conn.host)
+                launch(Dispatchers.Main) {
+                    if (deleted == usernames.size) onSuccess(deleted)
+                    else onError("حُذف $deleted من ${usernames.size}. خطأ: ${firstErr ?: "غير معروف"}")
+                }
                 return@launch
             }
             var deleted = 0
@@ -1439,7 +1883,31 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onSuccess(0) }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onSuccess(0) }
+                    return@launch
+                }
+                val succeeded = mutableSetOf<String>()
+                var done = 0
+                try {
+                    val idByName = restUmRead("user", conn).mapNotNull { row ->
+                        val n = row["name"] ?: row["username"]
+                        row[".id"]?.let { n to it }
+                    }.toMap()
+                    usernames.forEach { u ->
+                        try {
+                            val id = idByName[u] ?: return@forEach
+                            restUmWrite("user/$id", "PATCH", JSONObject().put("disabled", !active), conn)
+                            done++; succeeded.add(u)
+                        } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {}
+                _userManagerUsers.value = _userManagerUsers.value.map {
+                    if (it.username in succeeded) it.copy(active = active) else it
+                }
+                insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} $done كرت في اليوزر مانجر (REST)", conn.host)
+                launch(Dispatchers.Main) { onSuccess(done) }
                 return@launch
             }
             val toToggle = usernames.toSet()
@@ -1464,7 +1932,22 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val id = restUmRead("user", conn).firstOrNull {
+                        it["name"] == username || it["username"] == username
+                    }?.get(".id") ?: username
+                    restUmWrite("user/$id", "DELETE", null, conn)
+                    _userManagerUsers.value = _userManagerUsers.value.filter { it.username != username }
+                    insertActivityLog("يوزر مانجر", "تم حذف مستخدم '${username}' من نظام اليوزر مانجر (REST)", conn.host)
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل حذف المستخدم على الراوتر") }
+                }
                 return@launch
             }
             try {
@@ -1478,11 +1961,70 @@ class MikroTikRepository(
         }
     }
 
+    /**
+     * v6 (and v7) profiles get their download/uptime limits through a limitation row
+     * linked via the profile-limitation table (profile=/limitation=), never by name
+     * guessing. Creates/updates the limitation and the link when limits are set.
+     */
+    private fun umEnsureLimitationLink(api: MikroTikNativeApi, profileId: String, profileName: String, profile: UserManagerProfile) {
+        val hasDl = profile.downloadLimit.isNotBlank() && profile.downloadLimit != "unlimited"
+        val hasUl = profile.uptimeLimit.isNotBlank() && profile.uptimeLimit != "unlimited"
+        if (!hasDl && !hasUl) return
+        val limName = "lim-${profileName}"
+        val limParams = mutableMapOf("name" to limName)
+        if (hasDl) limParams["download-limit"] = profile.downloadLimit
+        if (hasUl) limParams["uptime-limit"] = profile.uptimeLimit
+        // Reuse an existing limitation with the same name if present
+        val existing = try {
+            umRead(api, "limitation/print").firstOrNull { it["name"] == limName }?.get(".id")
+        } catch (_: Exception) { null }
+        val limId = if (existing != null) {
+            runCatching { umWrite(api, "limitation/set", mapOf("numbers" to existing) + limParams) }
+            existing
+        } else {
+            runCatching { umWrite(api, "limitation/add", limParams) }
+            try {
+                umRead(api, "limitation/print").firstOrNull { it["name"] == limName }?.get(".id")
+            } catch (_: Exception) { null }
+        } ?: return
+        // Link via the profile-limitation table's own profile=/limitation= fields
+        runCatching {
+            umWrite(api, "profile-limitation/add", mapOf(
+                "profile" to (profileId.takeIf { it.startsWith("*") } ?: profileName),
+                "limitation" to (limId.takeIf { it.startsWith("*") } ?: limName)
+            ))
+        }
+    }
+
     fun addUserManagerProfile(profile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val body = JSONObject().apply {
+                        put("name", profile.name)
+                        if (profile.validity.isNotEmpty()) put("validity", profile.validity)
+                        if (profile.price > 0) put("price", profile.price.toInt())
+                    }
+                    val created = restUmWrite("profile", "POST", body, conn)
+                    val pid = created.firstOrNull()?.get(".id")
+                    if (pid != null) {
+                        restEnsureLimitationLink(pid, profile, conn)
+                    }
+                    val list = _userManagerProfiles.value.toMutableList()
+                    list.removeAll { it.name == profile.name }
+                    list.add(profile)
+                    _userManagerProfiles.value = list
+                    insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' (REST)", conn.host)
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل إضافة الباقة على الراوتر") }
+                }
                 return@launch
             }
             try {
@@ -1490,11 +2032,15 @@ class MikroTikRepository(
                 if (profile.validity.isNotEmpty()) params["validity"] = profile.validity
                 if (profile.price > 0) params["price"] = profile.price.toInt().toString()
                 umWrite(api, "profile/add", params)
+                val pid = try {
+                    umRead(api, "profile/print").firstOrNull { it["name"] == profile.name }?.get(".id")
+                } catch (_: Exception) { null }
+                if (pid != null) umEnsureLimitationLink(api, pid, profile.name, profile)
                 val list = _userManagerProfiles.value.toMutableList()
                 list.removeAll { it.name == profile.name }
                 list.add(profile)
                 _userManagerProfiles.value = list
-                insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' بسعر ${profile.price.toInt()} د.ع", _currentConnection.value?.host ?: "")
+                insertActivityLog("يوزر مانجر بروفايل", "تم إضافة باقة يوزر مانجر جديدة '${profile.name}' بسعر ${profile.price.toInt()}", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { onError(e.message ?: "فشل إضافة الباقة على الراوتر") }
@@ -1502,19 +2048,73 @@ class MikroTikRepository(
         }
     }
 
+    /** REST (v7) counterpart of [umEnsureLimitationLink]. */
+    private fun restEnsureLimitationLink(profileId: String, profile: UserManagerProfile, conn: RouterConnection) {
+        val hasDl = profile.downloadLimit.isNotBlank() && profile.downloadLimit != "unlimited"
+        val hasUl = profile.uptimeLimit.isNotBlank() && profile.uptimeLimit != "unlimited"
+        if (!hasDl && !hasUl) return
+        try {
+            val limName = "lim-${profile.name}"
+            val existing = restUmRead("limitation", conn).firstOrNull { it["name"] == limName }
+            val limId = if (existing != null) {
+                restUmWrite("limitation/${existing[".id"]}", "PATCH", JSONObject().apply {
+                    if (hasDl) put("download-limit", profile.downloadLimit)
+                    if (hasUl) put("uptime-limit", profile.uptimeLimit)
+                }, conn)
+                existing[".id"]
+            } else {
+                val created = restUmWrite("limitation", "POST", JSONObject().apply {
+                    put("name", limName)
+                    if (hasDl) put("download-limit", profile.downloadLimit)
+                    if (hasUl) put("uptime-limit", profile.uptimeLimit)
+                }, conn)
+                created.firstOrNull()?.get(".id")
+            } ?: return
+            runCatching {
+                restUmWrite("profile-limitation", "POST", JSONObject().apply {
+                    put("profile", profileId)
+                    put("limitation", limId)
+                }, conn)
+            }
+        } catch (e: Exception) {
+            Log.w("NetCraft", "restEnsureLimitationLink failed: ${e.message}")
+        }
+    }
+
     fun updateUserManagerProfile(oldName: String, updatedProfile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val pid = restUmRead("profile", conn).firstOrNull { it["name"] == oldName }?.get(".id")
+                        ?: oldName
+                    restUmWrite("profile/$pid", "PATCH", JSONObject().apply {
+                        put("name", updatedProfile.name)
+                        if (updatedProfile.validity.isNotEmpty()) put("validity", updatedProfile.validity)
+                        if (updatedProfile.price > 0) put("price", updatedProfile.price.toInt())
+                    }, conn)
+                    restEnsureLimitationLink(pid, updatedProfile, conn)
+                    _userManagerProfiles.value = _userManagerProfiles.value.map {
+                        if (it.name == oldName) updatedProfile else it
+                    }
+                    insertActivityLog("يوزر مانجر بروفايل", "تم تحديث باقة يوزر مانجر '${updatedProfile.name}' (REST)", conn.host)
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل تحديث الباقة على الراوتر") }
+                }
                 return@launch
             }
             try {
                 val pid = run {
                     var id: String? = null
-                    for (base in listOf("/user-manager", "/tool/user-manager")) {
+                    for (base in umBaseOrder()) {
                         try {
-                            id = api.execute("$base/profile/print").firstOrNull { it["name"] == oldName }?.get(".id")
+                            id = api.execute("$base/profile/print").data.firstOrNull { it["name"] == oldName }?.get(".id")
                             if (id != null) break
                         } catch (_: Exception) {}
                     }
@@ -1524,6 +2124,7 @@ class MikroTikRepository(
                 if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
                 if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
                 umWrite(api, "profile/set", params)
+                umEnsureLimitationLink(api, pid, updatedProfile.name, updatedProfile)
                 _userManagerProfiles.value = _userManagerProfiles.value.map {
                     if (it.name == oldName) updatedProfile else it
                 }
@@ -1539,15 +2140,29 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val pid = restUmRead("profile", conn).firstOrNull { it["name"] == profileName }?.get(".id")
+                        ?: profileName
+                    restUmWrite("profile/$pid", "DELETE", null, conn)
+                    _userManagerProfiles.value = _userManagerProfiles.value.filter { it.name != profileName }
+                    insertActivityLog("يوزر مانجر بروفايل", "تم حذف باقة يوزر مانجر '${profileName}' (REST)", conn.host)
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل حذف الباقة على الراوتر") }
+                }
                 return@launch
             }
             try {
                 val pid = run {
                     var id: String? = null
-                    for (base in listOf("/user-manager", "/tool/user-manager")) {
+                    for (base in umBaseOrder()) {
                         try {
-                            id = api.execute("$base/profile/print").firstOrNull { it["name"] == profileName }?.get(".id")
+                            id = api.execute("$base/profile/print").data.firstOrNull { it["name"] == profileName }?.get(".id")
                             if (id != null) break
                         } catch (_: Exception) {}
                     }
@@ -1571,37 +2186,17 @@ class MikroTikRepository(
 
             if (api != null && _isConnected.value) {
                 try {
-                    var umProfList = api.execute("/user-manager/profile/print")
-                    var isV6UM = false
-                    if (umProfList.isEmpty()) {
-                        umProfList = api.execute("/tool/user-manager/profile/print")
-                        if (umProfList.isNotEmpty()) isV6UM = true
-                    }
+                    // Version-aware read via the detected $umBase
+                    val umProfList = umRead(api, "profile/print")
                     if (umProfList.isEmpty()) {
                         insertActivityLog("باقات اليوزرمانجر", api.lastError
                             ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر",
                             _currentConnection.value?.host ?: "")
                     }
-                    val limitations = if (isV6UM) {
-                        api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
-                    } else {
-                        api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
-                    }
+                    val limitations = umLimitations(api)
 
                     if (umProfList.isNotEmpty()) {
-                        val fetchedProfiles = umProfList.map { p ->
-                            val name = p["name"] ?: p["name-for-users"] ?: "default"
-                            val lim = limitations[name] ?: emptyMap()
-                            UserManagerProfile(
-                                name = name,
-                                validity = p["validity"] ?: p["starts-at"] ?: "30d",
-                                price = p["price"]?.toDoubleOrNull() ?: 0.0,
-                                downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
-                                uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
-                                templateName = name,
-                                sharedUsers = p["override-shared-users"]?.toIntOrNull() ?: 1
-                            )
-                        }
+                        val fetchedProfiles = umProfList.map { p -> parseUmProfileRow(p, limitations) }
                         _userManagerProfiles.value = fetchedProfiles
                         cacheDao.insertUserManagerProfiles(fetchedProfiles.map {
                             CachedUserManagerProfile(
@@ -1622,10 +2217,40 @@ class MikroTikRepository(
                 } catch (e: Exception) {
                     Log.w("MikroTikRepository", "Failed to fetch live profiles", e)
                 }
+            } else if (conn != null && restBase != null && _isConnected.value) {
+                // REST (v7) import
+                try {
+                    val rows = restUmRead("profile", conn)
+                    if (rows.isNotEmpty()) {
+                        val fetchedProfiles = rows.map { p ->
+                            parseUmProfileRow(p, emptyMap())
+                        }
+                        _userManagerProfiles.value = fetchedProfiles
+                        cacheDao.insertUserManagerProfiles(fetchedProfiles.map {
+                            CachedUserManagerProfile(
+                                name = it.name,
+                                routerHost = host,
+                                validity = it.validity,
+                                price = it.price,
+                                sharedUsers = it.sharedUsers,
+                                downloadLimit = it.downloadLimit,
+                                uptimeLimit = it.uptimeLimit,
+                                templateName = it.templateName
+                            )
+                        })
+                        insertActivityLog("استيراد باقات", "تم استيراد ${fetchedProfiles.size} باقة يوزرمانجر من الراوتر عبر REST", host)
+                        launch(Dispatchers.Main) { onSuccess(fetchedProfiles.size) }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    Log.w("MikroTikRepository", "REST profile import failed", e)
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل استيراد الباقات عبر REST") }
+                    return@launch
+                }
             }
 
             // Router returned no profiles — report honestly; never fabricate built-ins
-            if (api == null || !_isConnected.value) {
+            if ((api == null && restBase == null) || !_isConnected.value) {
                 launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
             } else {
                 insertActivityLog("استيراد باقات", "الراوتر لم يرجع أي باقات يوزرمانجر", host)
@@ -1651,7 +2276,47 @@ class MikroTikRepository(
             try {
                 val api = nativeApi
                 if (api == null) {
-                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر", emptyList()) }
+                    // REST (v7) transport — same honesty rules as the native path.
+                    val conn = restConnOrNull()
+                    if (conn == null) {
+                        launch(Dispatchers.Main) { onError("غير متصل بالراوتر", emptyList()) }
+                        return@launch
+                    }
+                    if (users.isEmpty()) {
+                        launch(Dispatchers.Main) { onError("لم يتم إدخال عدد صالح للكروت", emptyList()) }
+                        return@launch
+                    }
+                    var firstErr: String? = null
+                    users.forEach { user ->
+                        try {
+                            restUmWrite("user", "POST", JSONObject().apply {
+                                put("name", user.username)
+                                put("password", user.password)
+                                if (user.comment.isNotEmpty()) put("comment", user.comment)
+                            }, conn)
+                            added.add(user)
+                        } catch (e: Exception) {
+                            if (firstErr == null) firstErr = e.message
+                        }
+                    }
+                    val withProfile = added.filter { it.profile.isNotEmpty() }
+                    withProfile.forEach { user ->
+                        runCatching {
+                            restUmWrite("user-profile", "POST", JSONObject().apply {
+                                put("user", user.username)
+                                put("profile", user.profile)
+                            }, conn)
+                        }.onFailure { e -> if (firstErr == null) firstErr = e.message }
+                    }
+                    if (added.isNotEmpty()) {
+                        _userManagerUsers.value = added + _userManagerUsers.value
+                    }
+                    insertActivityLog("توليد دفعة كروت", "تم توليد دفعة كروت ($batchName): نجح ${added.size} من ${users.size} كرت في اليوزر مانجر (REST)", conn.host)
+                    val result = added.toList()
+                    launch(Dispatchers.Main) {
+                        if (result.size == users.size && firstErr == null) onSuccess(result)
+                        else onError("نجح ${result.size} من ${users.size}. خطأ: ${firstErr ?: "غير معروف"}", result)
+                    }
                     return@launch
                 }
                 if (users.isEmpty()) {
@@ -1716,19 +2381,39 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر، لا يمكن تنظيف الكروت المنتهية") }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر، لا يمكن تنظيف الكروت المنتهية") }
+                    return@launch
+                }
+                // Same shared predicate as the UI (see UserManagerUser.isExpiredCard)
+                val toRemove = _userManagerUsers.value.filter { it.isExpiredCard() }.map { it.username }
+                var removed = 0
+                val succeeded = mutableSetOf<String>()
+                try {
+                    val idByName = restUmRead("user", conn).mapNotNull { row ->
+                        val n = row["name"] ?: row["username"]
+                        row[".id"]?.let { n to it }
+                    }.toMap()
+                    toRemove.forEach { u ->
+                        try {
+                            val id = idByName[u] ?: return@forEach
+                            restUmWrite("user/$id", "DELETE", null, conn)
+                            removed++; succeeded.add(u)
+                        } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {}
+                if (removed > 0) {
+                    _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in succeeded }
+                }
+                insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removed كرت منتهي (REST)", conn.host)
+                launch(Dispatchers.Main) { onSuccess(removed) }
                 return@launch
             }
-            // Two independent, router-confirmed expiry signals:
-            // 1) disabled == true (admin manually disabled the card), or
-            // 2) profileExpired (router cleared "actual-profile" because the assigned
-            //    profile's validity/limit ran out — RouterOS v6 user-manager never flips
-            //    "disabled" by itself when this happens) combined with having actually
-            //    been used at least once, so a brand-new unused card is never swept up
-            //    by mistake while its profile activation is still pending.
-            val toRemove = _userManagerUsers.value.filter {
-                !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
-            }.map { it.username }
+            // THE single expiry predicate shared with the UI (Models.kt isExpiredCard):
+            // disabled cards, plus cards whose assigned profile ran out and that were
+            // actually used at least once (brand-new unused cards are never swept up).
+            val toRemove = _userManagerUsers.value.filter { it.isExpiredCard() }.map { it.username }
             var removed = 0
             val succeeded = mutableSetOf<String>()
             toRemove.forEach { u ->
@@ -1750,7 +2435,29 @@ class MikroTikRepository(
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                val current = _userManagerUsers.value.find { it.username == username }
+                if (current == null) {
+                    launch(Dispatchers.Main) { onError("المستخدم '$username' غير موجود") }
+                    return@launch
+                }
+                val newActive = !current.active
+                try {
+                    val id = restUmRead("user", conn).firstOrNull {
+                        it["name"] == username || it["username"] == username
+                    }?.get(".id") ?: username
+                    restUmWrite("user/$id", "PATCH", JSONObject().put("disabled", !newActive), conn)
+                    _userManagerUsers.value = _userManagerUsers.value.map {
+                        if (it.username == username) it.copy(active = newActive) else it
+                    }
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل تغيير حالة المستخدم على الراوتر") }
+                }
                 return@launch
             }
             val current = _userManagerUsers.value.find { it.username == username }
@@ -1776,7 +2483,19 @@ class MikroTikRepository(
             val filename = "userman-backup-${System.currentTimeMillis()}.umb"
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    restUmWrite("database/save", "POST", JSONObject().put("name", filename.removeSuffix(".umb")), conn)
+                    insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية لقاعدة بيانات اليوزر مانجر باسم $filename (REST)", conn.host)
+                    launch(Dispatchers.Main) { onSuccess(filename) }
+                } catch (e: Exception) {
+                    insertActivityLog("نسخ احتياطي", "فشل النسخ الاحتياطي: ${e.message}", conn.host)
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل النسخ الاحتياطي على الراوتر") }
+                }
                 return@launch
             }
             try {
@@ -1786,6 +2505,88 @@ class MikroTikRepository(
             } catch (e: Exception) {
                 insertActivityLog("نسخ احتياطي", "فشل النسخ الاحتياطي: ${e.message}", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onError(e.message ?: "فشل النسخ الاحتياطي على الراوتر") }
+            }
+        }
+    }
+
+    // ==========================================
+    // User-Manager live sessions ($umBase/session)
+    // ==========================================
+
+    /** Live User-Manager sessions straight from the router (native or REST). */
+    fun fetchUserManagerSessions(onSuccess: (List<UserManagerSession>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    val rows = restUmRead("session", conn)
+                    val sessions = rows.mapIndexed { idx, r ->
+                        UserManagerSession(
+                            id = r[".id"] ?: idx.toString(),
+                            user = r["user"] ?: r["user-name"] ?: "",
+                            uptime = r["uptime"] ?: "",
+                            address = r["address"] ?: r["nas-ip-address"] ?: "",
+                            bytesIn = r["bytes-in"]?.toLongOrNull() ?: 0L,
+                            bytesOut = r["bytes-out"]?.toLongOrNull() ?: 0L,
+                            nasPortId = r["nas-port-id"] ?: ""
+                        )
+                    }
+                    launch(Dispatchers.Main) { onSuccess(sessions) }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل جلب الجلسات") }
+                }
+                return@launch
+            }
+            try {
+                val rows = umRead(api, "session/print")
+                val sessions = rows.mapIndexed { idx, r ->
+                    UserManagerSession(
+                        id = r[".id"] ?: idx.toString(),
+                        user = r["user"] ?: r["user-name"] ?: "",
+                        uptime = r["uptime"] ?: "",
+                        address = r["address"] ?: r["nas-ip-address"] ?: "",
+                        bytesIn = r["bytes-in"]?.toLongOrNull() ?: 0L,
+                        bytesOut = r["bytes-out"]?.toLongOrNull() ?: 0L,
+                        nasPortId = r["nas-port-id"] ?: ""
+                    )
+                }
+                launch(Dispatchers.Main) { onSuccess(sessions) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل جلب الجلسات من الراوتر") }
+            }
+        }
+    }
+
+    /** Disconnects one live session via $umBase/session/remove — the card stays valid. */
+    fun disconnectUserManagerSession(sessionId: String, username: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                val conn = restConnOrNull()
+                if (conn == null) {
+                    launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                    return@launch
+                }
+                try {
+                    restUmWrite("session/$sessionId", "DELETE", null, conn)
+                    insertActivityLog("قطع جلسة", "تم قطع جلسة المستخدم '$username' (REST)", conn.host)
+                    launch(Dispatchers.Main) { onSuccess() }
+                } catch (e: Exception) {
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل قطع الجلسة") }
+                }
+                return@launch
+            }
+            try {
+                umWrite(api, "session/remove", mapOf("numbers" to sessionId))
+                insertActivityLog("قطع جلسة", "تم قطع جلسة المستخدم '$username'", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل قطع الجلسة على الراوتر") }
             }
         }
     }
@@ -1817,15 +2618,24 @@ class MikroTikRepository(
                             .header("Authorization", credential)
                             .build()
 
-                        okHttpClient?.newCall(req)?.execute().use { res ->
-                            insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل للراوتر", conn.host)
+                        var sent = false
+                        restClientFor(protocol)?.newCall(req)?.execute().use { res ->
+                            sent = res != null && res.isSuccessful
+                        }
+                        if (sent) {
+                            insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل للراوتر عبر REST", conn.host)
                             disconnect()
                             launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة التشغيل للراوتر بنجاح!") }
+                        } else {
+                            insertActivityLog("إعادة تشغيل", "فشل إرسال أمر إعادة التشغيل عبر REST", conn.host)
+                            launch(Dispatchers.Main) { onError("فشل إرسال أمر إعادة التشغيل إلى الراوتر — تحقق من الاتصال والصلاحيات") }
                         }
                     } catch (e: Exception) {
-                        insertActivityLog("إعادة تشغيل", "تم بث طلب إعادة التشغيل للراوتر", conn.host)
+                        // The command may have reached the router before the connection
+                        // dropped, but we cannot confirm it — report failure honestly.
+                        insertActivityLog("إعادة تشغيل", "انقطع الاتصال أثناء إرسال أمر إعادة التشغيل: ${e.message}", conn.host)
                         disconnect()
-                        launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة التشغيل للراوتر بنجاح!") }
+                        launch(Dispatchers.Main) { onError("تعذر تأكيد وصول أمر إعادة التشغيل (${e.message}). إذا لم يُعِد الراوتر التشغيل تحقق من الاتصال يدوياً.") }
                     }
                 }
             
@@ -1858,15 +2668,22 @@ class MikroTikRepository(
                             .header("Authorization", credential)
                             .build()
 
-                        okHttpClient?.newCall(req)?.execute().use { res ->
-                            insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف التشغيل للراوتر", conn.host)
+                        var sent = false
+                        restClientFor(protocol)?.newCall(req)?.execute().use { res ->
+                            sent = res != null && res.isSuccessful
+                        }
+                        if (sent) {
+                            insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف التشغيل للراوتر عبر REST", conn.host)
                             disconnect()
                             launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                        } else {
+                            insertActivityLog("إيقاف تشغيل", "فشل إرسال أمر إيقاف التشغيل عبر REST", conn.host)
+                            launch(Dispatchers.Main) { onError("فشل إرسال أمر إيقاف التشغيل إلى الراوتر — تحقق من الاتصال والصلاحيات") }
                         }
                     } catch (e: Exception) {
-                        insertActivityLog("إيقاف تشغيل", "تم بث أمر إيقاف التشغيل للراوتر", conn.host)
+                        insertActivityLog("إيقاف تشغيل", "انقطع الاتصال أثناء إرسال أمر إيقاف التشغيل: ${e.message}", conn.host)
                         disconnect()
-                        launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                        launch(Dispatchers.Main) { onError("تعذر تأكيد وصول أمر إيقاف التشغيل (${e.message}). إذا لم يتوقف الراوتر تحقق من الاتصال يدوياً.") }
                     }
                 }
             
@@ -1895,7 +2712,7 @@ class MikroTikRepository(
                         val api = nativeApi
             if (api != null) {
                 try {
-                    val profiles = api.execute("/ip/hotspot/profile/print")
+                    val profiles = api.execute("/ip/hotspot/profile/print").data
                     val firstId = profiles.firstOrNull()?.get(".id")
                         ?: throw java.io.IOException("الراوتر لم يرجع أي بروفايل هوتسبوت لتطبيق المجلد عليه")
                     api.executeStrict("/ip/hotspot/profile/set", "=numbers=$firstId", "=html-directory=$dirName")
@@ -1915,7 +2732,7 @@ class MikroTikRepository(
                         val api = nativeApi
             if (api != null) {
                 try {
-                    val servers = api.execute("/ip/hotspot/print")
+                    val servers = api.execute("/ip/hotspot/print").data
                     for (srv in servers) {
                         val srvId = srv[".id"] ?: continue
                         api.executeStrict("/ip/hotspot/set", "=numbers=$srvId", "=disabled=${if (enableFree) "yes" else "no"}")
@@ -1932,39 +2749,150 @@ class MikroTikRepository(
         }
     }
 
+    /**
+     * TTL=1 anti-sharing mangle rule, scoped to the hotspot/LAN interfaces so
+     * upstream (LAN->WAN) traffic is never touched. An unscoped postrouting rule
+     * would also rewrite packets heading to the ISP and black out the whole
+     * network, so the rule is created per hotspot interface (chain=forward
+     * out-interface=<hotspot-if>) — the classic anti-share recipe.
+     */
     fun toggleTtlBypass(blockSharing: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
                         val api = nativeApi
             if (api != null) {
                 try {
-                    val rules = api.execute("/ip/firewall/mangle/print")
-                    val existing = rules.find { it["comment"]?.contains("ABO_TALAL_ANTI_SHARE") == true }
+                    val rules = api.execute("/ip/firewall/mangle/print").data
+                    val existing = rules.filter { it["comment"]?.contains("ABO_TALAL_ANTI_SHARE") == true }
                     if (blockSharing) {
-                        if (existing == null) {
+                        // Resolve the hotspot interfaces this router actually serves on.
+                        val hotspotIfaces = api.execute("/ip/hotspot/print").data
+                            .mapNotNull { it["interface"]?.takeIf { ifs -> ifs.isNotBlank() } }
+                            .distinct()
+                        if (hotspotIfaces.isEmpty()) {
+                            launch(Dispatchers.Main) { onError("تعذر تحديد واجهة الهوتسبوت على الراوتر — أنشئ سيرفر هوتسبوت أولاً أو أضف قاعدة TTL يدوياً من WinBox") }
+                            return@launch
+                        }
+                        // Replace any legacy unscoped rule with the scoped one
+                        existing.forEach { old ->
+                            old[".id"]?.let { id ->
+                                runCatching { api.executeStrict("/ip/firewall/mangle/remove", "=numbers=$id") }
+                            }
+                        }
+                        for (iface in hotspotIfaces) {
                             api.executeStrict(
                                 "/ip/firewall/mangle/add",
-                                "=chain=postrouting",
+                                "=chain=forward",
                                 "=action=change-ttl",
                                 "=new-ttl=set:1",
                                 "=passthrough=yes",
+                                "=out-interface=$iface",
                                 "=comment=ABO_TALAL_ANTI_SHARE"
                             )
                         }
                     } else {
-                        if (existing != null) {
-                            val ruleId = existing[".id"] ?: ""
+                        existing.forEach { rule ->
+                            val ruleId = rule[".id"] ?: ""
                             if (ruleId.isNotBlank()) {
                                 api.executeStrict("/ip/firewall/mangle/remove", "=numbers=$ruleId")
                             }
                         }
                     }
-                    insertActivityLog("مشاركة الإنترنت", if (blockSharing) "تفعيل TTL=1" else "تعطيل TTL=1", _currentConnection.value?.host ?: "")
+                    insertActivityLog("مشاركة الإنترنت", if (blockSharing) "تفعيل TTL=1 على واجهات الهوتسبوت" else "تعطيل TTL=1", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError("فشل تعديل قاعدة المانجل: ${e.message}") }
                 }
             } else {
-                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر — قاعدة TTL تتطلب اتصال API الأصلي") }
+            }
+        }
+    }
+
+    /** True when every hotspot server is disabled = "free network" mode. */
+    fun fetchHotspotServerState(onResult: (Boolean?) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) { launch(Dispatchers.Main) { onResult(null) }; return@launch }
+            try {
+                val servers = api.execute("/ip/hotspot/print").data
+                val free = servers.isNotEmpty() && servers.all { it["disabled"] == "true" }
+                launch(Dispatchers.Main) { onResult(free) }
+            } catch (_: Exception) {
+                launch(Dispatchers.Main) { onResult(null) }
+            }
+        }
+    }
+
+    /** True when the TTL=1 anti-share mangle rule exists on the router. */
+    fun fetchTtlBypassState(onResult: (Boolean?) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) { launch(Dispatchers.Main) { onResult(null) }; return@launch }
+            try {
+                val rules = api.execute("/ip/firewall/mangle/print").data
+                val enabled = rules.any { it["comment"]?.contains("ABO_TALAL_ANTI_SHARE") == true && it["disabled"] != "true" }
+                launch(Dispatchers.Main) { onResult(enabled) }
+            } catch (_: Exception) {
+                launch(Dispatchers.Main) { onResult(null) }
+            }
+        }
+    }
+
+    /** Adds a real /ip/hotspot/ip-binding entry (blocked / bypassed / regular). */
+    fun addHotspotIpBinding(type: String, mac: String, address: String, comment: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر — يتطلب اتصال API") }
+                return@launch
+            }
+            try {
+                val params = mutableMapOf("type" to type, "mac-address" to mac)
+                if (address.isNotBlank()) params["address"] = address
+                if (comment.isNotBlank()) params["comment"] = comment
+                api.executeStrict("/ip/hotspot/ip-binding/add", params)
+                insertActivityLog("قيود MAC", "تمت إضافة قيد $type للجهاز $mac على الراوتر", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError("فشل إضافة القيد على الراوتر: ${e.message}") }
+            }
+        }
+    }
+
+    /** Reads the current /ip/hotspot/ip-binding table from the router. */
+    fun fetchHotspotIpBindings(onSuccess: (List<RouterGenericItem>) -> Unit, onError: (String) -> Unit) {
+        fetchGenericSectionData("ip_bindings", onSuccess, onError)
+    }
+
+    /** Applies RADIUS auth/acct ports + shared secret + interim-update on the router's
+     *  hotspot-serving /radius entry. Errors honestly when no matching entry exists. */
+    fun setRadiusSettings(authPort: String, acctPort: String, sharedSecret: String, interimUpdate: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر — يتطلب اتصال API") }
+                return@launch
+            }
+            try {
+                val entries = api.execute("/radius/print").data
+                val target = entries.firstOrNull { (it["service"] ?: "").contains("hotspot", ignoreCase = true) }
+                    ?: entries.firstOrNull { (it["service"] ?: "").contains("user-manager", ignoreCase = true) }
+                    ?: entries.firstOrNull()
+                if (target == null) {
+                    launch(Dispatchers.Main) { onError("لا يوجد إدخال RADIUS على الراوتر — أنشئه أولاً من WinBox (قائمة Radius) ثم عدّل من هنا") }
+                    return@launch
+                }
+                val id = target[".id"] ?: ""
+                val params = mutableMapOf("numbers" to id)
+                if (authPort.isNotBlank()) params["authentication-port"] = authPort
+                if (acctPort.isNotBlank()) params["accounting-port"] = acctPort
+                if (sharedSecret.isNotBlank()) params["secret"] = sharedSecret
+                if (interimUpdate.isNotBlank()) params["interim-update"] = interimUpdate
+                api.executeStrict("/radius/set", params)
+                insertActivityLog("إعدادات RADIUS", "تم تحديث إعدادات RADIUS (البورتات/المفتاح/التحديث الدوري) على الراوتر", _currentConnection.value?.host ?: "")
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError("فشل تحديث إعدادات RADIUS: ${e.message}") }
             }
         }
     }
@@ -2007,8 +2935,8 @@ class MikroTikRepository(
                         val api = nativeApi
             if (api != null) {
                 try {
-                    val secrets = api.execute("/ppp/secret/print")
-                    val actives = api.execute("/ppp/active/print")
+                    val secrets = api.execute("/ppp/secret/print").data
+                    val actives = api.execute("/ppp/active/print").data
                     val activeMap = actives.associateBy { it["name"] ?: "" }
 
                     val list = secrets.map { sec ->
@@ -2085,19 +3013,21 @@ class MikroTikRepository(
             if (api != null) {
                 try {
                     // Check if exists
-                    val existing = api.execute("/system/script/print").find { it["name"] == scriptName }
+                    val existing = api.execute("/system/script/print").data.find { it["name"] == scriptName }
                     if (existing != null) {
                         val scriptId = existing[".id"] ?: scriptName
                         api.executeStrict("/system/script/set", "=numbers=$scriptId", "=source=$scriptSource")
                     } else {
+                        // Minimum policy the script actually needs: /tool fetch +
+                        // globals (read, write, test). No reboot/policy/password/sniff/sensitive.
                         api.executeStrict(
                             "/system/script/add",
                             "=name=$scriptName",
-                            "=policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive",
+                            "=policy=read,write,test",
                             "=source=$scriptSource"
                         )
                     }
-                    insertActivityLog("تيليجرام", "تثبيت سكربت إشعارات تيليجرام على الراوتر: $scriptName", _currentConnection.value?.host ?: "")
+                    insertActivityLog("تيليجرام", "تثبيت سكربت إشعارات تيليجرام على الراوتر: $scriptName (بصلاحيات دنيا)", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError("تعذر حفظ السكربت على الراوتر: ${e.message}") }
@@ -2140,58 +3070,77 @@ class MikroTikRepository(
         repositoryScope.launch {
                         val api = nativeApi
             if (api != null) {
+                // Sections that are NOT printable tables — refuse instead of showing
+                // unrelated data under their name.
+                if (categoryKey == "torch") {
+                    launch(Dispatchers.Main) { onError("أداة Torch تحليل حي للtraffic ولا توفر جدولاً للعرض — استخدم WinBox لتشغيلها مباشرة") }
+                    return@launch
+                }
+                val cmd = when (categoryKey) {
+                    "dhcp_server" -> "/ip/dhcp-server/print"
+                    "ip_addresses" -> "/ip/address/print"
+                    "dhcp_leases" -> "/ip/dhcp-server/lease/print"
+                    "dhcp_relay" -> "/ip/dhcp-relay/print"
+                    "nat" -> "/ip/firewall/nat/print"
+                    "dns" -> "/ip/dns/static/print"
+                    "address_lists" -> "/ip/firewall/address-list/print"
+                    "traffic" -> "/interface/print"
+                    "ip_bindings" -> "/ip/hotspot/ip-binding/print"
+                    "firewall_filter" -> "/ip/firewall/filter/print"
+                    "arp" -> "/ip/arp/print"
+                    "mangle" -> "/ip/firewall/mangle/print"
+                    "connections" -> "/ip/firewall/connection/print"
+                    "queues" -> "/queue/simple/print"
+                    "neighbors" -> "/ip/neighbor/print"
+                    "resources" -> "/system/resource/print"
+                    "routerboard" -> "/system/routerboard/print"
+                    "health" -> "/system/health/print"
+                    "logs" -> "/log/print"
+                    "users" -> "/user/print"
+                    "backup" -> "/file/print"
+                    "fetch" -> "/file/print"
+                    "blocked_sites" -> "/ip/firewall/address-list/print"
+                    "layer7" -> "/ip/firewall/layer7-protocol/print"
+                    "bandwidth_test" -> "/tool/bandwidth-server/print"
+                    "sniffer" -> "/tool/sniffer/print"
+                    "netwatch" -> "/tool/netwatch/print"
+                    "graphing" -> "/tool/graphing/print"
+                    "email" -> "/tool/e-mail/print"
+                    "sms" -> "/tool/sms/print"
+                    else -> null
+                }
+                if (cmd == null) {
+                    launch(Dispatchers.Main) { onError("قسم غير مدعوم: $categoryKey") }
+                    return@launch
+                }
                 try {
-                    val cmd = when (categoryKey) {
-                        "dhcp_server" -> "/ip/dhcp-server/print"
-                        "ip_addresses" -> "/ip/address/print"
-                        "dhcp_leases" -> "/ip/dhcp-server/lease/print"
-                        "dhcp_relay" -> "/ip/dhcp-relay/print"
-                        "nat" -> "/ip/firewall/nat/print"
-                        "dns" -> "/ip/dns/static/print"
-                        "address_lists" -> "/ip/firewall/address-list/print"
-                        "firewall_filter" -> "/ip/firewall/filter/print"
-                        "arp" -> "/ip/arp/print"
-                        "mangle" -> "/ip/firewall/mangle/print"
-                        "connections" -> "/ip/firewall/connection/print"
-                        "queues" -> "/queue/simple/print"
-                        "neighbors" -> "/ip/neighbor/print"
-                        "resources" -> "/system/resource/print"
-                        "routerboard" -> "/system/routerboard/print"
-                        "health" -> "/system/health/print"
-                        "logs" -> "/log/print"
-                        "users" -> "/user/print"
-                        "backup" -> "/file/print"
-                        "fetch" -> "/file/print"
-                        "blocked_sites" -> "/ip/dns/static/print"
-                        "layer7" -> "/ip/firewall/layer7-protocol/print"
-                        "bandwidth_test" -> "/tool/bandwidth-server/print"
-                        "sniffer" -> "/tool/sniffer/print"
-                        "torch" -> "/tool/traffic-monitor/print"
-                        "netwatch" -> "/tool/netwatch/print"
-                        "graphing" -> "/tool/graphing/print"
-                        "email" -> "/tool/e-mail/print"
-                        "sms" -> "/tool/sms/print"
-                        else -> "/interface/print"
+                    val result = api.execute(cmd)
+                    when (result) {
+                        is ApiResult.Error, is ApiResult.Trap -> {
+                            launch(Dispatchers.Main) { onError(result.errorMessage ?: "فشل جلب البيانات من الراوتر") }
+                        }
+                        is ApiResult.Success -> {
+                            val resList = result.data
+                            val spec = sectionFieldSpecs[categoryKey] ?: SectionFieldSpec()
+                            val genericList = resList.mapIndexed { idx, map ->
+                                val title = spec.titleKeys.firstNotNullOfOrNull { map[it] }
+                                    ?: "عنصر #${idx + 1}"
+                                val sub = spec.subtitleKeys.firstNotNullOfOrNull { map[it] } ?: ""
+                                val status = map["status"]
+                                    ?: (if (map["disabled"] == "true" || map["disabled"] == "yes") "معطل" else "نشط")
+                                RouterGenericItem(
+                                    id = map[".id"] ?: idx.toString(),
+                                    title = title,
+                                    subtitle = sub,
+                                    status = status,
+                                    extra = map["comment"] ?: "",
+                                    isEnabled = map["disabled"] != "true",
+                                    rawProperties = map
+                                )
+                            }
+                            launch(Dispatchers.Main) { onSuccess(genericList) }
+                        }
                     }
-                    val resList = api.execute(cmd)
-                    val spec = sectionFieldSpecs[categoryKey] ?: SectionFieldSpec()
-                    val genericList = resList.mapIndexed { idx, map ->
-                        val title = spec.titleKeys.firstNotNullOfOrNull { map[it] }
-                            ?: "عنصر #${idx + 1}"
-                        val sub = spec.subtitleKeys.firstNotNullOfOrNull { map[it] } ?: ""
-                        val status = map["status"]
-                            ?: (if (map["disabled"] == "true" || map["disabled"] == "yes") "معطل" else "نشط")
-                        RouterGenericItem(
-                            id = map[".id"] ?: idx.toString(),
-                            title = title,
-                            subtitle = sub,
-                            status = status,
-                            extra = map["comment"] ?: "",
-                            isEnabled = map["disabled"] != "true",
-                            rawProperties = map
-                        )
-                    }
-                    launch(Dispatchers.Main) { onSuccess(genericList) }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError("خطأ أثناء قراءة البيانات من الراوتر: ${e.message}") }
                 }
@@ -2216,6 +3165,8 @@ class MikroTikRepository(
         "dns" to SectionFieldSpec(listOf("name", "address"), listOf("address", "type", "ttl")),
         "blocked_sites" to SectionFieldSpec(listOf("name", "address"), listOf("address", "type", "regexp", "comment")),
         "address_lists" to SectionFieldSpec(listOf("list", "address"), listOf("address", "comment")),
+        "traffic" to SectionFieldSpec(listOf("name"), listOf("rx-byte", "tx-byte", "running")),
+        "ip_bindings" to SectionFieldSpec(listOf("mac-address", "address"), listOf("address", "type", "comment")),
         "firewall_filter" to SectionFieldSpec(listOf("chain", "action"), listOf("action", "src-address", "dst-address", "protocol")),
         "arp" to SectionFieldSpec(listOf("address", "mac-address"), listOf("mac-address", "interface", "status")),
         "mangle" to SectionFieldSpec(listOf("chain", "action"), listOf("action", "src-address", "dst-address", "protocol")),
@@ -2248,7 +3199,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    val cloudResults = api.execute("/ip/cloud/print")
+                    val cloudResults = api.execute("/ip/cloud/print").data
                     val info = cloudResults.firstOrNull() ?: emptyMap()
                     val ddns = info["ddns-enabled"]?.equals("true", ignoreCase = true) ?: (info["ddns-enabled"]?.equals("yes", ignoreCase = true) ?: true)
                     val updateTime = info["update-time"]?.equals("true", ignoreCase = true) ?: (info["update-time"]?.equals("yes", ignoreCase = true) ?: true)
@@ -2270,7 +3221,7 @@ class MikroTikRepository(
                     _cloudInfo.value = parsed
 
                     try {
-                        val backupList = api.execute("/system/backup/cloud/print")
+                        val backupList = api.execute("/system/backup/cloud/print").data
                         _cloudBackups.value = backupList.mapIndexed { idx, b ->
                             MikroTikCloudBackup(
                                 id = b[".id"] ?: idx.toString(),

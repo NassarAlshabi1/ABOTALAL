@@ -184,7 +184,8 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
         }
     }
 
-    // Persistence
+    // Persistence — bot tokens are ENCRYPTED at rest (Android Keystore, see CryptoBox);
+    // legacy plaintext JSON keeps loading and is re-encrypted on the next save.
     fun loadSavedBots(context: Context): List<TelegramBotItem> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val jsonStr = prefs.getString(KEY_BOTS_JSON, null) ?: return defaultInitialBots()
@@ -197,8 +198,8 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
                     TelegramBotItem(
                         id = obj.optString("id"),
                         name = obj.optString("name"),
-                        token = obj.optString("token"),
-                        chatId = obj.optString("chatId"),
+                        token = CryptoBox.decrypt(obj.optString("token")),
+                        chatId = CryptoBox.decrypt(obj.optString("chatId")),
                         isDefault = obj.optBoolean("isDefault"),
                         isConnected = obj.optBoolean("isConnected"),
                         botUsername = obj.optString("botUsername")
@@ -219,8 +220,8 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
             val obj = JSONObject().apply {
                 put("id", bot.id)
                 put("name", bot.name)
-                put("token", bot.token)
-                put("chatId", bot.chatId)
+                put("token", CryptoBox.encryptIfPlain(bot.token))
+                put("chatId", CryptoBox.encryptIfPlain(bot.chatId))
                 put("isDefault", bot.isDefault)
                 put("isConnected", bot.isConnected)
                 put("botUsername", bot.botUsername)

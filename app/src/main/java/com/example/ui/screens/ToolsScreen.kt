@@ -58,18 +58,33 @@ fun ToolsScreen(
     onBack: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val isDarkMode by viewModel.isDarkMode.collectAsState()
     var activeSubView by remember { mutableStateOf<ToolsActiveView>(ToolsActiveView.MainList) }
 
     // Dialog states for Quick Services
     var showHtmlDirDialog by remember { mutableStateOf(false) }
     var showFreeHotspotDialog by remember { mutableStateOf(false) }
-    var isFreeHotspotEnabled by remember { mutableStateOf(false) }
+    // Real state read from the router (hotspot servers disabled?), not a local guess
+    var isFreeHotspotEnabled by remember { mutableStateOf<Boolean?>(null) }
 
     var showAntiShareDialog by remember { mutableStateOf(false) }
-    var isAntiShareEnabled by remember { mutableStateOf(false) }
+    // Real state read from the router (TTL mangle rule exists?), not a local guess
+    var isAntiShareEnabled by remember { mutableStateOf<Boolean?>(null) }
 
     var showRebootDialog by remember { mutableStateOf(false) }
     var isOperating by remember { mutableStateOf(false) }
+
+    // Load the real switch states from the router whenever the tools list opens
+    LaunchedEffect(Unit) {
+        viewModel.fetchHotspotServerState { isFreeHotspotEnabled = it }
+        viewModel.fetchTtlBypassState { isAntiShareEnabled = it }
+    }
+
+    // Re-read both switch states from the router (after toggles)
+    fun refreshSwitchStates() {
+        viewModel.fetchHotspotServerState { isFreeHotspotEnabled = it }
+        viewModel.fetchTtlBypassState { isAntiShareEnabled = it }
+    }
 
     // Back button handling
     BackHandler(enabled = activeSubView !is ToolsActiveView.MainList) {
@@ -220,7 +235,7 @@ fun ToolsScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(padding)
-                            .background(Color(0xFFF8FAFC))
+                            .background(if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC))
                             .padding(horizontal = 14.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
@@ -281,8 +296,12 @@ fun ToolsScreen(
                                 HeroServiceCard(
                                     modifier = Modifier.weight(1f),
                                     title = "تفعيل الشبكة مجاناً",
-                                    subtitle = if (isFreeHotspotEnabled) "الشبكة مفتوحة مجاناً" else "مقفلة بنظام الكروت",
-                                    actionButtonText = if (isFreeHotspotEnabled) "إعادة القفل" else "تفعيل مجاناً",
+                                    subtitle = when (isFreeHotspotEnabled) {
+                                        true -> "الشبكة مفتوحة مجاناً"
+                                        false -> "مقفلة بنظام الكروت"
+                                        null -> "جاري قراءة الحالة من الراوتر..."
+                                    },
+                                    actionButtonText = if (isFreeHotspotEnabled == true) "إعادة القفل" else "تفعيل مجاناً",
                                     badgeText = "FREE",
                                     headerBgColor = Color(0xFF6B21A8),
                                     accentColor = Color(0xFF9333EA),
@@ -294,8 +313,12 @@ fun ToolsScreen(
                                 HeroServiceCard(
                                     modifier = Modifier.weight(1f),
                                     title = "إيقاف مشاركة النت",
-                                    subtitle = if (isAntiShareEnabled) "الحظر مفعل (TTL=1)" else "المشاركة مسموحة",
-                                    actionButtonText = if (isAntiShareEnabled) "إلغاء الحظر" else "تفعيل الحظر",
+                                    subtitle = when (isAntiShareEnabled) {
+                                        true -> "الحظر مفعل (TTL=1)"
+                                        false -> "المشاركة مسموحة"
+                                        null -> "جاري قراءة الحالة من الراوتر..."
+                                    },
+                                    actionButtonText = if (isAntiShareEnabled == true) "إلغاء الحظر" else "تفعيل الحظر",
                                     badgeText = "TTL=1",
                                     headerBgColor = Color(0xFF9F1239),
                                     accentColor = Color(0xFFE11D48),
@@ -567,8 +590,8 @@ fun ToolsScreen(
                         item {
                             ToolsGrid(
                                 items = listOf(
-                                    ToolGridItem("address_lists", "القائمة البيضاء", Icons.Filled.CheckCircle, Color(0xFF16A34A)),
-                                    ToolGridItem("address_lists", "القائمة السوداء", Icons.Filled.Cancel, Color(0xFFDC2626))
+                                    ToolGridItem("address_lists", "القائمة البيضاء والسوداء", Icons.Filled.Ballot, Color(0xFF16A34A)),
+                                    ToolGridItem("blocked_sites", "المواقع المحجوبة", Icons.Filled.Block, Color(0xFFDC2626))
                                 ),
                                 onItemClick = { item ->
                                     activeSubView = ToolsActiveView.GenericTool(item.id, item.title, "قوائم العناوين والحظر")
@@ -633,11 +656,10 @@ fun ToolsScreen(
                                 items = listOf(
                                     ToolGridItem("cloud", "سحابة مايكروتيك", Icons.Filled.Cloud, Color(0xFF0C5A60)),
                                     ToolGridItem("resources", "ذاكرة / CPU", Icons.Filled.Memory, Color(0xFF0C5A60)),
-                                    ToolGridItem("resources", "مراقبة المرور", Icons.Filled.Insights, Color(0xFF0284C7)),
+                                    ToolGridItem("traffic", "مراقبة المرور", Icons.Filled.Insights, Color(0xFF0284C7)),
                                     ToolGridItem("routerboard", "RouterBOARD", Icons.Filled.DeveloperBoard, Color(0xFF7C3AED)),
                                     ToolGridItem("connections", "اتصالات نشطة", Icons.Filled.OnlinePrediction, Color(0xFF10B981)),
-                                    ToolGridItem("health", "صحة الجهاز (Health)", Icons.Filled.Favorite, Color(0xFFEF4444)),
-                                    ToolGridItem("resources", "الموارد (Resources)", Icons.Filled.Widgets, Color(0xFFF59E0B))
+                                    ToolGridItem("health", "صحة الجهاز (Health)", Icons.Filled.Favorite, Color(0xFFEF4444))
                                 ),
                                 onItemClick = { item ->
                                     if (item.id == "cloud") {
@@ -746,12 +768,12 @@ fun ToolsScreen(
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Filled.WifiTethering, contentDescription = null, tint = Color(0xFF9333EA))
-                    Text(if (isFreeHotspotEnabled) "إعادة قفل الشبكة بنظام الكروت" else "تفعيل الشبكة مجاناً", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                    Text(if (isFreeHotspotEnabled == true) "إعادة قفل الشبكة بنظام الكروت" else "تفعيل الشبكة مجاناً", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                 }
             },
             text = {
                 Text(
-                    text = if (isFreeHotspotEnabled) {
+                    text = if (isFreeHotspotEnabled == true) {
                         "سيتم إعادة تشغيل نظام كروت الهوتسبوت ولن يتمكن المستخدمون من التصفح إلا بعد إدخال كرت صالح."
                     } else {
                         "سيتم فتح الشبكة لجميع المتصلين بالواي فاي بدون طلب تسجيل دخول أو كروت (وضع الطوارئ أو المناسبات)."
@@ -763,13 +785,14 @@ fun ToolsScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val newStatus = !isFreeHotspotEnabled
+                        val newStatus = isFreeHotspotEnabled != true
                         isOperating = true
                         viewModel.toggleFreeHotspot(
                             enableFree = newStatus,
                             onSuccess = {
                                 isOperating = false
                                 isFreeHotspotEnabled = newStatus
+                                refreshSwitchStates()
                                 showFreeHotspotDialog = false
                                 Toast.makeText(context, if (newStatus) "تم فتح الشبكة مجاناً" else "تمت إعادة نظام الكروت", Toast.LENGTH_SHORT).show()
                             },
@@ -780,10 +803,10 @@ fun ToolsScreen(
                         )
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isFreeHotspotEnabled) Color(0xFF0C5A60) else Color(0xFF9333EA)
+                        containerColor = if (isFreeHotspotEnabled == true) Color(0xFF0C5A60) else Color(0xFF9333EA)
                     )
                 ) {
-                    Text(if (isFreeHotspotEnabled) "قفل وتفعيل الكروت" else "فتح الشبكة مجاناً", fontFamily = CairoFontFamily)
+                    Text(if (isFreeHotspotEnabled == true) "قفل وتفعيل الكروت" else "فتح الشبكة مجاناً", fontFamily = CairoFontFamily)
                 }
             },
             dismissButton = {
@@ -806,7 +829,7 @@ fun ToolsScreen(
             },
             text = {
                 Text(
-                    text = if (isAntiShareEnabled) {
+                    text = if (isAntiShareEnabled == true) {
                         "هل تود إلغاء حظر مشاركة الإنترنت؟ سيتمكن العملاء من إعادة بث الإنترنت عبر هواتفهم."
                     } else {
                         "سيقوم الراوتر بتطبيق قاعدة Mangle وضبط (TTL=1) لمنع المستخدمين من إعادة بث النت عبر نقطة اتصال الهواتف أو البلوتوث."
@@ -818,13 +841,14 @@ fun ToolsScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val newStatus = !isAntiShareEnabled
+                        val newStatus = isAntiShareEnabled != true
                         isOperating = true
                         viewModel.toggleTtlBypass(
                             blockSharing = newStatus,
                             onSuccess = {
                                 isOperating = false
                                 isAntiShareEnabled = newStatus
+                                refreshSwitchStates()
                                 showAntiShareDialog = false
                                 Toast.makeText(context, if (newStatus) "تم تفعيل حظر المشاركة" else "تم إلغاء حظر المشاركة", Toast.LENGTH_SHORT).show()
                             },
@@ -835,10 +859,10 @@ fun ToolsScreen(
                         )
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isAntiShareEnabled) Color(0xFF0C5A60) else Color(0xFFE11D48)
+                        containerColor = if (isAntiShareEnabled == true) Color(0xFF0C5A60) else Color(0xFFE11D48)
                     )
                 ) {
-                    Text(if (isAntiShareEnabled) "إلغاء الحظر" else "تفعيل الحظر الفوري", fontFamily = CairoFontFamily)
+                    Text(if (isAntiShareEnabled == true) "إلغاء الحظر" else "تفعيل الحظر الفوري", fontFamily = CairoFontFamily)
                 }
             },
             dismissButton = {

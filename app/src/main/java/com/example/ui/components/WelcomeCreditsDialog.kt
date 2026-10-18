@@ -124,7 +124,7 @@ fun WelcomeCreditsDialog(
                             border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
                         ) {
                             Text(
-                                text = "الإصدار v1.0.0 (قيد التطوير والتحديث المستمر)",
+                                text = "الإصدار v${com.example.BuildConfig.VERSION_NAME} (قيد التطوير والتحديث المستمر)",
                                 fontFamily = CairoFontFamily,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,

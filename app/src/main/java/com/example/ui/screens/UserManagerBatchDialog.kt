@@ -104,7 +104,7 @@ fun UserManagerBatchFullDialog(
 
     // Template Binding
     var linkedTemplateName by remember {
-        mutableStateOf(sharedPrefs.getString("${selectedProfileName}_template", "") ?: "")
+        mutableStateOf(CardPrintAndExportHelper.readTemplateLink(sharedPrefs, selectedProfileName))
     }
     var showLinkTemplateDialog by remember { mutableStateOf(false) }
 
@@ -151,7 +151,7 @@ fun UserManagerBatchFullDialog(
 
     // Update template link when profile changes
     LaunchedEffect(selectedProfileName) {
-        linkedTemplateName = sharedPrefs.getString("${selectedProfileName}_template", "") ?: ""
+        linkedTemplateName = CardPrintAndExportHelper.readTemplateLink(sharedPrefs, selectedProfileName)
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -1640,7 +1640,7 @@ fun UserManagerBatchFullDialog(
                                             CardPrintAndExportHelper.saveDesignAsTemplate(context, design)
                                         }
                                         linkedTemplateName = tmpl
-                                        sharedPrefs.edit().putString("${selectedProfileName}_template", tmpl).apply()
+                                        CardPrintAndExportHelper.writeTemplateLink(sharedPrefs, selectedProfileName, tmpl)
                                         showLinkTemplateDialog = false
                                         Toast.makeText(context, "تم ربط الباقة $selectedProfileName بقالب التصميم $tmpl", Toast.LENGTH_SHORT).show()
                                     },
@@ -1805,6 +1805,9 @@ fun UserManagerBatchFullDialog(
 // -------------------------------------------------------------
 // Generator Helpers
 // -------------------------------------------------------------
+/** Card codes are credentials — generated with a CSPRNG, not kotlin.random. */
+private val secureCardRandom = java.security.SecureRandom()
+
 private fun cardCodeCharacterPool(pattern: String, excludedChars: Set<Char>): String = when (pattern) {
     "احرف وارقام" -> "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
     "احرف صغيرة فقط" -> "abcdefghijkmnopqrstuvwxyz"
@@ -1824,11 +1827,11 @@ private fun generateCardCode(
     val allowedLength = (length - cleanPrefix.length - cleanSuffix.length).coerceAtLeast(3)
     val pool = cardCodeCharacterPool(pattern, excludedChars)
     require(pool.isNotEmpty()) { "No available username characters" }
-    val core = (1..allowedLength).map { pool.random() }.joinToString("")
+    val core = (1..allowedLength).map { pool[secureCardRandom.nextInt(pool.length)] }.joinToString("")
     return "$cleanPrefix$core$cleanSuffix"
 }
 
 private fun generateRandomAlphaNumeric(length: Int, excludedChars: Set<Char>): String {
     val pool = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".filter { it !in excludedChars }
-    return (1..length).map { pool.random() }.joinToString("")
+    return (1..length).map { pool[secureCardRandom.nextInt(pool.length)] }.joinToString("")
 }

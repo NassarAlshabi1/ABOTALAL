@@ -37,6 +37,7 @@ fun PppoeManagerScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val isDarkMode by viewModel.isDarkMode.collectAsState()
     var usersList by remember { mutableStateOf<List<PppoeUser>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var searchQuery by remember { mutableStateOf("") }
@@ -154,7 +155,7 @@ fun PppoeManagerScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .background(Color(0xFFF1F5F9))
+                    .background(if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC))
             ) {
                 // Summary bar
                 Surface(

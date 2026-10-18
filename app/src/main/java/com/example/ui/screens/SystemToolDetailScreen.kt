@@ -41,6 +41,7 @@ fun SystemToolDetailScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val isDarkMode by viewModel.isDarkMode.collectAsState()
     var itemsList by remember { mutableStateOf<List<RouterGenericItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var searchQuery by remember { mutableStateOf("") }
@@ -160,7 +161,7 @@ fun SystemToolDetailScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .background(Color(0xFFF8FAFC))
+                    .background(if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC))
             ) {
                 // If Ping tool is selected, show interactive Ping console
                 if (toolKey == "ping") {

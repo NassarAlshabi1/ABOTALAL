@@ -36,20 +36,35 @@ class NativeApiIntegrationTest {
         private var running = true
         private val worker = thread(isDaemon = true) { serve() }
 
+        /** Every sentence the client sent (each = command words). */
+        val received = java.util.concurrent.CopyOnWriteArrayList<List<String>>()
+
+        /** Optional responder overriding the built-in [answer] table. */
+        var handler: ((List<String>) -> List<List<String>>)? = null
+
         private fun writeWord(out: OutputStream, word: String) {
             val bytes = word.toByteArray(Charsets.UTF_8)
             val len = bytes.size
             when {
-                len < 0x80 -> out.write(len)
+                len < 0x80 -> {
+                    out.write(len)
+                }
                 len < 0x4000 -> {
-                    out.write((len shr 8) or 0x80); out.write(len and 0xFF)
+                    out.write((len shr 8) or 0x80)
+                    out.write(len and 0xFF)
                 }
                 len < 0x200000 -> {
-                    out.write((len shr 16) or 0xC0); out.write((len shr 8) and 0xFF); out.write(len and 0xFF)
+                    out.write((len shr 16) or 0xC0)
+                    out.write((len shr 8) and 0xFF)
+                    out.write(len and 0xFF)
                 }
                 else -> {
-                    out.write((len shr 24) or 0xE0); out.write((len shr 16) and 0xFF)
-                    out.write((len shr 8) and 0xFF); out.write(len and 0xFF)
+                    // 5-byte form: 0xF0 marker + 4 length bytes (RouterOS standard)
+                    out.write(0xF0)
+                    out.write((len shr 24) and 0xFF)
+                    out.write((len shr 16) and 0xFF)
+                    out.write((len shr 8) and 0xFF)
+                    out.write(len and 0xFF)
                 }
             }
             out.write(bytes)
@@ -70,8 +85,10 @@ class NativeApiIntegrationTest {
                 (first and 0xC0) == 0x80 -> ((first and 0x3F) shl 8) or input.read()
                 (first and 0xE0) == 0xC0 ->
                     ((first and 0x1F) shl 16) or (input.read() shl 8) or input.read()
-                (first and 0xF0) == 0xE0 ->
-                    ((first and 0x0F) shl 24) or (input.read() shl 16) or (input.read() shl 8) or input.read()
+                first == 0xF0 ->
+                    // 5-byte form: 0xF0 + four length bytes
+                    ((input.read() and 0xFF) shl 24) or ((input.read() and 0xFF) shl 16) or
+                        ((input.read() and 0xFF) shl 8) or (input.read() and 0xFF)
                 else -> return ""
             }
             val buf = ByteArray(len)
@@ -116,7 +133,8 @@ class NativeApiIntegrationTest {
                     writeSentence(out, listOf("!re", "=.id=*1", "=name=default", "=rate-limit=1M/1M"))
                     writeSentence(out, listOf("!done"))
                 }
-                command.startsWith("/user-manager/user/print") -> {
+                command.startsWith("/user-manager/user/print") ||
+                    command.startsWith("/tool/user-manager/user/print") -> {
                     writeSentence(out, listOf("!re", "=.id=*1", "=name=card_ahmed", "=password=1111", "=profile=1h_100MB", "=uptime-used=15m", "=disabled=false"))
                     writeSentence(out, listOf("!re", "=.id=*2", "=name=card_khalid", "=password=2222", "=profile=1h_100MB", "=uptime-used=30m", "=disabled=false"))
                     writeSentence(out, listOf("!done"))
@@ -138,11 +156,21 @@ class NativeApiIntegrationTest {
                     thread(isDaemon = true) {
                         try {
                             val input = client.getInputStream()
-                            val out = client.getOutputStream()
+                            val out = java.io.BufferedOutputStream(client.getOutputStream())
                             while (true) {
                                 val words = readSentence(input) ?: break
+                                received.add(words)
                                 val command = words.firstOrNull() ?: continue
-                                answer(out, command)
+                                val custom = handler
+                                if (custom != null) {
+                                    val replies = custom(words)
+                                    replies.forEach { writeSentence(out, it) }
+                                    if (replies.none { it.firstOrNull() == "!done" }) {
+                                        writeSentence(out, listOf("!done"))
+                                    }
+                                } else {
+                                    answer(out, command)
+                                }
                             }
                         } catch (_: Exception) {
                         } finally {
@@ -161,6 +189,84 @@ class NativeApiIntegrationTest {
     }
 
     @Test
+    fun `api result distinguishes success trap and empty success`() {
+        val server = MockMikroTikServer()
+        try {
+            server.handler = { words ->
+                val cmd = words.firstOrNull() ?: ""
+                when {
+                    cmd.startsWith("/ip/hotspot/user/print") -> listOf(listOf("!done")) // success, zero rows
+                    cmd.startsWith("/ip/hotspot/user/remove") -> listOf(listOf("!trap", "=message=no such item"))
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val api = MikroTikNativeApi("127.0.0.1", server.port, connectTimeoutMs = 5000, commandTimeoutMs = 5000)
+            assertTrue(api.login("admin", "1234").first)
+
+            // Empty but successful reply is a Success — NOT an error (old bug: empty == failure)
+            val empty = api.execute("/ip/hotspot/user/print")
+            assertTrue("empty success must be Success", empty is com.example.data.repository.ApiResult.Success)
+            assertTrue(empty.data.isEmpty())
+
+            // Trap comes back as Trap with the router's message
+            val trap = api.execute("/ip/hotspot/user/remove", "=numbers=*99")
+            assertTrue("trap must be Trap", trap is com.example.data.repository.ApiResult.Trap)
+            assertTrue((trap as com.example.data.repository.ApiResult.Trap).message.contains("no such item"))
+
+            // Session survives the trap (protocol stays in sync)
+            val after = api.execute("/system/identity/print")
+            assertTrue(after.isSuccess)
+            api.close()
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `query words pass through unmangled`() {
+        val server = MockMikroTikServer()
+        try {
+            server.handler = { words ->
+                val cmd = words.firstOrNull() ?: ""
+                if (cmd.startsWith("/login")) listOf(listOf("!done"))
+                else listOf(listOf("!re", "=name=card1"), listOf("!done"))
+            }
+            val api = MikroTikNativeApi("127.0.0.1", server.port, connectTimeoutMs = 5000, commandTimeoutMs = 5000)
+            assertTrue(api.login("admin", "1234").first)
+
+            val res = api.execute("/user-manager/user/print", "?name~=card")
+            assertTrue(res.isSuccess)
+            assertEquals("card1", res.data.first()["name"])
+            // The mock echoes every sentence it received — the query word must arrive verbatim
+            assertTrue(
+                server.received.any { sentence ->
+                    sentence.firstOrNull() == "/user-manager/user/print" &&
+                        sentence.any { it == "?name~=card" }
+                }
+            )
+            api.close()
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `login rejects unexpected replies instead of falling through to success`() {
+        val server = MockMikroTikServer()
+        try {
+            // A router that answers /login with a !re row (no !done) used to be accepted
+            server.handler = { listOf(listOf("!re", "=ret=deadbeef")) }
+            val api = MikroTikNativeApi("127.0.0.1", server.port, connectTimeoutMs = 5000, commandTimeoutMs = 5000)
+            val (ok, msg) = api.login("admin", "1234")
+            assertFalse("unexpected login reply must fail", ok)
+            assertTrue(msg.isNotEmpty())
+            api.close()
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun `native api login and execute work on a custom port`() {
         val server = MockMikroTikServer()
         try {
@@ -173,7 +279,7 @@ class NativeApiIntegrationTest {
             val (ok, msg) = api.login("admin", "1234")
             assertTrue("login should succeed: $msg", ok)
 
-            val users = api.execute("/ip/hotspot/user/print")
+            val users = api.execute("/ip/hotspot/user/print").data
             assertEquals(1, users.size)
             assertEquals("test_card1", users[0]["name"])
 

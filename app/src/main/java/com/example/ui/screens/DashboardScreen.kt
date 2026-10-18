@@ -953,7 +953,7 @@ fun DashboardScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("نظام NetCraft", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    Text("الإصدار: v1.0.1", fontFamily = CairoFontFamily)
+                    Text("الإصدار: v${com.example.BuildConfig.VERSION_NAME}", fontFamily = CairoFontFamily)
                     Text("تطوير: شركة الهيثم للبرمجيات (773114243)", fontFamily = CairoFontFamily)
                 }
             },

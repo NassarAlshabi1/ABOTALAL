@@ -332,11 +332,70 @@ object CardPrintAndExportHelper {
         val current = getTemplatesList(context).toMutableList()
         current.remove(templateName)
         saveTemplatesList(context, current)
-        // Also clear template specific keys
+        // Remove EXACTLY this template's keys — a prefix match would also wipe a
+        // different template whose name starts with this one ("كروت" deleting
+        // the keys of "كروت_فئة_100"), so the known suffix list is used instead.
         val editor = prefs.edit()
-        val allKeys = prefs.all.keys.filter { it.startsWith("${templateName}_") }
-        allKeys.forEach { editor.remove(it) }
+        TEMPLATE_KEY_SUFFIXES.forEach { suffix -> editor.remove("${templateName}_$suffix") }
         editor.apply()
+    }
+
+    /** Every per-template prefs suffix written by [saveTemplateConfig] and read by
+     *  [loadTemplateConfig] — the exact set deleteTemplate is allowed to remove. */
+    private val TEMPLATE_KEY_SUFFIXES = listOf(
+        "columns", "rows", "auto_fit", "orientation", "h_margin", "v_margin",
+        "page_margin_mm", "card_w_mm", "card_h_mm", "um_pkg_id", "hs_pkg_id",
+        "bg_enabled", "bg_preset", "custom_bg_path", "border_enabled", "border_size",
+        "border_color", "page_note_enabled", "page_note_text", "page_note_x",
+        "page_note_y", "page_note_size", "page_note_color", "page_num_enabled",
+        "page_num_text", "digits", "charset", "move_step", "show_username",
+        "user_vis", "user_title_on", "user_title_text", "user_x_mm", "user_y_mm",
+        "user_size", "user_bold", "user_italic", "user_color", "user_align",
+        "title_vis", "title_text", "title_x_mm", "title_y_mm", "title_size",
+        "title_bold", "title_italic", "title_color", "title_align",
+        "pass_vis", "pass_title_on", "pass_title_text", "pass_x_mm", "pass_y_mm",
+        "pass_size", "pass_bold", "pass_italic", "pass_color", "pass_align",
+        "price_vis", "price_title_on", "price_title_text", "price_x_mm", "price_y_mm",
+        "price_size", "price_bold", "price_italic", "price_color", "price_align",
+        "prof_vis", "prof_title_on", "prof_title_text", "prof_x_mm", "prof_y_mm",
+        "prof_size", "prof_bold", "prof_italic", "prof_color", "prof_align",
+        "payment_vis", "payment_text", "payment_x_mm", "payment_y_mm", "payment_size",
+        "payment_bold", "payment_italic", "payment_color", "payment_align",
+        "ser_vis", "ser_title_text", "ser_x_mm", "ser_y_mm", "ser_size",
+        "ser_bold", "ser_italic", "ser_color", "ser_align",
+        "pos_vis", "pos_text", "pos_x_mm", "pos_y_mm", "pos_size",
+        "pos_bold", "pos_italic", "pos_color", "pos_align",
+        "barcode_vis", "barcode_x_mm", "barcode_y_mm", "barcode_w_mm", "barcode_h_mm",
+        "barcode_type", "barcode_padding",
+        "logo_vis", "logo_x_mm", "logo_y_mm", "logo_w_mm", "logo_h_mm", "logo_url"
+    )
+
+    /** Canonical, sanitized prefs key for a package -> template link. Spaces/dots
+     *  in package IDs used to produce ambiguous raw keys; the "tplink_" namespace
+     *  keeps links clearly separate from per-template keys. */
+    fun templateLinkKey(packageId: String): String =
+        "tplink_" + packageId.trim().replace(Regex("\\s+"), "_").replace(".", "_") + "_v1"
+
+    /** Legacy raw link key (pre-fix) — still read so old bindings keep working. */
+    private fun legacyTemplateLinkKey(packageId: String): String = "${packageId}_template"
+
+    /** Reads the package -> template binding, preferring the sanitized key and
+     *  falling back to the legacy raw one (transparent migration). */
+    fun readTemplateLink(prefs: android.content.SharedPreferences, packageId: String): String {
+        if (packageId.isBlank()) return ""
+        return prefs.getString(templateLinkKey(packageId), null)
+            ?: prefs.getString(legacyTemplateLinkKey(packageId), null)
+            ?: ""
+    }
+
+    /** Writes the package -> template binding under the sanitized key and clears
+     *  the legacy raw key so it can never shadow the new one. */
+    fun writeTemplateLink(prefs: android.content.SharedPreferences, packageId: String, templateName: String) {
+        if (packageId.isBlank()) return
+        prefs.edit()
+            .putString(templateLinkKey(packageId), templateName)
+            .remove(legacyTemplateLinkKey(packageId))
+            .apply()
     }
 
     fun loadTemplateConfig(context: Context, templateName: String): CardTemplateConfig {
@@ -632,12 +691,12 @@ object CardPrintAndExportHelper {
             .putString("${p}_logo_url", config.logoUrl)
             .apply()
 
-        // Also sync profile link if package specified
+        // Also sync profile link if package specified (sanitized, collision-free key)
         if (config.userManagerPackageId.isNotEmpty()) {
-            prefs.edit().putString("${config.userManagerPackageId}_template", config.templateName).apply()
+            writeTemplateLink(prefs, config.userManagerPackageId, config.templateName)
         }
         if (config.hotspotPackageId.isNotEmpty()) {
-            prefs.edit().putString("${config.hotspotPackageId}_template", config.templateName).apply()
+            writeTemplateLink(prefs, config.hotspotPackageId, config.templateName)
         }
     }
 

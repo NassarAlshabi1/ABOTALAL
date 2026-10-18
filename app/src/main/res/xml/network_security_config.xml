@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security policy for NetCraft.
+
+  The app's core function is managing LAN routers over the protocols routers
+  actually speak: the RouterOS binary API (8728, cleartext by design) and the
+  REST API over http on port 80 (also cleartext). Router IPs are user-entered,
+  so they cannot be enumerated in domain rules — instead:
+
+  * base-config allows cleartext ONLY for this router-management purpose.
+  * Every non-router destination the app contacts (Telegram Bot API, Google /
+    Firebase services) is HTTPS regardless and is unaffected by this setting.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -144,7 +144,7 @@ fun DeveloperWelcomeDialog(
                             border = BorderStroke(1.dp, Color(0xFFF59E0B))
                         ) {
                             Text(
-                                text = "الإصدار: v1.0.0 (قيد التطوير والتحديث المستمر)",
+                                text = "الإصدار: v${com.example.BuildConfig.VERSION_NAME} (قيد التطوير والتحديث المستمر)",
                                 fontFamily = CairoFontFamily,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,

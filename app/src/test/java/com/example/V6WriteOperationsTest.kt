@@ -55,6 +55,8 @@ class V6WriteOperationsTest {
             server.handler = { words ->
                 val cmd = words.firstOrNull() ?: ""
                 when {
+                    cmd.startsWith("/ip/hotspot/print") ->
+                        listOf(listOf("!re", "=.id=*1", "=name=hotspot1", "=interface=bridge-lan"), listOf("!done"))
                     cmd.startsWith("/ip/firewall/mangle/print") -> {
                         if (mangleInstalled.get())
                             listOf(listOf("!re", "=.id=*3", "=comment=ABO_TALAL_ANTI_SHARE"), listOf("!done"))
@@ -80,6 +82,10 @@ class V6WriteOperationsTest {
             assertTrue(adds.isNotEmpty())
             assertTrue(adds.first().any { it == "=action=change-ttl" })
             assertTrue(adds.first().any { it == "=comment=ABO_TALAL_ANTI_SHARE" })
+            // The rule must be scoped to the hotspot interface — an unscoped TTL rule
+            // would also hit upstream traffic and black out the whole network.
+            assertTrue("rule must be scoped to hotspot interface: ${adds.first()}",
+                adds.first().any { it == "=out-interface=bridge-lan" })
 
             success = false; error = null
             repo.toggleTtlBypass(false, { success = true }, { error = it })
@@ -87,7 +93,21 @@ class V6WriteOperationsTest {
             assertTrue("disable must succeed: $error", success)
             val removes = server.commandsMatching("/ip/firewall/mangle/remove")
             assertTrue(removes.isNotEmpty())
-            assertTrue(removes.first().any { it == "=numbers=*3" })
+            assertTrue(removes.last().any { it == "=numbers=*3" })
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `ttl bypass refuses honestly when no hotspot interface exists`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            // Router without any hotspot server configured
+            val repo = connectRepoToMockRouter(server)
+            var success = false; var error: String? = null
+            repo.toggleTtlBypass(true, { success = true }, { error = it })
+            pumpMainUntil { success || error != null }
+            assertFalse("must refuse without a hotspot interface", success)
+            assertTrue(error != null)
         } finally { server.shutdown() }
     }
 

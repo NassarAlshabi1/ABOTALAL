@@ -207,7 +207,7 @@ fun LoginScreen(
                                     color = Color.White.copy(alpha = 0.2f)
                                 ) {
                                     Text(
-                                        text = "v1.0.1",
+                                        text = "v${BuildConfig.VERSION_NAME}",
                                         color = Color.White,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.SemiBold,

@@ -74,6 +74,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -101,6 +102,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.example.data.model.UserManagerProfile
 import com.example.data.model.UserManagerUser
+import com.example.data.model.isExpiredCard
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.CardPrintAndExportHelper
@@ -129,6 +131,7 @@ fun UserManagerCardsScreen(
     val scope = rememberCoroutineScope()
 
     val rawUsers by viewModel.userManagerUsers.collectAsState()
+    val isDarkMode by viewModel.isDarkMode.collectAsState()
     val profiles by viewModel.userManagerProfiles.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
 
@@ -170,8 +173,7 @@ fun UserManagerCardsScreen(
                 // Same compound signal as cleanExpiredUserManagerUsers(): disabled, or the
                 // router cleared the active profile (profileExpired) on a card that was
                 // actually used at least once.
-                "الكروت المنتهية" -> !user.active ||
-                    (user.profileExpired && user.uptimeUsed.isNotBlank() && user.uptimeUsed != "0s")
+                "الكروت المنتهية" -> user.isExpiredCard()
                 else -> true
             }
 
@@ -179,17 +181,35 @@ fun UserManagerCardsScreen(
             val matchesSearch = if (searchQuery.isBlank()) {
                 true
             } else {
+                val q = searchQuery.trim()
                 when (searchFieldType) {
-                    "الاسم" -> user.username.contains(searchQuery.trim(), ignoreCase = true)
-                    "الباقة" -> user.profile.contains(searchQuery.trim(), ignoreCase = true)
-                    "الرقم التسلسلي" -> user.serialNumber.contains(searchQuery.trim(), ignoreCase = true)
-                    "الحالة" -> (if (user.active) "تم التفعيل" else "غير مفعل").contains(searchQuery.trim(), ignoreCase = true)
-                    else -> user.username.contains(searchQuery.trim(), ignoreCase = true)
+                    "الاسم" -> user.username.contains(q, ignoreCase = true)
+                    "الباقة" -> user.profile.contains(q, ignoreCase = true)
+                    "الرقم التسلسلي" -> user.serialNumber.contains(q, ignoreCase = true)
+                    // Boolean status match instead of Arabic text matching
+                    "الحالة" -> {
+                        val wantsActive = q.contains("مفع") || q.contains("نشط", true) || q.contains("active", true)
+                        val wantsInactive = q.contains("غير") || q.contains("معطل") || q.contains("inactive", true)
+                        val wantsExpired = q.contains("منتهي") || q.contains("expired", true)
+                        when {
+                            wantsExpired -> user.isExpiredCard()
+                            wantsActive && !wantsInactive -> user.active
+                            wantsInactive || wantsActive -> !user.active
+                            else -> false
+                        }
+                    }
+                    else -> user.username.contains(q, ignoreCase = true)
                 }
             }
 
             matchesScope && matchesSearch
         }
+    }
+
+    // Reset pagination whenever any filter/search input changes so the user
+    // never lands on a now-empty page
+    LaunchedEffect(selectedScope, searchQuery, searchFieldType, pageSize) {
+        currentPage = 1
     }
 
     // Pagination calculations
@@ -289,7 +309,7 @@ fun UserManagerCardsScreen(
                     }
                 }
             },
-            containerColor = Color(0xFFF8FAFC)
+            containerColor = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
         ) { innerPadding ->
             Column(
                 modifier = Modifier

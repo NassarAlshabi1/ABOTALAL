@@ -58,6 +58,37 @@ data class UserManagerProfile(
     val templateName: String = ""
 )
 
+/** One live User-Manager session as reported by the router ($umBase/session/print). */
+data class UserManagerSession(
+    val id: String,
+    val user: String,
+    val uptime: String = "",
+    val address: String = "",
+    val bytesIn: Long = 0L,
+    val bytesOut: Long = 0L,
+    val nasPortId: String = ""
+)
+
+/** One row of the router's own /log/print output. */
+data class RouterLogEntry(
+    val id: String,
+    val time: String = "",
+    val topics: String = "",
+    val message: String = ""
+)
+
+/**
+ * THE single expiry predicate used everywhere in the app (cards screen filter,
+ * maintenance dialog and cleanExpiredUserManagerUsers). Two independent,
+ * router-confirmed signals:
+ *  1) the card is disabled, or
+ *  2) the router cleared "actual-profile" (profileExpired) on a card that has
+ *     actually been used — a brand-new unused card is never swept up.
+ * Deliberately no string matching on "expired": RouterOS never writes such a value.
+ */
+fun UserManagerUser.isExpiredCard(): Boolean =
+    !active || (profileExpired && uptimeUsed.isNotBlank() && uptimeUsed != "0s")
+
 data class InterfaceStats(
     val name: String,
     val type: String,

@@ -46,7 +46,12 @@ internal class ScriptableMockServer {
             len < 0x80 -> out.write(len)
             len < 0x4000 -> { out.write((len shr 8) or 0x80); out.write(len and 0xFF) }
             len < 0x200000 -> { out.write((len shr 16) or 0xC0); out.write((len shr 8) and 0xFF); out.write(len and 0xFF) }
-            else -> { out.write((len shr 24) or 0xE0); out.write((len shr 16) and 0xFF); out.write((len shr 8) and 0xFF); out.write(len and 0xFF) }
+            else -> {
+                // 5-byte form: 0xF0 marker + 4 length bytes (RouterOS standard)
+                out.write(0xF0)
+                out.write((len shr 24) and 0xFF); out.write((len shr 16) and 0xFF)
+                out.write((len shr 8) and 0xFF); out.write(len and 0xFF)
+            }
         }
         out.write(bytes)
 }
@@ -65,7 +70,10 @@ internal class ScriptableMockServer {
             (first and 0x80) == 0 -> first
             (first and 0xC0) == 0x80 -> ((first and 0x3F) shl 8) or input.read()
             (first and 0xE0) == 0xC0 -> ((first and 0x1F) shl 16) or (input.read() shl 8) or input.read()
-            (first and 0xF0) == 0xE0 -> ((first and 0x0F) shl 24) or (input.read() shl 16) or (input.read() shl 8) or input.read()
+            first == 0xF0 ->
+                // 5-byte form: 0xF0 + four length bytes
+                ((input.read() and 0xFF) shl 24) or ((input.read() and 0xFF) shl 16) or
+                    ((input.read() and 0xFF) shl 8) or (input.read() and 0xFF)
             else -> return ""
         }
         val buf = ByteArray(len); var off = 0

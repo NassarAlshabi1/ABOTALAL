@@ -1,19 +1,66 @@
 package com.example.data.repository
 
 import android.util.Log
-import java.io.DataInputStream
-import java.io.DataOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+
+/**
+ * Rich result of one RouterOS API sentence execution so callers can tell an
+ * empty-but-successful reply apart from a failure:
+ *  - [ApiResult.Success] — router replied !done (data may legitimately be empty)
+ *  - [ApiResult.Trap]    — router replied !trap (command refused / bad input)
+ *  - [ApiResult.Error]   — transport-level failure (timeout, socket error, not connected)
+ */
+sealed class ApiResult {
+    /** Rows returned by the router; empty for failures and for successful prints with no rows. */
+    abstract val data: List<Map<String, String>>
+
+    data class Success(override val data: List<Map<String, String>>) : ApiResult()
+    data class Trap(val message: String) : ApiResult() {
+        override val data: List<Map<String, String>> get() = emptyList()
+    }
+    data class Error(val message: String) : ApiResult() {
+        override val data: List<Map<String, String>> get() = emptyList()
+    }
+
+    val isSuccess: Boolean get() = this is Success
+    /** Error text when this is [Trap] or [Error]; null on success. */
+    val errorMessage: String?
+        get() = when (this) {
+            is Trap -> message
+            is Error -> message
+            else -> null
+        }
+
+    /** Rows or throw — for mutations that must not silently pass on failure. */
+    fun getOrThrow(): List<Map<String, String>> = when (this) {
+        is Success -> data
+        is Trap -> throw IOException(message)
+        is Error -> throw IOException(message)
+    }
+}
 
 /**
  * Native MikroTik RouterOS Binary API Client (Port 8728 / 8729)
  * Supports ROS v6 and v7 authentication and sentence command execution.
+ *
+ * Certificate policy: MikroTik routers ship self-signed certificates by default.
+ * Selecting the SSL transport ([useSsl] / port 8729) is the explicit, per-connection
+ * opt-in under which the router's own certificate is accepted. Without that opt-in
+ * no SSL connection is made at all (plain 8728), and no other traffic of this
+ * client relaxes certificate verification.
  */
 class MikroTikNativeApi(
     val host: String,
@@ -105,19 +152,24 @@ class MikroTikNativeApi(
     fun connect(): Boolean {
         synchronized(socketLock) {
             return try {
-                val s = if (useSsl) {
-                    SSLSocketFactory.getDefault().createSocket()
+                // NOTE: keep the plain-socket path in statement form (no `apply {}`):
+                // the lambda form breaks under Robolectric's bytecode instrumentation.
+                val s: Socket = if (useSsl) {
+                    // SSL transport (explicit opt-in): plain socket first so the connect
+                    // timeout applies, then TLS layered on top + explicit handshake.
+                    createSslSocket()
                 } else {
-                    Socket()
+                    val plain = Socket()
+                    plain.tcpNoDelay = true
+                    plain.keepAlive = true
+                    plain.soTimeout = commandTimeoutMs
+                    plain.connect(InetSocketAddress(host, port), connectTimeoutMs)
+                    plain
                 }
-                s.tcpNoDelay = true
-                s.keepAlive = true
-                s.soTimeout = commandTimeoutMs
-                s.connect(InetSocketAddress(host, port), connectTimeoutMs)
                 socket = s
                 inStream = s.getInputStream()
                 outStream = s.getOutputStream()
-                Log.d(TAG, "Socket connected to $host:$port (tcpNoDelay=true, keepAlive=true)")
+                Log.d(TAG, "Socket connected to $host:$port (ssl=$useSsl)")
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to connect socket to $host:$port", e)
@@ -125,6 +177,35 @@ class MikroTikNativeApi(
                 false
             }
         }
+    }
+
+    /**
+     * Builds the SSL connection with an explicit handshake:
+     * plain socket first (so the connect timeout actually applies), then TLS layered
+     * on top via [SSLSocketFactory.createSocket] and [SSLSocket.startHandshake].
+     */
+    private fun createSslSocket(): SSLSocket {
+        // Explicit per-connection opt-in: the caller selected the API-SSL transport,
+        // accepting the router's own (typically self-signed) certificate.
+        val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        })
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, trustAll, SecureRandom())
+
+        val plain = Socket()
+        plain.tcpNoDelay = true
+        plain.keepAlive = true
+        plain.connect(InetSocketAddress(host, port), connectTimeoutMs)
+        plain.soTimeout = commandTimeoutMs
+
+        val ssl = sslContext.socketFactory.createSocket(plain, host, port, true) as SSLSocket
+        ssl.startHandshake() // fail fast on TLS problems instead of first read/write
+        ssl.tcpNoDelay = true
+        ssl.keepAlive = true
+        return ssl
     }
 
     fun ensureConnected(): Boolean {
@@ -185,9 +266,13 @@ class MikroTikNativeApi(
             } else if (status.startsWith("!trap")) {
                 val trap = response.firstOrNull { it.startsWith("=message=") }?.removePrefix("=message=")
                 return Pair(false, trap ?: "اسم المستخدم أو كلمة المرور غير صحيحة")
+            } else if (status == "!fatal") {
+                val msg = response.firstOrNull { it.startsWith("=message=") }?.removePrefix("=message=")
+                return Pair(false, msg ?: "انقطع الاتصال بالراوتر أثناء تسجيل الدخول")
             }
 
-            return Pair(true, "تم تسجيل الدخول بنجاح")
+            // Anything else (!re, empty, garbage) is NOT a successful login.
+            return Pair(false, "رد غير متوقع من الراوتر أثناء تسجيل الدخول: ${response.firstOrNull() ?: "لا يوجد رد"}")
         } catch (e: Exception) {
             Log.e(TAG, "Login error", e)
             closeInternal()
@@ -203,135 +288,176 @@ class MikroTikNativeApi(
     val lastError: String?
         get() = synchronized(socketLock) { lastCommandError }
 
-    fun execute(command: String, params: Map<String, String>): List<Map<String, String>> {
-        val arr = params.map { "${it.key}=${it.value}" }.toTypedArray()
-        return execute(command, *arr)
+    fun execute(command: String, params: Map<String, String>): ApiResult {
+        val words = params.map { (k, v) -> formatAttribute(k, v) }
+        return execute(command, *words.toTypedArray())
     }
 
-    /** Like [execute] but reports !trap/!fatal/socket failures instead of silently
+    private fun formatAttribute(key: String, value: String): String = "=$key=$value"
+
+    /** Like [execute] but throws on !trap/!fatal/socket failures instead of silently
      *  returning partial results — use it for mutations where the caller must know
      *  whether the router actually applied the command. */
     fun executeStrict(command: String, vararg params: String): List<Map<String, String>> {
         synchronized(socketLock) {
-            val res = executeInternal(command, *params)
-            val err = lastCommandError
-            if (err != null) throw java.io.IOException(err)
-            return res
+            when (val res = executeWithTimeoutRetry(command, *params)) {
+                is ApiResult.Success -> return res.data
+                else -> throw IOException(res.errorMessage ?: "فشل غير معروف للأمر $command")
+            }
         }
     }
 
     fun executeStrict(command: String, params: Map<String, String>): List<Map<String, String>> {
-        val arr = params.map { "${it.key}=${it.value}" }.toTypedArray()
-        return executeStrict(command, *arr)
+        val words = params.map { (k, v) -> formatAttribute(k, v) }
+        return executeStrict(command, *words.toTypedArray())
     }
 
-    fun execute(command: String, vararg params: String): List<Map<String, String>> {
-        synchronized(socketLock) { return executeInternal(command, *params) }
+    fun execute(command: String, vararg params: String): ApiResult {
+        synchronized(socketLock) { return executeWithTimeoutRetry(command, *params) }
     }
 
-    /** Body of [execute]; MUST be called while holding socketLock so that
-     *  [lastCommandError] is observed atomically with the command's own reply. */
-    private fun executeInternal(command: String, vararg params: String): List<Map<String, String>> {
-        val results = mutableListOf<Map<String, String>>()
-        run {
-            lastCommandError = null
-            if (!isConnected()) {
-                if (!ensureConnected()) {
-                    lastCommandError = "تعذر الاتصال بالراوتر لتنفيذ: $command"
-                    return results
-                }
+    /**
+     * Runs a command; on a read timeout the session may simply have stalled (router
+     * busy on a large print), so the socket is rebuilt, the login replayed and the
+     * command retried exactly once before the failure is reported. Holding
+     * [socketLock] keeps the retry atomic with respect to other commands.
+     */
+    private fun executeWithTimeoutRetry(command: String, vararg params: String): ApiResult {
+        val first = executeOnce(command, *params)
+        if (first !is ApiResult.Error) return first
+        val retriable = first.message.contains("انتهت المهلة") || first.message.contains("timeout", true)
+        if (!retriable) return first
+
+        Log.w(TAG, "Timeout on '$command' — reconnecting and retrying once")
+        closeInternal()
+        val reconnectOk = savedUsername.isBlank() || ensureConnected()
+        if (!reconnectOk) {
+            return ApiResult.Error("تعذر إعادة الاتصال بالراوتر بعد انتهاء المهلة")
+        }
+        return executeOnce(command, *params)
+    }
+
+    /** Single attempt. MUST be called while holding [socketLock]. */
+    private fun executeOnce(command: String, vararg params: String): ApiResult {
+        lastCommandError = null
+        if (!isConnected()) {
+            if (!ensureConnected()) {
+                lastCommandError = "تعذر الاتصال بالراوتر لتنفيذ: $command"
+                return ApiResult.Error(lastCommandError!!)
             }
+        }
 
-            try {
-                val words = mutableListOf(command)
-                for (p in params) {
-                    words.add(if (p.startsWith("=")) p else "=$p")
-                }
-                writeSentence(words)
-
-                var currentRecord = mutableMapOf<String, String>()
-                while (true) {
-                    val reply = readSentence()
-                    if (reply.isEmpty()) break
-                    val replyType = reply.firstOrNull() ?: ""
-
-                    if (replyType == "!re") {
-                        currentRecord = mutableMapOf()
-                        for (word in reply.drop(1)) {
-                            if (word.startsWith("=")) {
-                                val parts = word.substring(1).split("=", limit = 2)
-                                if (parts.size == 2) {
-                                    currentRecord[parts[0]] = parts[1]
-                                }
-                            }
-                        }
-                        results.add(currentRecord)
-                    } else if (replyType == "!done") {
-                        val doneMap = mutableMapOf<String, String>()
-                        for (word in reply.drop(1)) {
-                            if (word.startsWith("=")) {
-                                val parts = word.substring(1).split("=", limit = 2)
-                                if (parts.size == 2) {
-                                    doneMap[parts[0]] = parts[1]
-                                }
-                            }
-                        }
-                        if (doneMap.isNotEmpty() && results.isEmpty()) {
-                            results.add(doneMap)
-                        }
-                        break
-                    } else if (replyType == "!trap") {
-                        val msg = reply.firstOrNull { it.startsWith("=message=") }
-                            ?.removePrefix("=message=") ?: "رفض الراوتر الأمر"
-                        Log.w(TAG, "Command trap response for $command: $reply")
-                        lastCommandError = "فشل $command: $msg"
-                        // Drain the !done sentence that always follows !trap — otherwise the
-                        // next command reads it as its own reply and wrongly returns empty.
-                        while (true) {
-                            val drain = readSentence()
-                            if (drain.isEmpty() || drain.firstOrNull() == "!done") break
-                        }
-                        break
-                    } else if (replyType == "!fatal") {
-                        Log.e(TAG, "Command fatal response for $command: $reply")
-                        lastCommandError = "انقطع اتصال الراوتر أثناء: $command"
-                        closeInternal()
-                        break
+        try {
+            val words = mutableListOf(command)
+            for (p in params) {
+                // Pass RouterOS word forms through untouched: "=key=value" attributes,
+                // "?key=value" query words, "<key" / ">key" command modifiers. Anything
+                // else is a bare attribute value ("=value" form) for convenience.
+                words.add(
+                    when {
+                        p.startsWith("=") -> p
+                        p.startsWith("?") -> p
+                        p.startsWith("<") -> p
+                        p.startsWith(">") -> p
+                        p == ".tag" -> p
+                        else -> "=$p"
                     }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Execute command error for $command", e)
-                lastCommandError = "خطأ في تنفيذ $command: ${e.message}"
-                // Socket error: close internal socket to trigger reconnect next time
-                closeInternal()
+                )
             }
-            return results
+            writeSentence(words)
+
+            val results = mutableListOf<Map<String, String>>()
+            while (true) {
+                val reply = readSentence()
+                if (reply.isEmpty()) break
+                val replyType = reply.firstOrNull() ?: ""
+
+                if (replyType == "!re") {
+                    var currentRecord = mutableMapOf<String, String>()
+                    for (word in reply.drop(1)) {
+                        if (word.startsWith("=")) {
+                            val parts = word.substring(1).split("=", limit = 2)
+                            if (parts.size == 2) {
+                                currentRecord[parts[0]] = parts[1]
+                            }
+                        }
+                    }
+                    results.add(currentRecord)
+                } else if (replyType == "!done") {
+                    val doneMap = mutableMapOf<String, String>()
+                    for (word in reply.drop(1)) {
+                        if (word.startsWith("=")) {
+                            val parts = word.substring(1).split("=", limit = 2)
+                            if (parts.size == 2) {
+                                doneMap[parts[0]] = parts[1]
+                            }
+                        }
+                    }
+                    if (doneMap.isNotEmpty() && results.isEmpty()) {
+                        results.add(doneMap)
+                    }
+                    return ApiResult.Success(results)
+                } else if (replyType == "!trap") {
+                    val msg = reply.firstOrNull { it.startsWith("=message=") }
+                        ?.removePrefix("=message=") ?: "رفض الراوتر الأمر"
+                    Log.w(TAG, "Command trap response for $command: $reply")
+                    lastCommandError = "فشل $command: $msg"
+                    // Drain the !done sentence that always follows !trap — otherwise the
+                    // next command reads it as its own reply and wrongly returns empty.
+                    while (true) {
+                        val drain = readSentence()
+                        if (drain.isEmpty() || drain.firstOrNull() == "!done") break
+                    }
+                    return ApiResult.Trap(lastCommandError!!)
+                } else if (replyType == "!fatal") {
+                    Log.e(TAG, "Command fatal response for $command: $reply")
+                    lastCommandError = "انقطع اتصال الراوتر أثناء: $command"
+                    closeInternal()
+                    return ApiResult.Error(lastCommandError!!)
+                }
+            }
+            // Stream ended without !done — treat as transport failure, not success.
+            lastCommandError = "انقطع الاتصال أثناء تنفيذ $command قبل اكتمال الرد"
+            closeInternal()
+            return ApiResult.Error(lastCommandError!!)
+        } catch (e: SocketTimeoutException) {
+            Log.e(TAG, "Execute timeout for $command", e)
+            lastCommandError = "انتهت المهلة (25 ثانية) أثناء تنفيذ $command: ${e.message}"
+            return ApiResult.Error(lastCommandError!!)
+        } catch (e: Exception) {
+            Log.e(TAG, "Execute command error for $command", e)
+            lastCommandError = "خطأ في تنفيذ $command: ${e.message}"
+            // Socket error: close internal socket to trigger reconnect next time
+            closeInternal()
+            return ApiResult.Error(lastCommandError!!)
         }
     }
 
+    /** Session liveness check — a successful empty reply still proves we are connected. */
     fun ping(): Boolean {
         return try {
-            val res = execute("/system/identity/print")
-            res.isNotEmpty()
+            execute("/system/identity/print").isSuccess
         } catch (_: Exception) {
             false
         }
     }
 
+    /** Reboot the router; true only when the router acknowledged the command (!done). */
     fun reboot(): Boolean {
         return try {
-            execute("/system/reboot")
-            true
+            execute("/system/reboot").isSuccess
         } catch (e: Exception) {
+            Log.e(TAG, "reboot failed", e)
             false
         }
     }
 
+    /** Shutdown the router; true only when the router acknowledged the command (!done). */
     fun shutdown(): Boolean {
         return try {
-            execute("/system/shutdown")
-            true
+            execute("/system/shutdown").isSuccess
         } catch (e: Exception) {
+            Log.e(TAG, "shutdown failed", e)
             false
         }
     }
@@ -379,7 +505,9 @@ class MikroTikNativeApi(
                 out.write(len and 0xFF)
             }
             else -> {
-                out.write((len shr 24) or 0xE0)
+                // 5-byte form: 0xF0 marker followed by the full 32-bit length.
+                out.write(0xF0)
+                out.write((len shr 24) and 0xFF)
                 out.write((len shr 16) and 0xFF)
                 out.write((len shr 8) and 0xFF)
                 out.write(len and 0xFF)
@@ -417,15 +545,18 @@ class MikroTikNativeApi(
                 val b3 = input.read()
                 ((firstByte and 0x1F) shl 16) or (b2 shl 8) or b3
             }
-            (firstByte and 0xF0) == 0xE0 -> {
+            firstByte == 0xF0 -> {
+                // 5-byte form: 0xF0 followed by four length bytes.
                 val b2 = input.read()
                 val b3 = input.read()
                 val b4 = input.read()
-                ((firstByte and 0x0F) shl 24) or (b2 shl 16) or (b3 shl 8) or b4
+                val b5 = input.read()
+                ((b2 and 0xFF) shl 24) or ((b3 and 0xFF) shl 16) or ((b4 and 0xFF) shl 8) or (b5 and 0xFF)
             }
             else -> return ""
         }
 
+        if (len < 0) return ""
         val buffer = ByteArray(len)
         var offset = 0
         while (offset < len) {

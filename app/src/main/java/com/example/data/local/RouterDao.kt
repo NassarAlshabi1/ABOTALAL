@@ -12,6 +12,9 @@ interface RouterDao {
     @Query("SELECT * FROM router_connections ORDER BY lastConnected DESC")
     fun getAllConnections(): Flow<List<RouterConnection>>
 
+    @Query("SELECT * FROM router_connections ORDER BY lastConnected DESC")
+    suspend fun getAllConnectionsOnce(): List<RouterConnection>
+
     @Query("SELECT * FROM router_connections WHERE id = :id LIMIT 1")
     suspend fun getConnectionById(id: Int): RouterConnection?
 
