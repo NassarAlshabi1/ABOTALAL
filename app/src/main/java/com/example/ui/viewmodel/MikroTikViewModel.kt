@@ -218,8 +218,8 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.cleanExpiredUserManagerUsers(onSuccess, onError)
     }
 
-    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit) {
-        repository.toggleUserManagerUser(username, onSuccess)
+    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit = {}) {
+        repository.toggleUserManagerUser(username, onSuccess, onError)
     }
 
     fun backupUserManagerDatabase(onSuccess: (String) -> Unit, onError: (String) -> Unit = {}) {

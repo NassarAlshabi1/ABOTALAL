@@ -1746,22 +1746,28 @@ class MikroTikRepository(
         }
     }
 
-    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit)  {
+    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit = {})  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر") }
                 return@launch
             }
-            val current = _userManagerUsers.value.find { it.username == username } ?: return@launch
+            val current = _userManagerUsers.value.find { it.username == username }
+            if (current == null) {
+                launch(Dispatchers.Main) { onError("المستخدم '$username' غير موجود") }
+                return@launch
+            }
             val newActive = !current.active
             try {
                 umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, username) ?: username), "disabled" to if (newActive) "no" else "yes"))
                 _userManagerUsers.value = _userManagerUsers.value.map {
                     if (it.username == username) it.copy(active = newActive) else it
                 }
-            } catch (_: Exception) {}
-            launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل تغيير حالة المستخدم على الراوتر") }
+            }
         }
     }
 

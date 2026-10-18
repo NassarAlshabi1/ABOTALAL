@@ -1235,9 +1235,15 @@ fun UserManagerCardsScreen(
                 selectedCardForDetails = null
             },
             onToggleActive = {
-                viewModel.toggleUserManagerUser(user.username) {
-                    Toast.makeText(context, "تم تغيير حالة الكرت", Toast.LENGTH_SHORT).show()
-                }
+                viewModel.toggleUserManagerUser(
+                    username = user.username,
+                    onSuccess = {
+                        Toast.makeText(context, "تم تغيير حالة الكرت", Toast.LENGTH_SHORT).show()
+                    },
+                    onError = { err ->
+                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                    }
+                )
                 selectedCardForDetails = null
             },
             onDelete = {
