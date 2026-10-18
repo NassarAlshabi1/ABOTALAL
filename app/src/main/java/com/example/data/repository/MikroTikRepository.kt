@@ -1706,11 +1706,11 @@ class MikroTikRepository(
         }
     }
 
-    fun cleanExpiredUserManagerUsers(onSuccess: (Int) -> Unit)  {
+    fun cleanExpiredUserManagerUsers(onSuccess: (Int) -> Unit, onError: (String) -> Unit = {})  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onSuccess(0) }
+                launch(Dispatchers.Main) { onError("غير متصل بالراوتر، لا يمكن تنظيف الكروت المنتهية") }
                 return@launch
             }
             val toRemove = _userManagerUsers.value.filter { !it.active || it.uptimeUsed.contains("expired", ignoreCase = true) }.map { it.username }
@@ -1775,9 +1775,14 @@ class MikroTikRepository(
             val host = _currentConnection.value?.host ?: ""
             if (nativeApi != null) {
                 val ok = nativeApi?.reboot() ?: false
-                insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل عبر المنفذ 8728", host)
-                disconnect()
-                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة تشغيل الراوتر بنجاح!") }
+                if (ok) {
+                    insertActivityLog("إعادة تشغيل", "تم إرسال أمر إعادة التشغيل عبر المنفذ 8728", host)
+                    disconnect()
+                    launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إعادة تشغيل الراوتر بنجاح!") }
+                } else {
+                    insertActivityLog("إعادة تشغيل", "فشل إرسال أمر إعادة التشغيل عبر المنفذ 8728", host)
+                    launch(Dispatchers.Main) { onError("فشل إرسال أمر إعادة التشغيل إلى الراوتر") }
+                }
                 return@launch
             }
             
@@ -1811,9 +1816,14 @@ class MikroTikRepository(
             val host = _currentConnection.value?.host ?: ""
             if (nativeApi != null) {
                 val ok = nativeApi?.shutdown() ?: false
-                insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف تشغيل الراوتر", host)
-                disconnect()
-                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                if (ok) {
+                    insertActivityLog("إيقاف تشغيل", "تم إرسال أمر إيقاف تشغيل الراوتر", host)
+                    disconnect()
+                    launch(Dispatchers.Main) { onSuccess("تم إرسال أمر إيقاف تشغيل الراوتر بنجاح!") }
+                } else {
+                    insertActivityLog("إيقاف تشغيل", "فشل إرسال أمر إيقاف التشغيل للراوتر", host)
+                    launch(Dispatchers.Main) { onError("فشل إرسال أمر إيقاف التشغيل إلى الراوتر") }
+                }
                 return@launch
             }
             

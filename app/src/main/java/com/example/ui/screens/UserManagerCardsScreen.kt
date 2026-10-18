@@ -716,9 +716,14 @@ fun UserManagerCardsScreen(
                                 DropdownMenuItem(
                                     text = { Text("تنظيف الكروت المنتهية", fontFamily = CairoFontFamily, fontSize = 12.sp) },
                                     onClick = {
-                                        viewModel.cleanExpiredUserManagerUsers { count ->
-                                            Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
-                                        }
+                                        viewModel.cleanExpiredUserManagerUsers(
+                                            onSuccess = { count ->
+                                                Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
+                                            },
+                                            onError = { err ->
+                                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                            }
+                                        )
                                         overflowMenuExpanded = false
                                     }
                                 )

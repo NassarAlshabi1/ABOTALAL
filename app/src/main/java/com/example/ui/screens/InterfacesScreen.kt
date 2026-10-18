@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.InterfaceStats
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -270,7 +271,7 @@ fun InterfacesScreen(
                                     },
                                     onError = { err ->
                                         runningCommand = false
-                                        // fallback showing toast
+                                        scope.launch { snackbarHostState.showSnackbar(err) }
                                     }
                                 )
                             },
