@@ -167,9 +167,11 @@ fun UserManagerCardsScreen(
             val matchesScope = when (selectedScope) {
                 "الكروت المفعلة (النشطة)" -> user.active
                 "الكروت غير المفعلة" -> !user.active
-                // The router has no textual "expired" status for user-manager cards — the
-                // disabled flag is the only reliable signal, same as cleanExpiredUserManagerUsers().
-                "الكروت المنتهية" -> !user.active
+                // Same compound signal as cleanExpiredUserManagerUsers(): disabled, or the
+                // router cleared the active profile (profileExpired) on a card that was
+                // actually used at least once.
+                "الكروت المنتهية" -> !user.active ||
+                    (user.profileExpired && user.uptimeUsed.isNotBlank() && user.uptimeUsed != "0s")
                 else -> true
             }
 

@@ -362,15 +362,18 @@ class MikroTikRepository(
                 }
                 val umUsers = umList.map {
                     val uname = it["name"] ?: it["username"] ?: ""
+                    val assignedProfile = it["profile"]
+                    val actualProfile = it["actual-profile"]
                     UserManagerUser(
                         username = uname,
                         password = it["password"] ?: uname,
-                        profile = it["actual-profile"] ?: it["profile"] ?: "default",
+                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
                         active = it["disabled"] != "true",
                         uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
                         downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
                         serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                        comment = it["comment"] ?: ""
+                        comment = it["comment"] ?: "",
+                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
                     )
                 }
                 if (umUsers.isNotEmpty()) {
@@ -533,15 +536,18 @@ class MikroTikRepository(
                     if (umList.isNotEmpty()) {
                         val umUsers = umList.map {
                             val uname = it["name"] ?: it["username"] ?: ""
+                            val assignedProfile = it["profile"]
+                            val actualProfile = it["actual-profile"]
                             UserManagerUser(
                                 username = uname,
                                 password = it["password"] ?: uname,
-                                profile = it["actual-profile"] ?: it["profile"] ?: "default",
+                                profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
                                 active = it["disabled"] != "true",
                                 uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
                                 downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
                                 serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                                comment = it["comment"] ?: ""
+                                comment = it["comment"] ?: "",
+                                profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
                             )
                         }
                         _userManagerUsers.value = umUsers
@@ -1389,7 +1395,7 @@ class MikroTikRepository(
                     runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to uid)) }
                 }
                 _userManagerUsers.value = _userManagerUsers.value.map {
-                    if (it.username == username) it.copy(profile = newProfile, active = true, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
+                    if (it.username == username) it.copy(profile = newProfile, active = true, profileExpired = false, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
                 }
                 insertActivityLog("تجديد كرت", "تم تجديد الكرت '$username' بالباقة '$newProfile'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
@@ -1713,10 +1719,16 @@ class MikroTikRepository(
                 launch(Dispatchers.Main) { onError("غير متصل بالراوتر، لا يمكن تنظيف الكروت المنتهية") }
                 return@launch
             }
-            // "uptimeUsed" is the raw duration the router reports (e.g. "15m", "1d00:00:00"),
-            // never the literal word "expired" — the router's only reliable expiry signal for
-            // a user-manager card is that it has been disabled (active == false).
-            val toRemove = _userManagerUsers.value.filter { !it.active }.map { it.username }
+            // Two independent, router-confirmed expiry signals:
+            // 1) disabled == true (admin manually disabled the card), or
+            // 2) profileExpired (router cleared "actual-profile" because the assigned
+            //    profile's validity/limit ran out — RouterOS v6 user-manager never flips
+            //    "disabled" by itself when this happens) combined with having actually
+            //    been used at least once, so a brand-new unused card is never swept up
+            //    by mistake while its profile activation is still pending.
+            val toRemove = _userManagerUsers.value.filter {
+                !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
+            }.map { it.username }
             var removed = 0
             val succeeded = mutableSetOf<String>()
             toRemove.forEach { u ->
