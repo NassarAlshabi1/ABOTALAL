@@ -17,9 +17,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CachedUserManagerProfile::class,
         CachedHotspotProfile::class,
         CachedRouterStats::class,
-        GeneratedBatchEntity::class
+        GeneratedBatchEntity::class,
+        ExpiredCardArchiveEntry::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,6 +28,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun activityLogDao(): ActivityLogDao
     abstract fun cacheDao(): CacheDao
     abstract fun generatedBatchDao(): GeneratedBatchDao
+    abstract fun expiredCardArchiveDao(): ExpiredCardArchiveDao
 
     companion object {
         private const val DB_NAME = "netcraft_db"
@@ -59,6 +61,30 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * REAL migration v4 → v5: adds the expired_card_archive table used by the
+         * "صيانة الكروت المنتهية" wizard's local financial-accounts migration step
+         * and by the Financial Accounts screen. No destructive rebuild.
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `expired_card_archive` (
+                        `id` TEXT NOT NULL,
+                        `routerHost` TEXT NOT NULL,
+                        `username` TEXT NOT NULL,
+                        `profile` TEXT NOT NULL,
+                        `price` REAL NOT NULL DEFAULT 0.0,
+                        `archivedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                Log.i("AppDatabase", "Migrated database v4 → v5 (expired_card_archive added)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -69,7 +95,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // Real migrations going forward. v1/v2 databases predate schema
                     // tracking (they were always rebuilt destructively), so only
                     // those two legacy versions keep the destructive fallback.
-                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigrationFrom(1, 2)
                     .build()
                 INSTANCE = instance

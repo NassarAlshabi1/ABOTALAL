@@ -863,148 +863,19 @@ fun UserManagerScreen(
         )
     }
 
-    // --- 8. Dialog: صيانة الكروت المنتهية (Maintenance) ---
+    // --- 8. Full-screen: صيانة الكروت المنتهية (9-step maintenance wizard,
+    // mirrors the reference MkCards flow — replaces the old single-dialog
+    // "clean now" tool with a step-by-step, individually-triggered sequence). ---
     if (showMaintenanceDialog) {
-        // Matches the criterion actually used by cleanExpiredUserManagerUsers() below:
-        // disabled cards, plus cards whose assigned profile ran out (profileExpired)
-        // and that have actually been used at least once.
-        val expiredUsers = remember(userManagerUsers) {
-            userManagerUsers.filter {
-                !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
-            }
-        }
-        var isRefreshing by remember { mutableStateOf(true) }
-        var isCleaning by remember { mutableStateOf(false) }
-        val deletingUsers = remember { mutableStateOf(setOf<String>()) }
-
-        // Pull a fresh copy from the router the moment the dialog opens instead of
-        // trusting whatever was last cached — "جلب" الكروت المنتهية الحقيقية، لا مجرد عدّها.
-        LaunchedEffect(showMaintenanceDialog) {
-            viewModel.refreshAllData()
-            isRefreshing = false
-        }
-
-        AlertDialog(
+        Dialog(
             onDismissRequest = { showMaintenanceDialog = false },
-            title = {
-                Text("صيانة الكروت المنتهية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "تقوم هذه الأداة بجلب وفحص الكروت التي انتهت صلاحيتها أو رصيدها أو جُعلت غير نشطة، مع إمكانية حذفها فرديًا أو كلها دفعة واحدة.",
-                        fontFamily = CairoFontFamily,
-                        fontSize = 13.sp
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFFEF3C7),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(10.dp)) {
-                            if (isRefreshing) {
-                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Color(0xFFB45309))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("جاري جلب الكروت من الراوتر...", fontFamily = CairoFontFamily, color = Color(0xFFB45309), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            } else {
-                                Text(
-                                    text = "تم العثور على ${expiredUsers.size} كرت منتهي أو غير نشط.",
-                                    fontFamily = CairoFontFamily,
-                                    color = Color(0xFFB45309),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-
-                    if (!isRefreshing && expiredUsers.isNotEmpty()) {
-                        LazyColumn(
-                            modifier = Modifier.heightIn(max = 240.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(expiredUsers, key = { it.username }) { user ->
-                                val isDeleting = user.username in deletingUsers.value
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(Color(0xFFF8FAFC), RoundedCornerShape(8.dp))
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(user.username, fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        Text(
-                                            text = if (!user.active) "معطّل" else "منتهي الباقة (${user.profile})",
-                                            fontFamily = CairoFontFamily,
-                                            fontSize = 11.sp,
-                                            color = Color(0xFF64748B)
-                                        )
-                                    }
-                                    if (isDeleting) {
-                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                    } else {
-                                        IconButton(onClick = {
-                                            deletingUsers.value = deletingUsers.value + user.username
-                                            viewModel.deleteUserManagerUser(
-                                                user.username,
-                                                onSuccess = { deletingUsers.value = deletingUsers.value - user.username },
-                                                onError = { err ->
-                                                    deletingUsers.value = deletingUsers.value - user.username
-                                                    feedbackMessage = err
-                                                }
-                                            )
-                                        }) {
-                                            Icon(Icons.Filled.Delete, contentDescription = "حذف", tint = Color(0xFFDC2626))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else if (!isRefreshing) {
-                        Text(
-                            "لا توجد كروت منتهية أو غير نشطة حاليًا.",
-                            fontFamily = CairoFontFamily,
-                            fontSize = 12.sp,
-                            color = Color(0xFF64748B)
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        isCleaning = true
-                        viewModel.cleanExpiredUserManagerUsers(
-                            onSuccess = { count ->
-                                isCleaning = false
-                                feedbackMessage = "تمت إزالة وتنظيف $count كرت منتهي بنجاح!"
-                                showMaintenanceDialog = false
-                            },
-                            onError = { err ->
-                                isCleaning = false
-                                feedbackMessage = err
-                                showMaintenanceDialog = false
-                            }
-                        )
-                    },
-                    enabled = !isCleaning && !isRefreshing && expiredUsers.isNotEmpty(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
-                ) {
-                    if (isCleaning) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
-                    } else {
-                        Text("تنظيف الكل الآن (${expiredUsers.size})", fontFamily = CairoFontFamily)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showMaintenanceDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            UserManagerMaintenanceWizardScreen(
+                viewModel = viewModel,
+                onBack = { showMaintenanceDialog = false }
+            )
+        }
     }
 
     // --- 9. Dialog: النسخ الاحتياطية (Backups) ---

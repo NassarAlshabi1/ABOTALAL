@@ -256,6 +256,35 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.restoreRouterBackup(fileName, onSuccess, onError)
     }
 
+    /* Expired-cards maintenance wizard (9 manual steps) */
+    fun archiveExpiredCardsLocally(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.archiveExpiredCardsLocally(onSuccess, onError)
+    }
+
+    fun disableHotspotForMaintenance(onSuccess: (List<String>) -> Unit, onError: (String) -> Unit) {
+        repository.disableHotspotForMaintenance(onSuccess, onError)
+    }
+
+    fun cleanStaleUserManagerSessions(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.cleanStaleUserManagerSessions(onSuccess, onError)
+    }
+
+    fun rebuildUserManagerLocalDatabase(onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.rebuildUserManagerLocalDatabase(onSuccess, onError)
+    }
+
+    fun rebuildUserManagerLocalRecords(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.rebuildUserManagerLocalRecords(onSuccess, onError)
+    }
+
+    fun restoreHotspotAfterMaintenance(disabledServerIds: List<String>, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.restoreHotspotAfterMaintenance(disabledServerIds, onSuccess, onError)
+    }
+
+    fun verifyHotspotAndRebootRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.verifyHotspotAndRebootRouter(onSuccess, onError)
+    }
+
     /* User Manager live sessions */
     fun fetchUserManagerSessions(onSuccess: (List<UserManagerSession>) -> Unit, onError: (String) -> Unit) {
         repository.fetchUserManagerSessions(onSuccess, onError)

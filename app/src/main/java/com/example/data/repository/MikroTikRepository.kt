@@ -2584,6 +2584,269 @@ class MikroTikRepository(
         }
     }
 
+    // ==========================================
+    // EXPIRED-CARDS MAINTENANCE WIZARD (9 manual steps, mirrors the reference
+    // "MkCards" flow): each step below is called independently by the UI, in
+    // order, and only moves the router/local state that step actually promises.
+    // ==========================================
+
+    private val expiredCardArchiveDao by lazy { AppDatabase.getDatabase(context).expiredCardArchiveDao() }
+
+    /** Step 1 — local-only: archives the cards currently matching the expired/
+     *  disabled criterion into the local "financial accounts" table, keyed by
+     *  router+username so re-running updates the same rows instead of
+     *  duplicating them. Makes no router call at all. */
+    fun archiveExpiredCardsLocally(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val host = _currentConnection.value?.host ?: ""
+            try {
+                val expired = _userManagerUsers.value.filter {
+                    !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
+                }
+                if (expired.isNotEmpty()) {
+                    val priceByProfile = _userManagerProfiles.value.associate { it.name to it.price }
+                    val now = System.currentTimeMillis()
+                    val entries = expired.map { u ->
+                        ExpiredCardArchiveEntry(
+                            id = "$host|${u.username}",
+                            routerHost = host,
+                            username = u.username,
+                            profile = u.profile,
+                            price = priceByProfile[u.profile] ?: 0.0,
+                            archivedAt = now
+                        )
+                    }
+                    expiredCardArchiveDao.upsertAll(entries)
+                }
+                insertActivityLog("صيانة الكروت", "تم ترحيل ${expired.size} كرت منتهي إلى الحسابات المالية محليًا", host)
+                launch(Dispatchers.Main) { onSuccess(expired.size) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل الترحيل المحلي للحسابات المالية") }
+            }
+        }
+    }
+
+    /** Step 2 — disables every hotspot server on the router (/ip/hotspot/set
+     *  disabled=yes) and returns the .ids that were actually flipped (i.e. were
+     *  enabled beforehand), so step 8 can restore exactly those and nothing
+     *  else. NOTE: this disables ALL hotspot servers — it cannot reliably tell
+     *  which one (if any) the admin's own connection depends on, so there is
+     *  no selective "keep my own session's hotspot up" behavior here. */
+    fun disableHotspotForMaintenance(onSuccess: (List<String>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val servers = api.executeStrict("/ip/hotspot/print")
+                val toDisable = servers.filter { it["disabled"] != "true" }
+                toDisable.forEach { srv ->
+                    val id = srv[".id"] ?: return@forEach
+                    api.executeStrict("/ip/hotspot/set", mapOf("numbers" to id, "disabled" to "yes"))
+                }
+                insertActivityLog("صيانة الكروت", "تم تعطيل ${toDisable.size} سيرفر هوتسبوت مؤقتًا قبل حذف الكروت المنتهية", host)
+                launch(Dispatchers.Main) { onSuccess(toDisable.mapNotNull { it[".id"] }) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل تعطيل الهوتسبوت") }
+            }
+        }
+    }
+
+    /** Step 5 — removes user-manager sessions on the router that reference a
+     *  username no longer present in the current user list (orphaned session
+     *  rows left behind by deleted cards). Real router-side cleanup, scoped to
+     *  $umBase/session (v6 & v7), not a guess at an undocumented command. */
+    fun cleanStaleUserManagerSessions(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val knownUsers = _userManagerUsers.value.map { it.username }.toSet()
+                var sessions: List<Map<String, String>> = emptyList()
+                for (base in umBases) {
+                    try {
+                        sessions = api.executeStrict("$base/session/print")
+                        break
+                    } catch (_: Exception) {}
+                }
+                val orphaned = sessions.filter { s ->
+                    val user = s["user"] ?: s["name"] ?: s["username"]
+                    user != null && user !in knownUsers
+                }
+                var removed = 0
+                orphaned.forEach { s ->
+                    val id = s[".id"] ?: return@forEach
+                    try {
+                        umWrite(api, "session/remove", mapOf("numbers" to id))
+                        removed++
+                    } catch (_: Exception) {}
+                }
+                insertActivityLog("صيانة الكروت", "تم تنظيف $removed جلسة يتيمة من سجلات User Manager على الراوتر", host)
+                launch(Dispatchers.Main) { onSuccess(removed) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل تنظيف سجلات User Manager") }
+            }
+        }
+    }
+
+    /** Step 6 — rebuilds the app's own local cache of the User Manager
+     *  profiles+users database from the router's current (post-deletion)
+     *  state. There is no documented RouterOS "rebuild database" command —
+     *  this re-syncs the LOCAL copy (StateFlow + Room cache), which is the
+     *  only "database" this app can safely rebuild without guessing at an
+     *  undocumented router-side command. Runs inline (not via the fire-and-
+     *  forget refreshData()/fetchRealNativeData()) so onSuccess only fires
+     *  once the resync has actually finished. */
+    fun rebuildUserManagerLocalDatabase(onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val conn = _currentConnection.value
+            if (api == null || conn == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                var umProfList = api.execute("$umBase/profile/print")
+                var isV6UM = umBase == "/tool/user-manager"
+                if (umProfList.isEmpty() && rosMajor == 0) {
+                    val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
+                    umProfList = api.execute("$alt/profile/print")
+                    if (umProfList.isNotEmpty()) {
+                        isV6UM = !isV6UM
+                        rosMajor = if (isV6UM) 6 else 7
+                    }
+                }
+                val limitations = if (isV6UM) {
+                    api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
+                } else {
+                    api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
+                }
+                val umProfiles = umProfList.map { p ->
+                    val name = p["name"] ?: p["name-for-users"] ?: "default"
+                    val lim = limitations[name] ?: emptyMap()
+                    UserManagerProfile(
+                        name = name,
+                        validity = p["validity"] ?: p["starts-at"] ?: "30d",
+                        price = p["price"]?.toDoubleOrNull() ?: 0.0,
+                        downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
+                        uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
+                        templateName = name,
+                        sharedUsers = p["override-shared-users"]?.toIntOrNull() ?: 1
+                    )
+                }
+                if (umProfiles.isNotEmpty()) {
+                    _userManagerProfiles.value = umProfiles
+                    cacheDao.insertUserManagerProfiles(umProfiles.map {
+                        CachedUserManagerProfile(
+                            name = it.name, routerHost = conn.host, validity = it.validity, price = it.price,
+                            sharedUsers = it.sharedUsers, downloadLimit = it.downloadLimit,
+                            uptimeLimit = it.uptimeLimit, templateName = it.templateName
+                        )
+                    })
+                }
+
+                var umList = api.execute("$umBase/user/print")
+                if (umList.isEmpty() && rosMajor == 0) {
+                    umList = api.execute(if (umBase == "/tool/user-manager") "/user-manager/user/print" else "/tool/user-manager/user/print")
+                }
+                val umUsers = umList.map {
+                    val uname = it["name"] ?: it["username"] ?: ""
+                    val assignedProfile = it["profile"]
+                    val actualProfile = it["actual-profile"]
+                    UserManagerUser(
+                        username = uname,
+                        password = it["password"] ?: uname,
+                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
+                        active = it["disabled"] != "true",
+                        uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
+                        downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
+                        serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
+                        comment = it["comment"] ?: "",
+                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
+                    )
+                }
+                _userManagerUsers.value = umUsers
+                if (umUsers.isNotEmpty()) {
+                    cacheDao.insertUserManagerUsers(umUsers.map {
+                        CachedUserManagerUser(
+                            username = it.username, routerHost = conn.host, password = it.password,
+                            profile = it.profile, active = it.active, uptimeUsed = it.uptimeUsed, downloadLimit = it.downloadLimit
+                        )
+                    })
+                }
+
+                insertActivityLog("صيانة الكروت", "تمت إعادة بناء قاعدة بيانات User Manager المحلية من الراوتر (${umUsers.size} مستخدم، ${umProfiles.size} باقة)", conn.host)
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إعادة بناء قاعدة User Manager") }
+            }
+        }
+    }
+
+    /** Step 7 — rebuilds the local user-manager *sessions* store by re-reading
+     *  $umBase/session/print (reflects the cleanup step 5 just did on the
+     *  router). Distinct from step 6, which rebuilds the profiles/users cache. */
+    fun rebuildUserManagerLocalRecords(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        fetchUserManagerSessions(
+            onSuccess = { sessions ->
+                insertActivityLog("صيانة الكروت", "تمت إعادة بناء مخزن سجلات User Manager المحلي (${sessions.size} جلسة)", _currentConnection.value?.host ?: "")
+                onSuccess(sessions.size)
+            },
+            onError = onError
+        )
+    }
+
+    /** Step 8 — re-enables exactly the hotspot servers step 2 disabled. */
+    fun restoreHotspotAfterMaintenance(disabledServerIds: List<String>, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                disabledServerIds.forEach { id ->
+                    api.executeStrict("/ip/hotspot/set", mapOf("numbers" to id, "disabled" to "no"))
+                }
+                insertActivityLog("صيانة الكروت", "تمت إعادة تفعيل ${disabledServerIds.size} سيرفر هوتسبوت بعد التنظيف", host)
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إعادة تفعيل الهوتسبوت") }
+            }
+        }
+    }
+
+    /** Step 9 — verifies no hotspot server was left disabled by this wizard,
+     *  then sends the final router reboot (reuses rebootRouter()'s resilient
+     *  connection-dropped handling). */
+    fun verifyHotspotAndRebootRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val stillDisabled = api.executeStrict("/ip/hotspot/print").count { it["disabled"] == "true" }
+                if (stillDisabled > 0) {
+                    insertActivityLog("صيانة الكروت", "تحذير: $stillDisabled سيرفر هوتسبوت ما زال معطّلًا قبل إعادة التشغيل النهائية", host)
+                }
+            } catch (_: Exception) {
+                // Verification is best-effort — still proceed to reboot below.
+            }
+            launch(Dispatchers.Main) { rebootRouter(onSuccess, onError) }
+        }
+    }
+
     /* =========================================
        TOOLS & SERVICES REPOSITORY EXTENSIONS
        ========================================= */
