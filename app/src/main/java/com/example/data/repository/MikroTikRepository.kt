@@ -1566,12 +1566,23 @@ class MikroTikRepository(
                 // ROS v6 activates a profile on a user via create-and-activate-profile;
                 // ROS v7 accepts a plain set. Try v6 path first, then v7 set.
                 var activated = false
+                var v6Err: Exception? = null
                 try {
                     umWrite(api, "user/create-and-activate-profile", mapOf("numbers" to uid, "profile" to newProfile, "customer" to umResolveCustomer(api)))
                     activated = true
-                } catch (_: Exception) {
-                    umWrite(api, "user/set", mapOf("numbers" to uid, "profile" to newProfile, "disabled" to "no"))
-                    activated = true
+                } catch (e: Exception) {
+                    v6Err = e
+                }
+                if (!activated) {
+                    try {
+                        umWrite(api, "user/set", mapOf("numbers" to uid, "profile" to newProfile, "disabled" to "no"))
+                        activated = true
+                    } catch (e: Exception) {
+                        // Neither shape worked — surface the v6-style error since it's the
+                        // first one tried and usually the more specific of the two on a
+                        // real v6 router (e.g. "no such item" for a bad profile name).
+                        throw if (isNoSuchCommand(v6Err)) e else (v6Err ?: e)
+                    }
                 }
                 if (resetUptime && activated) {
                     runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to uid)) }
@@ -1617,28 +1628,35 @@ class MikroTikRepository(
         }
     }
 
-    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit)  {
+    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit, onError: (String) -> Unit = {})  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onSuccess(0) }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
-            val toToggle = usernames.toSet()
             val succeeded = mutableSetOf<String>()
             var done = 0
+            var firstErr: String? = null
             usernames.forEach { u ->
                 try {
                     umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, u) ?: u), "disabled" to if (active) "no" else "yes"))
                     done++
                     succeeded.add(u)
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    if (firstErr == null) firstErr = e.message
+                }
             }
-            _userManagerUsers.value = _userManagerUsers.value.map {
-                if (it.username in succeeded) it.copy(active = active) else it
+            if (done > 0) {
+                _userManagerUsers.value = _userManagerUsers.value.map {
+                    if (it.username in succeeded) it.copy(active = active) else it
+                }
             }
             insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} $done كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess(done) }
+            launch(Dispatchers.Main) {
+                if (done == usernames.size) onSuccess(done)
+                else onError("تم ${if (active) "تفعيل" else "تعطيل"} $done من ${usernames.size}. خطأ: ${firstErr ?: "غير معروف"}")
+            }
         }
     }
 
@@ -1688,11 +1706,14 @@ class MikroTikRepository(
                     if (profile.downloadLimit.isNotBlank() && profile.downloadLimit != "unlimited") {
                         limParams["download-limit"] = profile.downloadLimit.trim()
                     }
-                    umWrite(api, "limitation/add", limParams)
+                    // Both limitation and profile-limitation are nested under /profile
+                    // on ROS v6 (matches the profile/profile-limitation/print path used
+                    // for reading above) — NOT top-level /tool/user-manager/limitation.
+                    umWrite(api, "profile/limitation/add", limParams)
 
                     // Link profile <-> limitation using profile=/limitation= fields
                     // (NOT limitations[name] — that form does not exist in RouterOS).
-                    umWrite(api, "profile-limitation/add", mapOf(
+                    umWrite(api, "profile/profile-limitation/add", mapOf(
                         "profile" to profile.name,
                         "limitation" to "${profile.name}-lim"
                     ))
@@ -1724,20 +1745,62 @@ class MikroTikRepository(
                 return@launch
             }
             try {
+                var matchedBase: String? = null
                 val pid = run {
                     var id: String? = null
                     for (base in listOf("/user-manager", "/tool/user-manager")) {
                         try {
                             id = api.execute("$base/profile/print").firstOrNull { it["name"] == oldName }?.get(".id")
-                            if (id != null) break
+                            if (id != null) { matchedBase = base; break }
                         } catch (_: Exception) {}
                     }
                     id ?: oldName
                 }
-                val params = mutableMapOf("numbers" to pid, "name" to updatedProfile.name)
-                if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
-                if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
-                umWrite(api, "profile/set", params)
+                // Fall back to the connection-detected base if the profile lookup above
+                // didn't find a match on either menu (e.g. renaming right after creation).
+                val isV6 = (matchedBase ?: umBase) == "/tool/user-manager"
+                if (isV6) {
+                    // ROS v6 /tool/user-manager: validity/price are not profile attributes —
+                    // they live on a separate limitation object linked via profile-limitation,
+                    // exactly as created in addUserManagerProfile(). Update both in place.
+                    umWrite(api, "profile/set", mapOf(
+                        "numbers" to pid,
+                        "name" to updatedProfile.name,
+                        "name-for-users" to updatedProfile.name,
+                        "override-shared-users" to updatedProfile.sharedUsers.toString()
+                    ))
+                    val links = api.execute("/tool/user-manager/profile/profile-limitation/print")
+                    val link = links.firstOrNull { it["profile"] == oldName || it["profile"] == updatedProfile.name }
+                    val limitations = mutableMapOf<String, String>()
+                    val duration = Regex("^(\\d+)([smhdw])$", RegexOption.IGNORE_CASE).find(updatedProfile.validity.trim())
+                    if (duration != null) limitations["uptime-limit"] = updatedProfile.validity.trim()
+                    if (updatedProfile.downloadLimit.isNotBlank() && updatedProfile.downloadLimit != "unlimited") {
+                        limitations["download-limit"] = updatedProfile.downloadLimit.trim()
+                    }
+                    if (link != null) {
+                        val limId = link["limitation"]
+                        val limitationRow = limId?.let { lim ->
+                            api.execute("/tool/user-manager/profile/limitation/print").firstOrNull { it["name"] == lim }
+                        }
+                        if (limitationRow != null && limitations.isNotEmpty()) {
+                            umWrite(api, "profile/limitation/set", limitations + mapOf("numbers" to (limitationRow[".id"] ?: limId!!)))
+                        }
+                        if (link["profile"] != updatedProfile.name) {
+                            umWrite(api, "profile/profile-limitation/set", mapOf("numbers" to (link[".id"] ?: ""), "profile" to updatedProfile.name))
+                        }
+                    } else if (limitations.isNotEmpty()) {
+                        val limName = "${updatedProfile.name}-lim"
+                        umWrite(api, "profile/limitation/add", limitations + mapOf("name" to limName))
+                        umWrite(api, "profile/profile-limitation/add", mapOf("profile" to updatedProfile.name, "limitation" to limName))
+                    }
+                } else {
+                    // ROS v7: validity and price are direct /user-manager/profile attributes.
+                    val params = mutableMapOf("numbers" to pid, "name" to updatedProfile.name)
+                    if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
+                    if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
+                    if (updatedProfile.sharedUsers > 1) params["override-shared-users"] = updatedProfile.sharedUsers.toString()
+                    umWrite(api, "profile/set", params)
+                }
                 _userManagerProfiles.value = _userManagerProfiles.value.map {
                     if (it.name == oldName) updatedProfile else it
                 }
@@ -1766,6 +1829,23 @@ class MikroTikRepository(
                         } catch (_: Exception) {}
                     }
                     id ?: profileName
+                }
+                // On ROS v6 the profile's limitation + profile-limitation link are separate
+                // objects (see addUserManagerProfile) — remove them too so they don't pile
+                // up as orphans on the router after their owning profile is gone.
+                if (umBase == "/tool/user-manager") {
+                    runCatching {
+                        val link = api.execute("/tool/user-manager/profile/profile-limitation/print")
+                            .firstOrNull { it["profile"] == profileName }
+                        if (link != null) {
+                            umWrite(api, "profile/profile-limitation/remove", mapOf("numbers" to (link[".id"] ?: "")))
+                            val limName = link["limitation"]
+                            val limId = limName?.let { lim ->
+                                api.execute("/tool/user-manager/profile/limitation/print").firstOrNull { it["name"] == lim }?.get(".id")
+                            }
+                            if (limId != null) umWrite(api, "profile/limitation/remove", mapOf("numbers" to limId))
+                        }
+                    }
                 }
                 umWrite(api, "profile/remove", mapOf("numbers" to pid))
                 _userManagerProfiles.value = _userManagerProfiles.value.filter { it.name != profileName }
@@ -1949,18 +2029,24 @@ class MikroTikRepository(
             }.map { it.username }
             var removed = 0
             val succeeded = mutableSetOf<String>()
+            var firstErr: String? = null
             toRemove.forEach { u ->
                 try {
                     umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, u) ?: u)))
                     removed++
                     succeeded.add(u)
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    if (firstErr == null) firstErr = e.message
+                }
             }
             if (removed > 0) {
                 _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in succeeded }
             }
             insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removed كرت منتهي", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess(removed) }
+            launch(Dispatchers.Main) {
+                if (firstErr == null) onSuccess(removed)
+                else onError("نُظّف $removed من ${toRemove.size} كرت منتهي. خطأ: $firstErr")
+            }
         }
     }
 

@@ -311,7 +311,7 @@ class NativeApiIntegrationTest {
             val usernames = repo.userManagerUsers.value.take(2).map { it.username }
             var toggled = -1
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-            repo.bulkToggleUserManagerUsers(usernames, active = false) { count -> toggled = count }
+            repo.bulkToggleUserManagerUsers(usernames, active = false, onSuccess = { count -> toggled = count })
             var wait = System.currentTimeMillis() + 10_000
             while (toggled < 0 && System.currentTimeMillis() < wait) {
                 org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()

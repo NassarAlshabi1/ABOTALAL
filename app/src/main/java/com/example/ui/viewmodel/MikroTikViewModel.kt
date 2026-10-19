@@ -196,8 +196,8 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.bulkDeleteUserManagerUsers(usernames, onSuccess, onError)
     }
 
-    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit) {
-        repository.bulkToggleUserManagerUsers(usernames, active, onSuccess)
+    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit, onError: (String) -> Unit = {}) {
+        repository.bulkToggleUserManagerUsers(usernames, active, onSuccess, onError)
     }
 
     fun addUserManagerProfile(profile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {

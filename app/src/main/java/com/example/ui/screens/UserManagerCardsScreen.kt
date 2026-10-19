@@ -569,10 +569,17 @@ fun UserManagerCardsScreen(
                                     if (selected.isEmpty()) {
                                         Toast.makeText(context, "يرجى تحديد كرت واحد على الأقل للتفعيل", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        viewModel.bulkToggleUserManagerUsers(selected.toList(), active = true) { count ->
-                                            Toast.makeText(context, "تم تفعيل $count كرت بنجاح", Toast.LENGTH_SHORT).show()
-                                            selectedUsernames.value = emptySet()
-                                        }
+                                        viewModel.bulkToggleUserManagerUsers(
+                                            selected.toList(),
+                                            active = true,
+                                            onSuccess = { count ->
+                                                Toast.makeText(context, "تم تفعيل $count كرت بنجاح", Toast.LENGTH_SHORT).show()
+                                                selectedUsernames.value = emptySet()
+                                            },
+                                            onError = { message ->
+                                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                            }
+                                        )
                                     }
                                 }
                                 .testTag("cards_activate_button")
