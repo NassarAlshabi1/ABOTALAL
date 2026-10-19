@@ -10,6 +10,7 @@ import com.example.data.local.GeneratedBatchEntity
 import com.example.data.local.RouterConnection
 import com.example.data.model.HotspotProfile
 import com.example.data.model.HotspotUser
+import com.example.data.model.RouterBackupFile
 import com.example.data.model.RouterLogEntry
 import com.example.data.model.UserManagerProfile
 import com.example.data.model.UserManagerSession
@@ -235,6 +236,24 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     fun backupUserManagerDatabase(onSuccess: (String) -> Unit, onError: (String) -> Unit = {}) {
         repository.backupUserManagerDatabase(onSuccess, onError)
+    }
+
+    /* Router configuration backups (full system config — distinct from the User
+     * Manager database backup above and from the MikroTik Cloud backup feature) */
+    fun fetchRouterBackups(onSuccess: (List<RouterBackupFile>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchRouterBackups(onSuccess, onError)
+    }
+
+    fun createRouterBackup(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.createRouterBackup(onSuccess, onError)
+    }
+
+    fun deleteRouterBackup(fileName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.deleteRouterBackup(fileName, onSuccess, onError)
+    }
+
+    fun restoreRouterBackup(fileName: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.restoreRouterBackup(fileName, onSuccess, onError)
     }
 
     /* User Manager live sessions */

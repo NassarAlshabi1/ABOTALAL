@@ -2478,6 +2478,112 @@ class MikroTikRepository(
         }
     }
 
+    // ==========================================
+    // ROUTER CONFIGURATION BACKUPS (/system/backup/*, /file/*)
+    // Full system config backups, distinct from the User Manager database
+    // backup above and from the MikroTik Cloud backup feature (CloudScreen).
+    // ==========================================
+
+    /** Lists the router's own local system backups: real /file/print rows whose
+     *  name ends in ".backup" (what /system/backup/save produces). */
+    fun fetchRouterBackups(onSuccess: (List<RouterBackupFile>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val files = api.executeStrict("/file/print")
+                    .filter { (it["name"] ?: "").endsWith(".backup") }
+                    .map {
+                        RouterBackupFile(
+                            name = it["name"] ?: "",
+                            sizeBytes = it["size"]?.toLongOrNull() ?: 0L,
+                            time = it["creation-time"] ?: ""
+                        )
+                    }
+                    .sortedByDescending { it.time }
+                launch(Dispatchers.Main) { onSuccess(files) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل جلب قائمة النسخ الاحتياطية من الراوتر") }
+            }
+        }
+    }
+
+    /** Creates a new local system backup on the router via /system/backup/save. */
+    fun createRouterBackup(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            val name = "netcraft-${System.currentTimeMillis() / 1000}"
+            try {
+                api.executeStrict("/system/backup/save", mapOf("name" to name))
+                insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية جديدة لإعدادات الراوتر: $name.backup", host)
+                launch(Dispatchers.Main) { onSuccess("$name.backup") }
+            } catch (e: Exception) {
+                insertActivityLog("نسخ احتياطي", "فشل إنشاء النسخة الاحتياطية: ${e.message}", host)
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إنشاء النسخة الاحتياطية على الراوتر") }
+            }
+        }
+    }
+
+    /** Permanently deletes one of the router's own local backup files. */
+    fun deleteRouterBackup(fileName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val id = api.executeStrict("/file/print").firstOrNull { it["name"] == fileName }?.get(".id")
+                    ?: throw java.io.IOException("الملف '$fileName' غير موجود على الراوتر")
+                api.executeStrict("/file/remove", mapOf("numbers" to id))
+                insertActivityLog("نسخ احتياطي", "تم حذف النسخة الاحتياطية: $fileName", host)
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل حذف النسخة الاحتياطية") }
+            }
+        }
+    }
+
+    /** Restores the router's configuration from one of its own local backup files
+     *  via /system/backup/load. This makes the router reload its config and
+     *  reboot — mirrors rebootRouter()'s resilient handling of the connection
+     *  dropping before a reply arrives, since the router goes down mid-command. */
+    fun restoreRouterBackup(fileName: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                api.executeStrict("/system/backup/load", mapOf("name" to fileName))
+                insertActivityLog("استعادة نسخة احتياطية", "تم إرسال أمر استعادة النسخة الاحتياطية '$fileName' — الراوتر سيعيد تشغيل نفسه بالإعدادات المستعادة", host)
+                disconnect()
+                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر الاستعادة بنجاح — الراوتر سيعيد تشغيل نفسه الآن بالإعدادات المستعادة") }
+            } catch (e: Exception) {
+                val msg = (e.message ?: "").lowercase()
+                if (msg.contains("reset") || msg.contains("econnreset") || msg.contains("closed") || msg.contains("broken pipe")) {
+                    insertActivityLog("استعادة نسخة احتياطية", "أُرسل أمر الاستعادة وانقطع الاتصال (الراوتر يعيد التشغيل بالإعدادات المستعادة)", host)
+                    disconnect()
+                    launch(Dispatchers.Main) { onSuccess("تم إرسال أمر الاستعادة — انقطع الاتصال بالراوتر (دليل على بدء إعادة التشغيل بالإعدادات المستعادة)") }
+                } else {
+                    insertActivityLog("استعادة نسخة احتياطية", "فشل إرسال أمر الاستعادة: ${e.message}", host)
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل استعادة النسخة الاحتياطية على الراوتر") }
+                }
+            }
+        }
+    }
+
     /* =========================================
        TOOLS & SERVICES REPOSITORY EXTENSIONS
        ========================================= */
