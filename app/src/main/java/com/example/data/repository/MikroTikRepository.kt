@@ -2658,7 +2658,11 @@ class MikroTikRepository(
     /** Step 5 — removes user-manager sessions on the router that reference a
      *  username no longer present in the current user list (orphaned session
      *  rows left behind by deleted cards). Real router-side cleanup, scoped to
-     *  $umBase/session (v6 & v7), not a guess at an undocumented command. */
+     *  $umBase/session (v6 & v7). On v6 this is now complemented by the real,
+     *  documented `/tool/user-manager/database/clear-log` command, which
+     *  clears the User Manager's accounting/usage log on the router — a
+     *  separate table from sessions, so both run rather than one replacing
+     *  the other. */
     fun cleanStaleUserManagerSessions(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             val api = nativeApi
@@ -2688,7 +2692,19 @@ class MikroTikRepository(
                         removed++
                     } catch (_: Exception) {}
                 }
-                insertActivityLog("صيانة الكروت", "تم تنظيف $removed جلسة يتيمة من سجلات User Manager على الراوتر", host)
+                var logCleared = false
+                if (umBase == "/tool/user-manager") {
+                    try {
+                        api.executeStrict("/tool/user-manager/database/clear-log")
+                        logCleared = true
+                    } catch (_: Exception) {
+                        // Non-fatal: command may be unsupported on this build or the
+                        // log may already be empty — orphaned-session cleanup above
+                        // still ran and succeeded independently.
+                    }
+                }
+                val note = if (logCleared) " وتم تفريغ سجل الاستخدام على الراوتر (database/clear-log)" else ""
+                insertActivityLog("صيانة الكروت", "تم تنظيف $removed جلسة يتيمة من سجلات User Manager على الراوتر$note", host)
                 launch(Dispatchers.Main) { onSuccess(removed) }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { onError(e.message ?: "فشل تنظيف سجلات User Manager") }
@@ -2696,14 +2712,18 @@ class MikroTikRepository(
         }
     }
 
-    /** Step 6 — rebuilds the app's own local cache of the User Manager
-     *  profiles+users database from the router's current (post-deletion)
-     *  state. There is no documented RouterOS "rebuild database" command —
-     *  this re-syncs the LOCAL copy (StateFlow + Room cache), which is the
-     *  only "database" this app can safely rebuild without guessing at an
-     *  undocumented router-side command. Runs inline (not via the fire-and-
-     *  forget refreshData()/fetchRealNativeData()) so onSuccess only fires
-     *  once the resync has actually finished. */
+    /** Step 6 — on v6, first runs the real, documented router-side command
+     *  `/tool/user-manager/database/rebuild`, which compacts/rebuilds the
+     *  User Manager database on the router itself (MikroTik recommends
+     *  running it after deleting unused users and clearing logs — exactly
+     *  the order steps 4→5→6 already follow). That command can take a while
+     *  and the router may not answer while it runs, so a read timeout here
+     *  is treated as "sent and still running," not a failure. Either way,
+     *  this then re-syncs the app's own local cache of the User Manager
+     *  profiles+users database (StateFlow + Room) from the router's current
+     *  (post-deletion) state. Runs inline (not via the fire-and-forget
+     *  refreshData()/fetchRealNativeData()) so onSuccess only fires once the
+     *  resync has actually finished. */
     fun rebuildUserManagerLocalDatabase(onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             val api = nativeApi
@@ -2711,6 +2731,19 @@ class MikroTikRepository(
             if (api == null || conn == null) {
                 launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
+            }
+            var rebuildNote = ""
+            if (umBase == "/tool/user-manager") {
+                try {
+                    api.executeStrict("/tool/user-manager/database/rebuild")
+                    rebuildNote = " وتمت إعادة بناء قاعدة البيانات على الراوتر (database/rebuild)"
+                } catch (e: java.net.SocketTimeoutException) {
+                    rebuildNote = " — أُرسل أمر إعادة البناء database/rebuild للراوتر (قد يستغرق دون رد فوري)"
+                } catch (e: Exception) {
+                    // Non-fatal: continue to resync the local cache even if the
+                    // router-side rebuild command failed/unsupported on this build.
+                    rebuildNote = " — تعذّر تنفيذ database/rebuild على الراوتر: ${e.message}"
+                }
             }
             try {
                 var umProfList = api.execute("$umBase/profile/print")
@@ -2782,7 +2815,7 @@ class MikroTikRepository(
                     })
                 }
 
-                insertActivityLog("صيانة الكروت", "تمت إعادة بناء قاعدة بيانات User Manager المحلية من الراوتر (${umUsers.size} مستخدم، ${umProfiles.size} باقة)", conn.host)
+                insertActivityLog("صيانة الكروت", "تمت إعادة بناء قاعدة بيانات User Manager المحلية من الراوتر (${umUsers.size} مستخدم، ${umProfiles.size} باقة)$rebuildNote", conn.host)
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { onError(e.message ?: "فشل إعادة بناء قاعدة User Manager") }
