@@ -51,7 +51,10 @@ data class UserManagerUser(
 data class UserManagerProfile(
     val name: String,
     val validity: String = "30d",
-    val price: Double = 0.0,
+    // Whole currency units (e.g. 10 = 10 ر.س) — matches GeneratedBatchEntity
+    // .pricePerCard and avoids float rounding drift in financial totals.
+    // Fractional pricing isn't used in this app's deployments.
+    val price: Int = 0,
     val sharedUsers: Int = 1,
     val downloadLimit: String = "unlimited",
     val uptimeLimit: String = "unlimited",

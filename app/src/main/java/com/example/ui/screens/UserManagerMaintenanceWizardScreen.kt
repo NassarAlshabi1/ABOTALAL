@@ -108,6 +108,10 @@ fun UserManagerMaintenanceWizardScreen(
     val messages = remember { mutableStateListOf(*Array<String?>(9) { null }) }
     var runningIndex by remember { mutableStateOf(-1) }
     var disabledHotspotIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Steps 3 (delete expired cards) and 8 (reboot router) are destructive and
+    // irreversible — unlike the other 7 steps they require an explicit
+    // confirmation dialog before executeStep() actually runs.
+    var pendingConfirmIndex by remember { mutableStateOf<Int?>(null) }
 
     fun setStatus(index: Int, status: WizardStepStatus, message: String? = null) {
         statuses[index] = status
@@ -182,6 +186,52 @@ fun UserManagerMaintenanceWizardScreen(
                 )
             }
         }
+    }
+
+    fun requestStep(index: Int) {
+        if (index == 3 || index == 8) {
+            pendingConfirmIndex = index
+        } else {
+            executeStep(index)
+        }
+    }
+
+    pendingConfirmIndex?.let { idx ->
+        AlertDialog(
+            onDismissRequest = { pendingConfirmIndex = null },
+            title = {
+                Text(
+                    if (idx == 3) "تأكيد حذف الكروت المنتهية" else "تأكيد إعادة تشغيل الراوتر",
+                    fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    if (idx == 3) "سيتم حذف $expiredCount كرت منتهي من الراوتر بشكل نهائي ولا يمكن التراجع عن هذا الإجراء. هل تريد المتابعة؟"
+                    else "سيتم إرسال أمر إعادة تشغيل الراوتر فوراً وسينقطع الاتصال لفترة قصيرة. هل تريد المتابعة؟",
+                    fontFamily = CairoFontFamily, fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingConfirmIndex = null
+                    executeStep(idx)
+                }) {
+                    Text(
+                        if (idx == 3) "حذف" else "إعادة تشغيل",
+                        color = Color(0xFFF87171), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingConfirmIndex = null }) {
+                    Text("إلغاء", fontFamily = CairoFontFamily)
+                }
+            },
+            containerColor = cardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color(0xFFCBD5E1)
+        )
     }
 
     Scaffold(
@@ -277,7 +327,7 @@ fun UserManagerMaintenanceWizardScreen(
                         Spacer(modifier = Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Button(
-                                onClick = { executeStep(index) },
+                                onClick = { requestStep(index) },
                                 enabled = runningIndex == -1 && status != WizardStepStatus.RUNNING,
                                 colors = ButtonDefaults.buttonColors(containerColor = step.color, contentColor = Color(0xFF0B1220)),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)

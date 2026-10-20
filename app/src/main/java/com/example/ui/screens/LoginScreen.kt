@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -64,7 +66,7 @@ fun LoginScreen(
     // Active Tab: 0 = بيانات الدخول, 1 = الراوترات المسجلة
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    // Connection Mode: 0 = عنوان IP, 1 = كلاود Cloud, 2 = رابط Domain
+    // Connection Mode: 0 = عنوان IP, 1 = كلاود Cloud, 2 = رابط Domain, 3 = L2TP VPN عن بعد
     var connectionMode by remember { mutableIntStateOf(0) }
 
     // Input States
@@ -72,6 +74,8 @@ fun LoginScreen(
     var routerCloudDns by remember { mutableStateOf("") }
     var routerDomain by remember { mutableStateOf("") }
     var routerPort by remember { mutableStateOf("8728") }
+    var vpnServerLink by remember { mutableStateOf("") }
+    var vpnPort by remember { mutableStateOf("1701") }
     var routerUser by remember { mutableStateOf("") }
     var routerPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -115,6 +119,32 @@ fun LoginScreen(
     var showAddRouterDialog by remember { mutableStateOf(false) }
     var deleteConfirmRouter by remember { mutableStateOf<RouterConnection?>(null) }
     var showBackupRestoreDialog by remember { mutableStateOf(false) }
+
+    // Resolves the active connection-mode inputs into (host, port) shared by
+    // the "اختبار الاتصال" and "تسجيل الدخول" buttons on both tabs.
+    fun resolveTarget(): Pair<String, Int> {
+        val targetRaw = when (connectionMode) {
+            0 -> routerHost.trim()
+            1 -> {
+                val raw = routerCloudDns.trim()
+                if (raw.isNotEmpty() && !raw.contains(".") && !raw.contains(":")) {
+                    "$raw.sn.mynetname.net"
+                } else {
+                    raw
+                }
+            }
+            3 -> vpnServerLink.trim()
+            else -> routerDomain.trim()
+        }
+        val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
+        val portField = if (connectionMode == 3) vpnPort else routerPort
+        val defaultPort = if (connectionMode == 3) 1701 else 8728
+        return Pair(cleanHostStr, parsedPort ?: (portField.toIntOrNull() ?: defaultPort))
+    }
+
+    fun connectionDisplayName(host: String): String = routerCustomName.ifBlank {
+        if (connectionMode == 3) "VPN $host" else "راوتر $host"
+    }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
@@ -364,7 +394,7 @@ fun LoginScreen(
                                     modifier = Modifier.padding(bottom = 8.dp)
                                 )
 
-                                // Three Connection Buttons Side-by-Side (جنب جنب متناسقة)
+                                // Four Connection Buttons Side-by-Side (جنب جنب متناسقة)
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -393,7 +423,7 @@ fun LoginScreen(
                                             Spacer(modifier = Modifier.width(3.dp))
                                             Text(
                                                 text = "عنوان IP",
-                                                fontSize = 12.sp,
+                                                fontSize = 10.sp,
                                                 fontWeight = if (connectionMode == 0) FontWeight.Bold else FontWeight.Medium,
                                                 color = if (connectionMode == 0) Color.White else MaterialTheme.colorScheme.onSurface,
                                                 maxLines = 1
@@ -424,7 +454,7 @@ fun LoginScreen(
                                             Spacer(modifier = Modifier.width(3.dp))
                                             Text(
                                                 text = "كلاود",
-                                                fontSize = 12.sp,
+                                                fontSize = 10.sp,
                                                 fontWeight = if (connectionMode == 1) FontWeight.Bold else FontWeight.Medium,
                                                 color = if (connectionMode == 1) Color.White else MaterialTheme.colorScheme.onSurface,
                                                 maxLines = 1
@@ -455,9 +485,40 @@ fun LoginScreen(
                                             Spacer(modifier = Modifier.width(3.dp))
                                             Text(
                                                 text = "رابط دومين",
-                                                fontSize = 12.sp,
+                                                fontSize = 10.sp,
                                                 fontWeight = if (connectionMode == 2) FontWeight.Bold else FontWeight.Medium,
                                                 color = if (connectionMode == 2) Color.White else MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+
+                                    // 4. L2TP VPN (الدخول عن بعد)
+                                    Surface(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { connectionMode = 3 },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (connectionMode == 3) Color(0xFF0C5A60) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                        border = if (connectionMode == 3) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.VpnKey,
+                                                contentDescription = null,
+                                                tint = if (connectionMode == 3) Color.White else MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "L2TP VPN",
+                                                fontSize = 10.sp,
+                                                fontWeight = if (connectionMode == 3) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (connectionMode == 3) Color.White else MaterialTheme.colorScheme.onSurface,
                                                 maxLines = 1
                                             )
                                         }
@@ -605,7 +666,7 @@ fun LoginScreen(
                                             }
                                         }
                                     }
-                                    else -> {
+                                    2 -> {
                                         // 3. Domain Mode: Domain/URL Input + Port
                                         Column(modifier = Modifier.fillMaxWidth()) {
                                             Row(
@@ -647,6 +708,115 @@ fun LoginScreen(
                                                 fontSize = 11.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+                                            )
+                                        }
+                                    }
+                                    3 -> {
+                                        // 4. L2TP VPN Mode: الدخول عن بعد (رابط VPN والبورت)
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                // VPN Port Input (البورت)
+                                                OutlinedTextField(
+                                                    value = vpnPort,
+                                                    onValueChange = { vpnPort = it },
+                                                    label = { Text("البورت") },
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                    modifier = Modifier.width(82.dp),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+
+                                                // VPN Server Link / Address (رابط VPN)
+                                                OutlinedTextField(
+                                                    value = vpnServerLink,
+                                                    onValueChange = { vpnServerLink = it },
+                                                    label = { Text("رابط / عنوان سيرفر VPN") },
+                                                    placeholder = { Text("vpn.example.com أو 1.2.3.4") },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Filled.VpnKey,
+                                                            contentDescription = "VPN",
+                                                            tint = Color(0xFF0C5A60)
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                            }
+
+                                            // Quick Port Chips: L2TP / API / API-SSL
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(top = 6.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                listOf(
+                                                    "L2TP 1701" to "1701",
+                                                    "API 8728" to "8728",
+                                                    "API-SSL 8729" to "8729"
+                                                ).forEach { (chipLabel, chipPort) ->
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = if (vpnPort == chipPort) Color(0xFF0C5A60)
+                                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                                        modifier = Modifier.clickable { vpnPort = chipPort }
+                                                    ) {
+                                                        Text(
+                                                            text = chipLabel,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = if (vpnPort == chipPort) Color.White
+                                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.height(8.dp))
+
+                                            // Open Android's system VPN settings to add/enable the L2TP profile
+                                            OutlinedButton(
+                                                onClick = {
+                                                    try {
+                                                        context.startActivity(
+                                                            Intent("android.net.vpn.Settings")
+                                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                        )
+                                                    } catch (vpnSettingsMissing: Exception) {
+                                                        try {
+                                                            context.startActivity(
+                                                                Intent(Settings.ACTION_SETTINGS)
+                                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                            )
+                                                        } catch (settingsMissing: Exception) {
+                                                            // No settings screen available — ignore
+                                                        }
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.VpnKey,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(text = "فتح إعدادات VPN في أندرويد", fontSize = 12.sp)
+                                            }
+
+                                            Text(
+                                                text = "للدخول عن بعد: أضف اتصال L2TP/IPsec من إعدادات VPN في أندرويد، ثم أدخل رابط سيرفر الـ VPN والبورت (L2TP 1701، أو منفذ RouterOS API 8728/8729) وسجّل الدخول.",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(top = 6.dp, start = 4.dp)
                                             )
                                         }
                                     }
@@ -721,20 +891,7 @@ fun LoginScreen(
                                     OutlinedButton(
                                         onClick = {
                                             isTestingConnection = true
-                                            val targetRaw = when (connectionMode) {
-                                                0 -> routerHost.trim()
-                                                1 -> {
-                                                    val raw = routerCloudDns.trim()
-                                                    if (raw.isNotEmpty() && !raw.contains(".") && !raw.contains(":")) {
-                                                        "$raw.sn.mynetname.net"
-                                                    } else {
-                                                        raw
-                                                    }
-                                                }
-                                                else -> routerDomain.trim()
-                                            }
-                                            val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
-                                            val p = parsedPort ?: (routerPort.toIntOrNull() ?: 8728)
+                                            val (cleanHostStr, p) = resolveTarget()
                                             viewModel.testConnection(cleanHostStr, p) { ok, msg ->
                                                 isTestingConnection = false
                                                 testResultDialog = Pair(ok, msg)
@@ -754,21 +911,8 @@ fun LoginScreen(
                                     // تسجيل الدخول (Primary Teal Button)
                                     Button(
                                         onClick = {
-                                            val targetRaw = when (connectionMode) {
-                                                0 -> routerHost.trim()
-                                                1 -> {
-                                                    val raw = routerCloudDns.trim()
-                                                    if (raw.isNotEmpty() && !raw.contains(".") && !raw.contains(":")) {
-                                                        "$raw.sn.mynetname.net"
-                                                    } else {
-                                                        raw
-                                                    }
-                                                }
-                                                else -> routerDomain.trim()
-                                            }
-                                            val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
-                                            val p = parsedPort ?: (routerPort.toIntOrNull() ?: 8728)
-                                            val name = routerCustomName.ifBlank { "راوتر $cleanHostStr" }
+                                            val (cleanHostStr, p) = resolveTarget()
+                                            val name = connectionDisplayName(cleanHostStr)
                                             viewModel.connectManualRouter(
                                                 name = name,
                                                 host = cleanHostStr,
@@ -1218,21 +1362,8 @@ fun LoginScreen(
                                     // The form is the single source of truth — it is
                                     // auto-filled from the selected saved router above,
                                     // so login uses exactly what the user sees.
-                                    val targetRaw = when (connectionMode) {
-                                        0 -> routerHost.trim()
-                                        1 -> {
-                                            val raw = routerCloudDns.trim()
-                                            if (raw.isNotEmpty() && !raw.contains(".") && !raw.contains(":")) {
-                                                "$raw.sn.mynetname.net"
-                                            } else {
-                                                raw
-                                            }
-                                        }
-                                        else -> routerDomain.trim()
-                                    }
-                                    val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
-                                    val p = parsedPort ?: (routerPort.toIntOrNull() ?: 8728)
-                                    val name = routerCustomName.ifBlank { "راوتر $cleanHostStr" }
+                                    val (cleanHostStr, p) = resolveTarget()
+                                    val name = connectionDisplayName(cleanHostStr)
                                     viewModel.connectManualRouter(
                                         name = name,
                                         host = cleanHostStr,

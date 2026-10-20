@@ -91,7 +91,7 @@ class RouterOpsAuditTest {
             val repo = connectRepoToMockRouter(server)
             var success = false; var error: String? = null
             repo.updateUserManagerProfile("old500",
-                UserManagerProfile(name = "new500", validity = "4w", price = 500.0),
+                UserManagerProfile(name = "new500", validity = "4w", price = 500),
                 onSuccess = { success = true },
                 onError = { error = it })
             pumpMainUntil { success || error != null }

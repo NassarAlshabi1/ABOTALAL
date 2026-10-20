@@ -482,7 +482,7 @@ fun UserManagerProfilesDialog(
             initialProfile = UserManagerProfile(
                 name = "",
                 validity = "",
-                price = 0.0,
+                price = 0,
                 downloadLimit = "",
                 uptimeLimit = "",
                 templateName = "",
@@ -719,7 +719,7 @@ fun ProfileDetailCard(
                     InfoPill(
                         icon = Icons.Outlined.MonetizationOn,
                         iconTint = Color(0xFFF59E0B),
-                        text = "${profile.price.toInt()} السعر",
+                        text = "${profile.price} السعر",
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -799,7 +799,7 @@ fun ProfileEditDialog(
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf(initialProfile.name) }
-    var price by remember { mutableStateOf(if (initialProfile.price > 0) initialProfile.price.toInt().toString() else "") }
+    var price by remember { mutableStateOf(if (initialProfile.price > 0) initialProfile.price.toString() else "") }
     var downloadLimit by remember { mutableStateOf(initialProfile.downloadLimit) }
     var uptimeLimit by remember { mutableStateOf(initialProfile.uptimeLimit) }
     var validity by remember { mutableStateOf(initialProfile.validity) }
@@ -918,7 +918,7 @@ fun ProfileEditDialog(
                         val prof = UserManagerProfile(
                             name = name.trim(),
                             validity = validity.trim(),
-                            price = price.toDoubleOrNull() ?: 0.0,
+                            price = price.toDoubleOrNull()?.toInt() ?: 0,
                             sharedUsers = sharedUsers,
                             downloadLimit = downloadLimit.trim(),
                             uptimeLimit = uptimeLimit.trim(),
