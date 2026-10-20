@@ -10,10 +10,12 @@ import com.example.data.model.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -415,7 +417,7 @@ class MikroTikRepository(
                     val name = p["name"] ?: p["name-for-users"] ?: "default"
                     val lim = limitations[name] ?: emptyMap()
                     val validity = p["validity"] ?: p["starts-at"] ?: "30d"
-                    val priceVal = p["price"]?.toDoubleOrNull() ?: 0.0
+                    val priceVal = p["price"]?.toDoubleOrNull()?.toInt() ?: 0
                     val dlLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited"
                     val upLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited"
                     UserManagerProfile(
@@ -602,7 +604,7 @@ class MikroTikRepository(
                             UserManagerProfile(
                                 name = name,
                                 validity = p["validity"] ?: p["starts-at"] ?: "30d",
-                                price = p["price"]?.toDoubleOrNull() ?: 0.0,
+                                price = p["price"]?.toDoubleOrNull()?.toInt() ?: 0,
                                 downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
                                 uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
                                 templateName = name,
@@ -834,6 +836,21 @@ class MikroTikRepository(
         insertActivityLog("تسجيل الخروج", "تم فصل الاتصال بالراوتر", "")
     }
 
+    /** Cancels every in-flight/queued repositoryScope coroutine (ticker, pending
+     *  fetches, etc.) and closes the socket. Call from the owning ViewModel's
+     *  onCleared() — repositoryScope's SupervisorJob has no other owner, so
+     *  without this it would otherwise outlive the ViewModel if one were ever
+     *  recreated within the same process (e.g. tests, or a future scoping
+     *  change) instead of living exactly as long as the process. */
+    fun shutdown() {
+        isTickerRunning = false
+        try {
+            nativeApi?.close()
+        } catch (_: Exception) {}
+        nativeApi = null
+        repositoryScope.cancel()
+    }
+
     // Insert an audit log in local Room database
     private fun insertActivityLog(action: String, details: String, routerHost: String) {
         repositoryScope.launch {
@@ -972,7 +989,7 @@ class MikroTikRepository(
                             profiles.add(UserManagerProfile(
                                 name = obj.optString("name", obj.optString("name-for-users", "default")),
                                 validity = obj.optString("validity", "30d"),
-                                price = obj.optString("price", "0").toDoubleOrNull() ?: 0.0,
+                                price = obj.optString("price", "0").toDoubleOrNull()?.toInt() ?: 0,
                                 sharedUsers = obj.optString("override-shared-users", "1").toIntOrNull() ?: 1,
                                 templateName = obj.optString("name", "")
                             ))
@@ -1231,7 +1248,7 @@ class MikroTikRepository(
                     if (user.disabled) params["disabled"] = "yes"
                     napi.executeStrict("/ip/hotspot/user/add", params)
                     insertActivityLog("إضافة مستخدم هوتسبوت", "تم إضافة المستخدم '${user.name}' على الراوتر", _currentConnection.value?.host ?: "")
-                    _hotspotUsers.value = _hotspotUsers.value + user
+                    _hotspotUsers.update { it + user }
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError("فشل الإضافة على الراوتر: ${e.message}") }
@@ -1288,7 +1305,7 @@ class MikroTikRepository(
             if (napi != null) {
                 try {
                     napi.executeStrict("/ip/hotspot/user/remove", "=numbers=$id")
-                    _hotspotUsers.value = _hotspotUsers.value.filter { it.id != id }
+                    _hotspotUsers.update { it.filter { u -> u.id != id } }
                     insertActivityLog("حذف مستخدم هوتسبوت", "تم حذف المستخدم '$name' من الراوتر", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
@@ -1329,7 +1346,7 @@ class MikroTikRepository(
             if (napi != null) {
                 try {
                     napi.executeStrict("/ip/hotspot/active/remove", "=numbers=$id")
-                    _activeHotspot.value = _activeHotspot.value.filter { it.id != id }
+                    _activeHotspot.update { it.filter { u -> u.id != id } }
                     insertActivityLog("فصل مستخدم", "تم فصل المستخدم النشط '$username' من الراوتر", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
@@ -1375,7 +1392,7 @@ class MikroTikRepository(
                     if (profile.sharedUsers.isNotBlank()) params["shared-users"] = profile.sharedUsers
                     napi.executeStrict("/ip/hotspot/user/profile/add", params)
                     insertActivityLog("إضافة بروفايل هوتسبوت", "تم إضافة البروفايل '${profile.name}' على الراوتر", _currentConnection.value?.host ?: "")
-                    _hotspotProfiles.value = _hotspotProfiles.value + profile
+                    _hotspotProfiles.update { it + profile }
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError("فشل إضافة البروفايل على الراوتر: ${e.message}") }
@@ -1586,7 +1603,7 @@ class MikroTikRepository(
                     val uid = if (flavor == UmFlavor.V6) umResolveUserId(api, user.username) else null
                     umAssignProfile(api, flavor, user.username, uid, user.profile) { customer }
                 }
-                _userManagerUsers.value = _userManagerUsers.value + user
+                _userManagerUsers.update { it + user }
                 insertActivityLog("يوزر مانجر", "تم إضافة مستخدم يوزر مانجر جديد '${user.username}' بالبروفايل '${user.profile}'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
@@ -1628,8 +1645,10 @@ class MikroTikRepository(
                 if (resetUptime && activated) {
                     runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to uid)) }
                 }
-                _userManagerUsers.value = _userManagerUsers.value.map {
-                    if (it.username == username) it.copy(profile = newProfile, active = true, profileExpired = false, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
+                _userManagerUsers.update { list ->
+                    list.map {
+                        if (it.username == username) it.copy(profile = newProfile, active = true, profileExpired = false, uptimeUsed = if (resetUptime) "0s" else it.uptimeUsed) else it
+                    }
                 }
                 insertActivityLog("تجديد كرت", "تم تجديد الكرت '$username' بالباقة '$newProfile'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
@@ -1660,7 +1679,7 @@ class MikroTikRepository(
                 }
             }
             if (deleted > 0) {
-                _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in succeeded }
+                _userManagerUsers.update { it.filter { u -> u.username !in succeeded } }
             }
             insertActivityLog("حذف جماعي", "تم حذف $deleted كرت من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) {
@@ -1691,8 +1710,8 @@ class MikroTikRepository(
                 }
             }
             if (done > 0) {
-                _userManagerUsers.value = _userManagerUsers.value.map {
-                    if (it.username in succeeded) it.copy(active = active) else it
+                _userManagerUsers.update { list ->
+                    list.map { if (it.username in succeeded) it.copy(active = active) else it }
                 }
             }
             insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} $done كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
@@ -1712,7 +1731,7 @@ class MikroTikRepository(
             }
             try {
                 umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, username) ?: username)))
-                _userManagerUsers.value = _userManagerUsers.value.filter { it.username != username }
+                _userManagerUsers.update { it.filter { u -> u.username != username } }
                 insertActivityLog("يوزر مانجر", "تم حذف مستخدم '${username}' من نظام اليوزر مانجر", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
@@ -1764,7 +1783,7 @@ class MikroTikRepository(
                     // ROS v7: validity and price are direct /user-manager/profile attrs.
                     val params = mutableMapOf("name" to profile.name)
                     if (profile.validity.isNotEmpty()) params["validity"] = profile.validity
-                    if (profile.price > 0) params["price"] = profile.price.toInt().toString()
+                    if (profile.price > 0) params["price"] = profile.price.toString()
                     if (profile.sharedUsers > 1) params["override-shared-users"] = profile.sharedUsers.toString()
                     umWrite(api, "profile/add", params)
                 }
@@ -1840,12 +1859,12 @@ class MikroTikRepository(
                     // ROS v7: validity and price are direct /user-manager/profile attributes.
                     val params = mutableMapOf("numbers" to pid, "name" to updatedProfile.name)
                     if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
-                    if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
+                    if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toString()
                     if (updatedProfile.sharedUsers > 1) params["override-shared-users"] = updatedProfile.sharedUsers.toString()
                     umWrite(api, "profile/set", params)
                 }
-                _userManagerProfiles.value = _userManagerProfiles.value.map {
-                    if (it.name == oldName) updatedProfile else it
+                _userManagerProfiles.update { list ->
+                    list.map { if (it.name == oldName) updatedProfile else it }
                 }
                 insertActivityLog("يوزر مانجر بروفايل", "تم تحديث باقة يوزر مانجر '${updatedProfile.name}'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
@@ -1891,7 +1910,7 @@ class MikroTikRepository(
                     }
                 }
                 umWrite(api, "profile/remove", mapOf("numbers" to pid))
-                _userManagerProfiles.value = _userManagerProfiles.value.filter { it.name != profileName }
+                _userManagerProfiles.update { it.filter { p -> p.name != profileName } }
                 insertActivityLog("يوزر مانجر بروفايل", "تم حذف باقة يوزر مانجر '${profileName}'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
@@ -1936,7 +1955,7 @@ class MikroTikRepository(
                             UserManagerProfile(
                                 name = name,
                                 validity = p["validity"] ?: p["starts-at"] ?: "30d",
-                                price = p["price"]?.toDoubleOrNull() ?: 0.0,
+                                price = p["price"]?.toDoubleOrNull()?.toInt() ?: 0,
                                 downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
                                 uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
                                 templateName = name,
@@ -2084,7 +2103,7 @@ class MikroTikRepository(
                 }
             }
             if (removed > 0) {
-                _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in succeeded }
+                _userManagerUsers.update { it.filter { u -> u.username !in succeeded } }
             }
             insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removed كرت منتهي", _currentConnection.value?.host ?: "")
             launch(Dispatchers.Main) {
@@ -2109,8 +2128,8 @@ class MikroTikRepository(
             val newActive = !current.active
             try {
                 umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, username) ?: username), "disabled" to if (newActive) "no" else "yes"))
-                _userManagerUsers.value = _userManagerUsers.value.map {
-                    if (it.username == username) it.copy(active = newActive) else it
+                _userManagerUsers.update { list ->
+                    list.map { if (it.username == username) it.copy(active = newActive) else it }
                 }
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
@@ -2671,7 +2690,7 @@ class MikroTikRepository(
                             routerHost = host,
                             username = u.username,
                             profile = u.profile,
-                            price = priceByProfile[u.profile] ?: 0.0,
+                            price = priceByProfile[u.profile] ?: 0,
                             archivedAt = now
                         )
                     }
@@ -2850,7 +2869,7 @@ class MikroTikRepository(
                     UserManagerProfile(
                         name = name,
                         validity = p["validity"] ?: p["starts-at"] ?: "30d",
-                        price = p["price"]?.toDoubleOrNull() ?: 0.0,
+                        price = p["price"]?.toDoubleOrNull()?.toInt() ?: 0,
                         downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
                         uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
                         templateName = name,
@@ -3430,7 +3449,7 @@ class MikroTikRepository(
             if (api != null) {
                 try {
                     api.executeStrict("/ip/cloud/set", mapOf("ddns-enabled" to if (enabled) "yes" else "no"))
-                    _cloudInfo.value = _cloudInfo.value.copy(ddnsEnabled = enabled)
+                    _cloudInfo.update { it.copy(ddnsEnabled = enabled) }
                     insertActivityLog("إعدادات الكلاود", "تم ${if (enabled) "تفعيل" else "تعطيل"} الـ DDNS السحابي", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
@@ -3448,13 +3467,13 @@ class MikroTikRepository(
             if (api != null) {
                 try {
                     api.executeStrict("/ip/cloud/set", mapOf("update-time" to if (enabled) "yes" else "no"))
-                    _cloudInfo.value = _cloudInfo.value.copy(updateTime = enabled)
+                    _cloudInfo.update { it.copy(updateTime = enabled) }
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل ضبط مزامنة الوقت") }
                 }
             } else {
-                _cloudInfo.value = _cloudInfo.value.copy(updateTime = enabled)
+                _cloudInfo.update { it.copy(updateTime = enabled) }
                 launch(Dispatchers.Main) { onSuccess() }
             }
         }

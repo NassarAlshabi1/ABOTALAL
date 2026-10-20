@@ -17,6 +17,7 @@ import com.example.data.model.UserManagerSession
 import com.example.data.model.UserManagerUser
 import com.example.data.repository.MikroTikRepository
 import com.example.util.CryptoManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -131,9 +132,14 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             }
         )
     }
-    // Disconnect
+    // Disconnect. repository.disconnect() acquires the native socket's lock to
+    // close it, which can briefly block if another coroutine is mid-command on
+    // that socket (e.g. a long-running maintenance command awaiting a reply) —
+    // run it off the main thread so a logout tap can never freeze the UI.
     fun logout() {
-        repository.disconnect()
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.disconnect()
+        }
     }
 
     // Delete router from database connection history
@@ -445,6 +451,14 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     fun removeCloudBackup(backupId: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repository.removeCloudBackup(backupId, onSuccess, onError)
+    }
+
+    // Ensures repositoryScope's SupervisorJob (ticker, pending fetches, etc.)
+    // is cancelled and the socket closed when this ViewModel is torn down,
+    // instead of relying solely on process death.
+    override fun onCleared() {
+        super.onCleared()
+        repository.shutdown()
     }
 
     // Simple Factory pattern for ViewModel Initialization

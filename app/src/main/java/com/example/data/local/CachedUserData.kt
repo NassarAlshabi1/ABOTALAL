@@ -52,7 +52,8 @@ data class CachedUserManagerProfile(
     @PrimaryKey val name: String,
     val routerHost: String,
     val validity: String = "30d",
-    val price: Double = 0.0,
+    // Whole currency units — see UserManagerProfile.price for rationale.
+    val price: Int = 0,
     val sharedUsers: Int = 1,
     val downloadLimit: String = "unlimited",
     val uptimeLimit: String = "unlimited",
