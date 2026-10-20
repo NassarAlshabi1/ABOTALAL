@@ -37,6 +37,7 @@ import com.example.ui.screens.designs.DesignsScreen
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MikroTikViewModel
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,6 +76,18 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
     var showExitDialog by remember { mutableStateOf(false) }
     var showExitAppDialog by remember { mutableStateOf(false) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
+    var syncRequest by remember { mutableIntStateOf(0) }
+    var isSyncing by remember { mutableStateOf(false) }
+
+    // Keep the sync button enabled even while a previous refresh is running.
+    // The repository refresh is asynchronous, so this only acknowledges the
+    // request visually and never claims that the operation already finished.
+    LaunchedEffect(syncRequest) {
+        if (syncRequest == 0) return@LaunchedEffect
+        isSyncing = true
+        delay(1200)
+        isSyncing = false
+    }
 
     // First: Splash Screen
     if (showSplash) {
@@ -282,21 +295,30 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         Surface(
                                             shape = RoundedCornerShape(10.dp),
                                             color = Color.White.copy(alpha = 0.18f),
-                                            modifier = Modifier
-                                                .size(34.dp)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .clickable {
+                                                modifier = Modifier
+                                                    .size(34.dp)
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .clickable {
+                                                    syncRequest++
                                                     viewModel.refreshAllData()
-                                                    actionMessage = "تم تحديث كافة بيانات الشبكة والراوتر بنجاح"
+                                                    actionMessage = "بدأت مزامنة بيانات الشبكة والراوتر. يمكنك متابعة استخدام التطبيق أثناء التحديث."
                                                 }
                                         ) {
                                             Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.Refresh,
-                                                    contentDescription = "مزامنة وتحديث",
-                                                    tint = Color(0xFFBAE6FD),
-                                                    modifier = Modifier.size(18.dp)
-                                                )
+                                                if (isSyncing) {
+                                                    CircularProgressIndicator(
+                                                        color = Color(0xFFBAE6FD),
+                                                        strokeWidth = 2.dp,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Refresh,
+                                                        contentDescription = "مزامنة وتحديث",
+                                                        tint = Color(0xFFBAE6FD),
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
