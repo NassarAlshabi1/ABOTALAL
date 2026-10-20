@@ -1015,7 +1015,7 @@ fun UserManagerBatchFullDialog(
                                         val len = nameLengthInput.toAsciiDigits().toIntOrNull()?.coerceIn(4, 30) ?: 9
                                         val cleanPrefix = cardPrefixInput.toAsciiDigits()
                                         val cleanSuffix = cardSuffixInput.toAsciiDigits()
-                                        val price = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price?.toInt() ?: 0
+                                        val price = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price ?: 0
                                         val excluded = if (excludeCharEnabled) excludedCharInput.toAsciiDigits().toSet() else emptySet()
                                         val allowedChars = cardCodeCharacterPool(selectedNamePattern, excluded)
                                         if (allowedChars.isEmpty()) {
@@ -1759,7 +1759,7 @@ fun UserManagerBatchFullDialog(
                                 profile = UserManagerProfile(
                                     name = profName,
                                     validity = "30d",
-                                    price = price.toDouble(),
+                                    price = price,
                                     sharedUsers = 1
                                 ),
                                 onSuccess = {

@@ -21,11 +21,13 @@ import org.robolectric.annotation.Config
  * data loss/corruption on a real device upgrade, never caught by the rest of
  * the test suite (which always builds a fresh version-5 database).
  *
- * Both migrations are purely additive (CREATE TABLE IF NOT EXISTS, no
- * ALTER/data transforms of existing tables), so testing migrate() directly —
- * instead of going through Room's full open/upgrade path, which would need
- * exported historical schema JSON this project doesn't generate
- * (exportSchema = false) — is a faithful, lower-friction equivalent.
+ * MIGRATION_3_4/4_5 are purely additive (CREATE TABLE IF NOT EXISTS, no
+ * transforms of existing tables); MIGRATION_5_6 rebuilds two existing tables
+ * to change a column's type, so its test seeds pre-migration rows itself
+ * before calling migrate(). Testing migrate() directly — instead of going
+ * through Room's full open/upgrade path, which would need exported
+ * historical schema JSON this project doesn't generate (exportSchema =
+ * false) — is a faithful, lower-friction equivalent.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -91,6 +93,88 @@ class AppDatabaseMigrationTest {
         AppDatabase.MIGRATION_4_5.migrate(db)
         AppDatabase.MIGRATION_4_5.migrate(db) // must not throw — relies on IF NOT EXISTS
 
+        assertTrue(tableExists(db, "expired_card_archive"))
+        db.close()
+    }
+
+    @Test
+    fun `migration 5 to 6 converts price columns from REAL to INTEGER without losing rows`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = newInMemoryDb(context)
+        // Recreate the pre-migration (v5) schema for the two affected tables and
+        // seed real-looking rows, including one fractional legacy price to prove
+        // the defensive ROUND() doesn't drop/crash on it.
+        db.execSQL(
+            """
+            CREATE TABLE `cached_usermanager_profiles` (
+                `name` TEXT NOT NULL, `routerHost` TEXT NOT NULL, `validity` TEXT NOT NULL DEFAULT '30d',
+                `price` REAL NOT NULL DEFAULT 0.0, `sharedUsers` INTEGER NOT NULL DEFAULT 1,
+                `downloadLimit` TEXT NOT NULL DEFAULT 'unlimited', `uptimeLimit` TEXT NOT NULL DEFAULT 'unlimited',
+                `templateName` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`name`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("INSERT INTO cached_usermanager_profiles (name, routerHost, price) VALUES ('باقة 1000', '192.168.88.1', 1000.0)")
+        db.execSQL("INSERT INTO cached_usermanager_profiles (name, routerHost, price) VALUES ('legacy-fraction', '192.168.88.1', 10.5)")
+        db.execSQL(
+            """
+            CREATE TABLE `expired_card_archive` (
+                `id` TEXT NOT NULL, `routerHost` TEXT NOT NULL, `username` TEXT NOT NULL,
+                `profile` TEXT NOT NULL, `price` REAL NOT NULL DEFAULT 0.0, `archivedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("INSERT INTO expired_card_archive (id, routerHost, username, profile, price, archivedAt) VALUES ('h|u1', '192.168.88.1', 'u1', 'باقة 1000', 1000.0, 1000)")
+
+        AppDatabase.MIGRATION_5_6.migrate(db)
+
+        db.query("SELECT price FROM cached_usermanager_profiles WHERE name = 'باقة 1000'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1000, c.getInt(0))
+        }
+        db.query("SELECT price FROM cached_usermanager_profiles WHERE name = 'legacy-fraction'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("fractional legacy price must round, not be dropped", 11, c.getInt(0))
+        }
+        db.query("SELECT COUNT(*) FROM expired_card_archive").use { c ->
+            c.moveToFirst()
+            assertEquals("archived rows must survive the migration", 1, c.getInt(0))
+        }
+        db.query("SELECT price FROM expired_card_archive WHERE id = 'h|u1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1000, c.getInt(0))
+        }
+        db.close()
+    }
+
+    @Test
+    fun `migration 5 to 6 is safe to run on empty tables`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = newInMemoryDb(context)
+        db.execSQL(
+            """
+            CREATE TABLE `cached_usermanager_profiles` (
+                `name` TEXT NOT NULL, `routerHost` TEXT NOT NULL, `validity` TEXT NOT NULL DEFAULT '30d',
+                `price` REAL NOT NULL DEFAULT 0.0, `sharedUsers` INTEGER NOT NULL DEFAULT 1,
+                `downloadLimit` TEXT NOT NULL DEFAULT 'unlimited', `uptimeLimit` TEXT NOT NULL DEFAULT 'unlimited',
+                `templateName` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`name`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            CREATE TABLE `expired_card_archive` (
+                `id` TEXT NOT NULL, `routerHost` TEXT NOT NULL, `username` TEXT NOT NULL,
+                `profile` TEXT NOT NULL, `price` REAL NOT NULL DEFAULT 0.0, `archivedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+
+        AppDatabase.MIGRATION_5_6.migrate(db) // must not throw on empty source tables
+
+        assertTrue(tableExists(db, "cached_usermanager_profiles"))
         assertTrue(tableExists(db, "expired_card_archive"))
         db.close()
     }

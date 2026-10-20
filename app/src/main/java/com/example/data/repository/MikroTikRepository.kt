@@ -417,7 +417,7 @@ class MikroTikRepository(
                     val name = p["name"] ?: p["name-for-users"] ?: "default"
                     val lim = limitations[name] ?: emptyMap()
                     val validity = p["validity"] ?: p["starts-at"] ?: "30d"
-                    val priceVal = p["price"]?.toDoubleOrNull() ?: 0.0
+                    val priceVal = p["price"]?.toDoubleOrNull()?.toInt() ?: 0
                     val dlLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited"
                     val upLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited"
                     UserManagerProfile(
@@ -604,7 +604,7 @@ class MikroTikRepository(
                             UserManagerProfile(
                                 name = name,
                                 validity = p["validity"] ?: p["starts-at"] ?: "30d",
-                                price = p["price"]?.toDoubleOrNull() ?: 0.0,
+                                price = p["price"]?.toDoubleOrNull()?.toInt() ?: 0,
                                 downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
                                 uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
                                 templateName = name,
@@ -989,7 +989,7 @@ class MikroTikRepository(
                             profiles.add(UserManagerProfile(
                                 name = obj.optString("name", obj.optString("name-for-users", "default")),
                                 validity = obj.optString("validity", "30d"),
-                                price = obj.optString("price", "0").toDoubleOrNull() ?: 0.0,
+                                price = obj.optString("price", "0").toDoubleOrNull()?.toInt() ?: 0,
                                 sharedUsers = obj.optString("override-shared-users", "1").toIntOrNull() ?: 1,
                                 templateName = obj.optString("name", "")
                             ))
@@ -1783,7 +1783,7 @@ class MikroTikRepository(
                     // ROS v7: validity and price are direct /user-manager/profile attrs.
                     val params = mutableMapOf("name" to profile.name)
                     if (profile.validity.isNotEmpty()) params["validity"] = profile.validity
-                    if (profile.price > 0) params["price"] = profile.price.toInt().toString()
+                    if (profile.price > 0) params["price"] = profile.price.toString()
                     if (profile.sharedUsers > 1) params["override-shared-users"] = profile.sharedUsers.toString()
                     umWrite(api, "profile/add", params)
                 }
@@ -1859,7 +1859,7 @@ class MikroTikRepository(
                     // ROS v7: validity and price are direct /user-manager/profile attributes.
                     val params = mutableMapOf("numbers" to pid, "name" to updatedProfile.name)
                     if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
-                    if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
+                    if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toString()
                     if (updatedProfile.sharedUsers > 1) params["override-shared-users"] = updatedProfile.sharedUsers.toString()
                     umWrite(api, "profile/set", params)
                 }
@@ -1955,7 +1955,7 @@ class MikroTikRepository(
                             UserManagerProfile(
                                 name = name,
                                 validity = p["validity"] ?: p["starts-at"] ?: "30d",
-                                price = p["price"]?.toDoubleOrNull() ?: 0.0,
+                                price = p["price"]?.toDoubleOrNull()?.toInt() ?: 0,
                                 downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
                                 uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
                                 templateName = name,
@@ -2690,7 +2690,7 @@ class MikroTikRepository(
                             routerHost = host,
                             username = u.username,
                             profile = u.profile,
-                            price = priceByProfile[u.profile] ?: 0.0,
+                            price = priceByProfile[u.profile] ?: 0,
                             archivedAt = now
                         )
                     }
@@ -2869,7 +2869,7 @@ class MikroTikRepository(
                     UserManagerProfile(
                         name = name,
                         validity = p["validity"] ?: p["starts-at"] ?: "30d",
-                        price = p["price"]?.toDoubleOrNull() ?: 0.0,
+                        price = p["price"]?.toDoubleOrNull()?.toInt() ?: 0,
                         downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
                         uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
                         templateName = name,

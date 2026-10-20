@@ -1825,7 +1825,7 @@ fun RenewCardDialog(
                                     }
 
                                     Text(
-                                        text = "${profile.price.toInt()} د.ع",
+                                        text = "${profile.price} د.ع",
                                         fontFamily = CairoFontFamily,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp,

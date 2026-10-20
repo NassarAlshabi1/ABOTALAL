@@ -24,7 +24,9 @@ data class ExpiredCardArchiveEntry(
     val routerHost: String,
     val username: String,
     val profile: String,
-    val price: Double = 0.0,
+    // Whole currency units — see UserManagerProfile.price for rationale. The
+    // app owner confirmed fractional pricing isn't used in real deployments.
+    val price: Int = 0,
     val archivedAt: Long
 )
 
@@ -37,7 +39,7 @@ interface ExpiredCardArchiveDao {
     suspend fun getForRouter(host: String): List<ExpiredCardArchiveEntry>
 
     @Query("SELECT COALESCE(SUM(price), 0) FROM expired_card_archive WHERE routerHost = :host")
-    suspend fun totalValueForRouter(host: String): Double
+    suspend fun totalValueForRouter(host: String): Int
 
     @Query("SELECT COUNT(*) FROM expired_card_archive WHERE routerHost = :host")
     suspend fun countForRouter(host: String): Int
