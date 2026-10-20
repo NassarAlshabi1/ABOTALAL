@@ -863,69 +863,19 @@ fun UserManagerScreen(
         )
     }
 
-    // --- 8. Dialog: صيانة الكروت المنتهية (Maintenance) ---
+    // --- 8. Full-screen: صيانة الكروت المنتهية (9-step maintenance wizard,
+    // mirrors the reference MkCards flow — replaces the old single-dialog
+    // "clean now" tool with a step-by-step, individually-triggered sequence). ---
     if (showMaintenanceDialog) {
-        // Matches the criterion actually used by cleanExpiredUserManagerUsers() below:
-        // disabled cards, plus cards whose assigned profile ran out (profileExpired)
-        // and that have actually been used at least once.
-        val expiredCount = userManagerUsers.count {
-            !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
-        }
-
-        AlertDialog(
+        Dialog(
             onDismissRequest = { showMaintenanceDialog = false },
-            title = {
-                Text("صيانة الكروت المنتهية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "تقوم هذه الأداة بفحص وتنظيف الكروت التي انتهت صلاحيتها أو رصيدها، لتسريع قاعدة بيانات الراوتر.",
-                        fontFamily = CairoFontFamily,
-                        fontSize = 13.sp
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFFEF3C7),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "تم العثور على $expiredCount كرت منتهي أو غير نشط في قاعدة البيانات.",
-                            fontFamily = CairoFontFamily,
-                            color = Color(0xFFB45309),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(10.dp)
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.cleanExpiredUserManagerUsers(
-                            onSuccess = { count ->
-                                feedbackMessage = "تمت إزالة وتنظيف $count كرت منتهي بنجاح!"
-                                showMaintenanceDialog = false
-                            },
-                            onError = { err ->
-                                feedbackMessage = err
-                                showMaintenanceDialog = false
-                            }
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
-                ) {
-                    Text("تنظيف الكروت الآن", fontFamily = CairoFontFamily)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showMaintenanceDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            UserManagerMaintenanceWizardScreen(
+                viewModel = viewModel,
+                onBack = { showMaintenanceDialog = false }
+            )
+        }
     }
 
     // --- 9. Dialog: النسخ الاحتياطية (Backups) ---

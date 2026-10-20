@@ -1,5 +1,6 @@
 package com.example.util
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -18,6 +19,7 @@ import android.graphics.RectF as AndroidRectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.util.Log
+import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Environment
@@ -28,6 +30,7 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.example.data.Design
@@ -798,6 +801,49 @@ object CardPrintAndExportHelper {
     }
 
     /**
+     * Saves a file into the device's public Downloads collection and returns a
+     * shareable Uri for it, or throws on failure.
+     *
+     * On Android 10+ (API 29+) direct File()/FileOutputStream writes into
+     * Environment.getExternalStoragePublicDirectory(DIRECTORY_DOWNLOADS) fail
+     * silently or throw under scoped storage — there is no legacy-storage
+     * opt-in and no WRITE_EXTERNAL_STORAGE permission declared for this app.
+     * MediaStore.Downloads is the only API that reliably works there without
+     * any extra permission. Below API 29, MediaStore.Downloads does not exist
+     * yet, so we fall back to the legacy direct-file path.
+     */
+    private fun saveToDownloads(context: Context, fileName: String, mimeType: String, write: (java.io.OutputStream) -> Unit): Uri {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw java.io.IOException("تعذر إنشاء الملف في مجلد التنزيلات")
+            try {
+                val stream = resolver.openOutputStream(uri)
+                    ?: throw java.io.IOException("تعذر فتح ملف التنزيلات للكتابة")
+                stream.use(write)
+            } catch (e: Exception) {
+                runCatching { resolver.delete(uri, null, null) }
+                throw e
+            }
+            return uri
+        } else {
+            @Suppress("DEPRECATION")
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadsDir.exists() && !downloadsDir.mkdirs()) {
+                throw java.io.IOException("تعذر إنشاء مجلد التنزيلات")
+            }
+            val targetFile = File(downloadsDir, fileName)
+            FileOutputStream(targetFile).use(write)
+            return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", targetFile)
+        }
+    }
+
+    /**
      * Print cards and save PDF file directly to device Downloads
      */
     fun printAndSavePdfDocument(
@@ -826,10 +872,7 @@ object CardPrintAndExportHelper {
 
             // 1. Save PDF file to Downloads
             try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (!downloadsDir.exists()) downloadsDir.mkdirs()
                 val fileName = "NetCraft_${config.templateName}_${System.currentTimeMillis()}.pdf"
-                val targetFile = File(downloadsDir, fileName)
 
                 val pdfDocument = android.graphics.pdf.PdfDocument()
                 val totalPages = pageCountFor(realCards.size, config)
@@ -853,14 +896,15 @@ object CardPrintAndExportHelper {
                     pdfDocument.finishPage(page)
                 }
 
-                val fos = FileOutputStream(targetFile)
-                pdfDocument.writeTo(fos)
-                fos.flush()
-                fos.close()
-                pdfDocument.close()
-                Toast.makeText(context, "تم حفظ ملف PDF في التنزيلات:\n$fileName", Toast.LENGTH_LONG).show()
+                try {
+                    saveToDownloads(context, fileName, "application/pdf") { out -> pdfDocument.writeTo(out) }
+                    Toast.makeText(context, "تم حفظ ملف PDF في التنزيلات:\n$fileName", Toast.LENGTH_LONG).show()
+                } finally {
+                    pdfDocument.close()
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
+                Toast.makeText(context, "تعذر حفظ ملف PDF في التنزيلات: ${e.message}", Toast.LENGTH_LONG).show()
             }
 
             // 2. Open native print manager
@@ -1076,7 +1120,7 @@ object CardPrintAndExportHelper {
         users: List<UserManagerUser>,
         config: CardTemplateConfig,
         customBgBitmap: Bitmap? = null,
-        onComplete: (File?) -> Unit
+        onComplete: (Uri?) -> Unit = {}
     ) {
         try {
             val totalPages = pageCountFor(users.size, config)
@@ -1107,20 +1151,12 @@ object CardPrintAndExportHelper {
             }
 
             val fileName = "NetCraft_TK_${batch.batchId}_${System.currentTimeMillis()}.pdf"
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val targetDir = if (downloadsDir != null && downloadsDir.exists()) downloadsDir else context.filesDir
-            val pdfFile = File(targetDir, fileName)
-
-            FileOutputStream(pdfFile).use { out ->
-                pdfDoc.writeTo(out)
+            val uri: Uri
+            try {
+                uri = saveToDownloads(context, fileName, "application/pdf") { out -> pdfDoc.writeTo(out) }
+            } finally {
+                pdfDoc.close()
             }
-            pdfDoc.close()
-
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                pdfFile
-            )
 
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "application/pdf"
@@ -1134,7 +1170,7 @@ object CardPrintAndExportHelper {
             context.startActivity(chooser)
 
             Toast.makeText(context, "تم حفظ ملف PDF بنجاح (${users.size} كرت)", Toast.LENGTH_LONG).show()
-            onComplete(pdfFile)
+            onComplete(uri)
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(context, "خطأ في حفظ PDF: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
@@ -1205,7 +1241,17 @@ object CardPrintAndExportHelper {
     }
 
     private fun sanitizeCsv(input: String): String {
-        var res = input.replace("\"", "\"\"")
+        var res = input
+        // Neutralize spreadsheet formula injection: a cell starting with =, +, -, @
+        // (or tab/CR) is interpreted as a formula by Excel/LibreOffice/Sheets when the
+        // CSV is opened, letting a hotspot/user-manager username or comment the admin
+        // imported from elsewhere execute arbitrary formulas (e.g. DDE commands) on
+        // whoever opens the exported file. Prefixing with an apostrophe forces plain
+        // text in every major spreadsheet app without changing the visible value.
+        if (res.isNotEmpty() && res[0] in charArrayOf('=', '+', '-', '@', '\t', '\r')) {
+            res = "'$res"
+        }
+        res = res.replace("\"", "\"\"")
         if (res.contains(",") || res.contains("\n") || res.contains("\"")) {
             res = "\"$res\""
         }

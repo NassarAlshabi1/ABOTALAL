@@ -69,6 +69,14 @@ data class UserManagerSession(
     val started: String = ""
 )
 
+/** One local system backup file sitting on the router (/system/backup/save output,
+ *  read back via /file/print and filtered to names ending in ".backup"). */
+data class RouterBackupFile(
+    val name: String,
+    val sizeBytes: Long = 0L,
+    val time: String = ""
+)
+
 /** One row of the router's own log buffer (/log/print). */
 data class RouterLogEntry(
     val id: String,

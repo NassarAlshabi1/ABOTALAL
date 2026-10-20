@@ -1450,6 +1450,17 @@ class MikroTikRepository(
     private fun isNoSuchCommand(e: Exception?): Boolean =
         e?.message?.contains("no such command", ignoreCase = true) == true
 
+    // executeStrict() never lets a raw SocketTimeoutException reach the caller —
+    // MikroTikNativeApi.executeInternal() catches it, retries once internally, and
+    // on failure wraps the result in a plain IOException with an Arabic "انتهت
+    // مهلة..." message (or occasionally echoes the retry's own English "timed out"
+    // message). Detect "likely still running on the router, not a real failure"
+    // by message content instead of exception type.
+    private fun isLikelyRouterTimeout(e: Exception?): Boolean {
+        val msg = e?.message?.lowercase() ?: return false
+        return msg.contains("انتهت مهلة") || msg.contains("timeout") || msg.contains("timed out")
+    }
+
     // Adds one user-manager user using the attribute set each RouterOS version
     // actually accepts: v7 `/user-manager/user/add name=` (no customer), v6
     // `/tool/user-manager/user/add customer= username=`. When [preferred] is
@@ -1566,12 +1577,23 @@ class MikroTikRepository(
                 // ROS v6 activates a profile on a user via create-and-activate-profile;
                 // ROS v7 accepts a plain set. Try v6 path first, then v7 set.
                 var activated = false
+                var v6Err: Exception? = null
                 try {
                     umWrite(api, "user/create-and-activate-profile", mapOf("numbers" to uid, "profile" to newProfile, "customer" to umResolveCustomer(api)))
                     activated = true
-                } catch (_: Exception) {
-                    umWrite(api, "user/set", mapOf("numbers" to uid, "profile" to newProfile, "disabled" to "no"))
-                    activated = true
+                } catch (e: Exception) {
+                    v6Err = e
+                }
+                if (!activated) {
+                    try {
+                        umWrite(api, "user/set", mapOf("numbers" to uid, "profile" to newProfile, "disabled" to "no"))
+                        activated = true
+                    } catch (e: Exception) {
+                        // Neither shape worked — surface the v6-style error since it's the
+                        // first one tried and usually the more specific of the two on a
+                        // real v6 router (e.g. "no such item" for a bad profile name).
+                        throw if (isNoSuchCommand(v6Err)) e else (v6Err ?: e)
+                    }
                 }
                 if (resetUptime && activated) {
                     runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to uid)) }
@@ -1617,28 +1639,35 @@ class MikroTikRepository(
         }
     }
 
-    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit)  {
+    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit, onError: (String) -> Unit = {})  {
         repositoryScope.launch {
             val api = nativeApi
             if (api == null) {
-                launch(Dispatchers.Main) { onSuccess(0) }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
-            val toToggle = usernames.toSet()
             val succeeded = mutableSetOf<String>()
             var done = 0
+            var firstErr: String? = null
             usernames.forEach { u ->
                 try {
                     umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, u) ?: u), "disabled" to if (active) "no" else "yes"))
                     done++
                     succeeded.add(u)
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    if (firstErr == null) firstErr = e.message
+                }
             }
-            _userManagerUsers.value = _userManagerUsers.value.map {
-                if (it.username in succeeded) it.copy(active = active) else it
+            if (done > 0) {
+                _userManagerUsers.value = _userManagerUsers.value.map {
+                    if (it.username in succeeded) it.copy(active = active) else it
+                }
             }
             insertActivityLog("تفعيل/تعطيل جماعي", "تم ${if (active) "تفعيل" else "تعطيل"} $done كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess(done) }
+            launch(Dispatchers.Main) {
+                if (done == usernames.size) onSuccess(done)
+                else onError("تم ${if (active) "تفعيل" else "تعطيل"} $done من ${usernames.size}. خطأ: ${firstErr ?: "غير معروف"}")
+            }
         }
     }
 
@@ -1688,11 +1717,14 @@ class MikroTikRepository(
                     if (profile.downloadLimit.isNotBlank() && profile.downloadLimit != "unlimited") {
                         limParams["download-limit"] = profile.downloadLimit.trim()
                     }
-                    umWrite(api, "limitation/add", limParams)
+                    // Both limitation and profile-limitation are nested under /profile
+                    // on ROS v6 (matches the profile/profile-limitation/print path used
+                    // for reading above) — NOT top-level /tool/user-manager/limitation.
+                    umWrite(api, "profile/limitation/add", limParams)
 
                     // Link profile <-> limitation using profile=/limitation= fields
                     // (NOT limitations[name] — that form does not exist in RouterOS).
-                    umWrite(api, "profile-limitation/add", mapOf(
+                    umWrite(api, "profile/profile-limitation/add", mapOf(
                         "profile" to profile.name,
                         "limitation" to "${profile.name}-lim"
                     ))
@@ -1724,20 +1756,62 @@ class MikroTikRepository(
                 return@launch
             }
             try {
+                var matchedBase: String? = null
                 val pid = run {
                     var id: String? = null
                     for (base in listOf("/user-manager", "/tool/user-manager")) {
                         try {
                             id = api.execute("$base/profile/print").firstOrNull { it["name"] == oldName }?.get(".id")
-                            if (id != null) break
+                            if (id != null) { matchedBase = base; break }
                         } catch (_: Exception) {}
                     }
                     id ?: oldName
                 }
-                val params = mutableMapOf("numbers" to pid, "name" to updatedProfile.name)
-                if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
-                if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
-                umWrite(api, "profile/set", params)
+                // Fall back to the connection-detected base if the profile lookup above
+                // didn't find a match on either menu (e.g. renaming right after creation).
+                val isV6 = (matchedBase ?: umBase) == "/tool/user-manager"
+                if (isV6) {
+                    // ROS v6 /tool/user-manager: validity/price are not profile attributes —
+                    // they live on a separate limitation object linked via profile-limitation,
+                    // exactly as created in addUserManagerProfile(). Update both in place.
+                    umWrite(api, "profile/set", mapOf(
+                        "numbers" to pid,
+                        "name" to updatedProfile.name,
+                        "name-for-users" to updatedProfile.name,
+                        "override-shared-users" to updatedProfile.sharedUsers.toString()
+                    ))
+                    val links = api.execute("/tool/user-manager/profile/profile-limitation/print")
+                    val link = links.firstOrNull { it["profile"] == oldName || it["profile"] == updatedProfile.name }
+                    val limitations = mutableMapOf<String, String>()
+                    val duration = Regex("^(\\d+)([smhdw])$", RegexOption.IGNORE_CASE).find(updatedProfile.validity.trim())
+                    if (duration != null) limitations["uptime-limit"] = updatedProfile.validity.trim()
+                    if (updatedProfile.downloadLimit.isNotBlank() && updatedProfile.downloadLimit != "unlimited") {
+                        limitations["download-limit"] = updatedProfile.downloadLimit.trim()
+                    }
+                    if (link != null) {
+                        val limId = link["limitation"]
+                        val limitationRow = limId?.let { lim ->
+                            api.execute("/tool/user-manager/profile/limitation/print").firstOrNull { it["name"] == lim }
+                        }
+                        if (limitationRow != null && limitations.isNotEmpty()) {
+                            umWrite(api, "profile/limitation/set", limitations + mapOf("numbers" to (limitationRow[".id"] ?: limId!!)))
+                        }
+                        if (link["profile"] != updatedProfile.name) {
+                            umWrite(api, "profile/profile-limitation/set", mapOf("numbers" to (link[".id"] ?: ""), "profile" to updatedProfile.name))
+                        }
+                    } else if (limitations.isNotEmpty()) {
+                        val limName = "${updatedProfile.name}-lim"
+                        umWrite(api, "profile/limitation/add", limitations + mapOf("name" to limName))
+                        umWrite(api, "profile/profile-limitation/add", mapOf("profile" to updatedProfile.name, "limitation" to limName))
+                    }
+                } else {
+                    // ROS v7: validity and price are direct /user-manager/profile attributes.
+                    val params = mutableMapOf("numbers" to pid, "name" to updatedProfile.name)
+                    if (updatedProfile.validity.isNotEmpty()) params["validity"] = updatedProfile.validity
+                    if (updatedProfile.price > 0) params["price"] = updatedProfile.price.toInt().toString()
+                    if (updatedProfile.sharedUsers > 1) params["override-shared-users"] = updatedProfile.sharedUsers.toString()
+                    umWrite(api, "profile/set", params)
+                }
                 _userManagerProfiles.value = _userManagerProfiles.value.map {
                     if (it.name == oldName) updatedProfile else it
                 }
@@ -1766,6 +1840,23 @@ class MikroTikRepository(
                         } catch (_: Exception) {}
                     }
                     id ?: profileName
+                }
+                // On ROS v6 the profile's limitation + profile-limitation link are separate
+                // objects (see addUserManagerProfile) — remove them too so they don't pile
+                // up as orphans on the router after their owning profile is gone.
+                if (umBase == "/tool/user-manager") {
+                    runCatching {
+                        val link = api.execute("/tool/user-manager/profile/profile-limitation/print")
+                            .firstOrNull { it["profile"] == profileName }
+                        if (link != null) {
+                            umWrite(api, "profile/profile-limitation/remove", mapOf("numbers" to (link[".id"] ?: "")))
+                            val limName = link["limitation"]
+                            val limId = limName?.let { lim ->
+                                api.execute("/tool/user-manager/profile/limitation/print").firstOrNull { it["name"] == lim }?.get(".id")
+                            }
+                            if (limId != null) umWrite(api, "profile/limitation/remove", mapOf("numbers" to limId))
+                        }
+                    }
                 }
                 umWrite(api, "profile/remove", mapOf("numbers" to pid))
                 _userManagerProfiles.value = _userManagerProfiles.value.filter { it.name != profileName }
@@ -1949,18 +2040,24 @@ class MikroTikRepository(
             }.map { it.username }
             var removed = 0
             val succeeded = mutableSetOf<String>()
+            var firstErr: String? = null
             toRemove.forEach { u ->
                 try {
                     umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, u) ?: u)))
                     removed++
                     succeeded.add(u)
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    if (firstErr == null) firstErr = e.message
+                }
             }
             if (removed > 0) {
                 _userManagerUsers.value = _userManagerUsers.value.filter { it.username !in succeeded }
             }
             insertActivityLog("صيانة الكروت", "تم فحص وصيانة الكروت المنتهية وتنظيف $removed كرت منتهي", _currentConnection.value?.host ?: "")
-            launch(Dispatchers.Main) { onSuccess(removed) }
+            launch(Dispatchers.Main) {
+                if (firstErr == null) onSuccess(removed)
+                else onError("نُظّف $removed من ${toRemove.size} كرت منتهي. خطأ: $firstErr")
+            }
         }
     }
 
@@ -2267,6 +2364,15 @@ class MikroTikRepository(
     fun rebootRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             val host = _currentConnection.value?.host ?: ""
+            // The native socket may have dropped since the last screen. RouterOS
+            // v6 has no REST API at all (it was only added in v7), so falling
+            // straight to the REST fallback below would always fail on a real
+            // v6 router in this situation — reconnect the native API first. Safe
+            // no-op retry for v7/REST-only setups too: if it fails, the existing
+            // REST fallback still runs exactly as before.
+            if (nativeApi == null) {
+                _currentConnection.value?.let { conn -> tryNativeConnect(conn) }
+            }
             if (nativeApi != null) {
                 val ok = nativeApi?.reboot() ?: false
                 if (ok) {
@@ -2326,6 +2432,12 @@ class MikroTikRepository(
     fun shutdownRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             val host = _currentConnection.value?.host ?: ""
+            // See rebootRouter() above: RouterOS v6 has no REST API at all, so
+            // reconnect the native API first instead of falling straight to the
+            // REST-only fallback below.
+            if (nativeApi == null) {
+                _currentConnection.value?.let { conn -> tryNativeConnect(conn) }
+            }
             if (nativeApi != null) {
                 val ok = nativeApi?.shutdown() ?: false
                 if (ok) {
@@ -2389,6 +2501,455 @@ class MikroTikRepository(
             } else if (conn != null) {
                 fetchRealRouterData(conn)
             }
+        }
+    }
+
+    // ==========================================
+    // ROUTER CONFIGURATION BACKUPS (/system/backup/*, /file/*)
+    // Full system config backups, distinct from the User Manager database
+    // backup above and from the MikroTik Cloud backup feature (CloudScreen).
+    // ==========================================
+
+    /** Lists the router's own local system backups: real /file/print rows whose
+     *  name ends in ".backup" (what /system/backup/save produces). */
+    fun fetchRouterBackups(onSuccess: (List<RouterBackupFile>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val files = api.executeStrict("/file/print")
+                    .filter { (it["name"] ?: "").endsWith(".backup") }
+                    .map {
+                        RouterBackupFile(
+                            name = it["name"] ?: "",
+                            sizeBytes = it["size"]?.toLongOrNull() ?: 0L,
+                            time = it["creation-time"] ?: ""
+                        )
+                    }
+                    .sortedByDescending { it.time }
+                launch(Dispatchers.Main) { onSuccess(files) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل جلب قائمة النسخ الاحتياطية من الراوتر") }
+            }
+        }
+    }
+
+    /** Creates a new local system backup on the router via /system/backup/save. */
+    fun createRouterBackup(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            val name = "netcraft-${System.currentTimeMillis() / 1000}"
+            try {
+                api.executeStrict("/system/backup/save", mapOf("name" to name))
+                insertActivityLog("نسخ احتياطي", "تم إنشاء نسخة احتياطية جديدة لإعدادات الراوتر: $name.backup", host)
+                launch(Dispatchers.Main) { onSuccess("$name.backup") }
+            } catch (e: Exception) {
+                insertActivityLog("نسخ احتياطي", "فشل إنشاء النسخة الاحتياطية: ${e.message}", host)
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إنشاء النسخة الاحتياطية على الراوتر") }
+            }
+        }
+    }
+
+    /** Permanently deletes one of the router's own local backup files. */
+    fun deleteRouterBackup(fileName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val id = api.executeStrict("/file/print").firstOrNull { it["name"] == fileName }?.get(".id")
+                    ?: throw java.io.IOException("الملف '$fileName' غير موجود على الراوتر")
+                api.executeStrict("/file/remove", mapOf("numbers" to id))
+                insertActivityLog("نسخ احتياطي", "تم حذف النسخة الاحتياطية: $fileName", host)
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل حذف النسخة الاحتياطية") }
+            }
+        }
+    }
+
+    /** Restores the router's configuration from one of its own local backup files
+     *  via /system/backup/load. This makes the router reload its config and
+     *  reboot — mirrors rebootRouter()'s resilient handling of the connection
+     *  dropping before a reply arrives, since the router goes down mid-command. */
+    fun restoreRouterBackup(fileName: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                api.executeStrict("/system/backup/load", mapOf("name" to fileName))
+                insertActivityLog("استعادة نسخة احتياطية", "تم إرسال أمر استعادة النسخة الاحتياطية '$fileName' — الراوتر سيعيد تشغيل نفسه بالإعدادات المستعادة", host)
+                disconnect()
+                launch(Dispatchers.Main) { onSuccess("تم إرسال أمر الاستعادة بنجاح — الراوتر سيعيد تشغيل نفسه الآن بالإعدادات المستعادة") }
+            } catch (e: Exception) {
+                val msg = (e.message ?: "").lowercase()
+                if (msg.contains("reset") || msg.contains("econnreset") || msg.contains("closed") || msg.contains("broken pipe")) {
+                    insertActivityLog("استعادة نسخة احتياطية", "أُرسل أمر الاستعادة وانقطع الاتصال (الراوتر يعيد التشغيل بالإعدادات المستعادة)", host)
+                    disconnect()
+                    launch(Dispatchers.Main) { onSuccess("تم إرسال أمر الاستعادة — انقطع الاتصال بالراوتر (دليل على بدء إعادة التشغيل بالإعدادات المستعادة)") }
+                } else {
+                    insertActivityLog("استعادة نسخة احتياطية", "فشل إرسال أمر الاستعادة: ${e.message}", host)
+                    launch(Dispatchers.Main) { onError(e.message ?: "فشل استعادة النسخة الاحتياطية على الراوتر") }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // EXPIRED-CARDS MAINTENANCE WIZARD (9 manual steps, mirrors the reference
+    // "MkCards" flow): each step below is called independently by the UI, in
+    // order, and only moves the router/local state that step actually promises.
+    // ==========================================
+
+    private val expiredCardArchiveDao by lazy { AppDatabase.getDatabase(context).expiredCardArchiveDao() }
+
+    /** Step 1 — local-only: archives the cards currently matching the expired/
+     *  disabled criterion into the local "financial accounts" table, keyed by
+     *  router+username so re-running updates the same rows instead of
+     *  duplicating them. Makes no router call at all. */
+    fun archiveExpiredCardsLocally(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val host = _currentConnection.value?.host ?: ""
+            try {
+                val expired = _userManagerUsers.value.filter {
+                    !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
+                }
+                if (expired.isNotEmpty()) {
+                    val priceByProfile = _userManagerProfiles.value.associate { it.name to it.price }
+                    val now = System.currentTimeMillis()
+                    val entries = expired.map { u ->
+                        ExpiredCardArchiveEntry(
+                            id = "$host|${u.username}",
+                            routerHost = host,
+                            username = u.username,
+                            profile = u.profile,
+                            price = priceByProfile[u.profile] ?: 0.0,
+                            archivedAt = now
+                        )
+                    }
+                    expiredCardArchiveDao.upsertAll(entries)
+                }
+                insertActivityLog("صيانة الكروت", "تم ترحيل ${expired.size} كرت منتهي إلى الحسابات المالية محليًا", host)
+                launch(Dispatchers.Main) { onSuccess(expired.size) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل الترحيل المحلي للحسابات المالية") }
+            }
+        }
+    }
+
+    /** Step 2 — disables every hotspot server on the router (/ip/hotspot/set
+     *  disabled=yes) and returns the .ids that were actually flipped (i.e. were
+     *  enabled beforehand), so step 8 can restore exactly those and nothing
+     *  else. NOTE: this disables ALL hotspot servers — it cannot reliably tell
+     *  which one (if any) the admin's own connection depends on, so there is
+     *  no selective "keep my own session's hotspot up" behavior here. */
+    fun disableHotspotForMaintenance(onSuccess: (List<String>) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val servers = api.executeStrict("/ip/hotspot/print")
+                val toDisable = servers.filter { it["disabled"] != "true" }
+                toDisable.forEach { srv ->
+                    val id = srv[".id"] ?: return@forEach
+                    api.executeStrict("/ip/hotspot/set", mapOf("numbers" to id, "disabled" to "yes"))
+                }
+                insertActivityLog("صيانة الكروت", "تم تعطيل ${toDisable.size} سيرفر هوتسبوت مؤقتًا قبل حذف الكروت المنتهية", host)
+                launch(Dispatchers.Main) { onSuccess(toDisable.mapNotNull { it[".id"] }) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل تعطيل الهوتسبوت") }
+            }
+        }
+    }
+
+    /** Step 5 — mirrors the verified production RouterOS v6 maintenance
+     *  script exactly:
+     *    /tool user-manager session close-session [find ];
+     *    /tool user-manager session remove [find ];
+     *    /tool user-manager log remove [find ];
+     *  On v6 this closes then removes EVERY session (safe here because step 2
+     *  already disabled every hotspot server, so nobody is still connected),
+     *  then removes every User Manager log row. On v7 (`/user-manager` has no
+     *  confirmed close-session/log-remove commands) this stays with the
+     *  original conservative behavior: only remove sessions that reference a
+     *  username no longer present in the current user list. */
+    fun cleanStaleUserManagerSessions(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                var removed = 0
+                var logsRemoved = 0
+                if (umBase == "/tool/user-manager") {
+                    val sessions = try {
+                        api.executeStrict("/tool/user-manager/session/print")
+                    } catch (_: Exception) { emptyList() }
+                    sessions.forEach { s ->
+                        val id = s[".id"] ?: return@forEach
+                        try {
+                            api.executeStrict("/tool/user-manager/session/close-session", mapOf("numbers" to id))
+                        } catch (_: Exception) {}
+                    }
+                    sessions.forEach { s ->
+                        val id = s[".id"] ?: return@forEach
+                        try {
+                            api.executeStrict("/tool/user-manager/session/remove", mapOf("numbers" to id))
+                            removed++
+                        } catch (_: Exception) {}
+                    }
+                    val logs = try {
+                        api.executeStrict("/tool/user-manager/log/print")
+                    } catch (_: Exception) { emptyList() }
+                    logs.forEach { l ->
+                        val id = l[".id"] ?: return@forEach
+                        try {
+                            api.executeStrict("/tool/user-manager/log/remove", mapOf("numbers" to id))
+                            logsRemoved++
+                        } catch (_: Exception) {}
+                    }
+                } else {
+                    val knownUsers = _userManagerUsers.value.map { it.username }.toSet()
+                    var sessions: List<Map<String, String>> = emptyList()
+                    for (base in umBases) {
+                        try {
+                            sessions = api.executeStrict("$base/session/print")
+                            break
+                        } catch (_: Exception) {}
+                    }
+                    val orphaned = sessions.filter { s ->
+                        val user = s["user"] ?: s["name"] ?: s["username"]
+                        user != null && user !in knownUsers
+                    }
+                    orphaned.forEach { s ->
+                        val id = s[".id"] ?: return@forEach
+                        try {
+                            umWrite(api, "session/remove", mapOf("numbers" to id))
+                            removed++
+                        } catch (_: Exception) {}
+                    }
+                }
+                val note = if (logsRemoved > 0) " وحُذف $logsRemoved سجل استخدام (log/remove)" else ""
+                insertActivityLog("صيانة الكروت", "تم تنظيف $removed جلسة من سجلات User Manager على الراوتر$note", host)
+                launch(Dispatchers.Main) { onSuccess(removed) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل تنظيف سجلات User Manager") }
+            }
+        }
+    }
+
+    /** Step 6 — on v6, first runs the real, documented router-side command
+     *  `/tool/user-manager/database/rebuild`, which compacts/rebuilds the
+     *  User Manager database on the router itself (MikroTik recommends
+     *  running it after deleting unused users and clearing logs — exactly
+     *  the order steps 4→5→6 already follow). That command can take a while
+     *  and the router may not answer while it runs, so a read timeout here
+     *  is treated as "sent and still running," not a failure. Either way,
+     *  this then re-syncs the app's own local cache of the User Manager
+     *  profiles+users database (StateFlow + Room) from the router's current
+     *  (post-deletion) state. Runs inline (not via the fire-and-forget
+     *  refreshData()/fetchRealNativeData()) so onSuccess only fires once the
+     *  resync has actually finished. */
+    fun rebuildUserManagerLocalDatabase(onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val conn = _currentConnection.value
+            if (api == null || conn == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) umRequiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            var rebuildNote = ""
+            if (umBase == "/tool/user-manager") {
+                try {
+                    api.executeStrict("/tool/user-manager/database/rebuild")
+                    rebuildNote = " وتمت إعادة بناء قاعدة البيانات على الراوتر (database/rebuild)"
+                } catch (e: Exception) {
+                    // Non-fatal either way: continue to resync the local cache even
+                    // if the router-side command timed out/failed.
+                    rebuildNote = if (isLikelyRouterTimeout(e)) {
+                        " — أُرسل أمر إعادة البناء database/rebuild للراوتر (قد يستغرق دون رد فوري)"
+                    } else {
+                        " — تعذّر تنفيذ database/rebuild على الراوتر: ${e.message}"
+                    }
+                }
+            }
+            try {
+                var umProfList = api.execute("$umBase/profile/print")
+                var isV6UM = umBase == "/tool/user-manager"
+                if (umProfList.isEmpty() && rosMajor == 0) {
+                    val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
+                    umProfList = api.execute("$alt/profile/print")
+                    if (umProfList.isNotEmpty()) {
+                        isV6UM = !isV6UM
+                        rosMajor = if (isV6UM) 6 else 7
+                    }
+                }
+                val limitations = if (isV6UM) {
+                    api.execute("/tool/user-manager/profile/profile-limitation/print").associateBy { it["profile"] ?: it["name"] ?: "" }
+                } else {
+                    api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
+                }
+                val umProfiles = umProfList.map { p ->
+                    val name = p["name"] ?: p["name-for-users"] ?: "default"
+                    val lim = limitations[name] ?: emptyMap()
+                    UserManagerProfile(
+                        name = name,
+                        validity = p["validity"] ?: p["starts-at"] ?: "30d",
+                        price = p["price"]?.toDoubleOrNull() ?: 0.0,
+                        downloadLimit = lim["download-limit"] ?: lim["transfer-limit"] ?: lim["rate-limit-rx"] ?: p["download-limit"] ?: "unlimited",
+                        uptimeLimit = lim["uptime-limit"] ?: lim["uptime"] ?: p["uptime-limit"] ?: "unlimited",
+                        templateName = name,
+                        sharedUsers = p["override-shared-users"]?.toIntOrNull() ?: 1
+                    )
+                }
+                if (umProfiles.isNotEmpty()) {
+                    _userManagerProfiles.value = umProfiles
+                    cacheDao.insertUserManagerProfiles(umProfiles.map {
+                        CachedUserManagerProfile(
+                            name = it.name, routerHost = conn.host, validity = it.validity, price = it.price,
+                            sharedUsers = it.sharedUsers, downloadLimit = it.downloadLimit,
+                            uptimeLimit = it.uptimeLimit, templateName = it.templateName
+                        )
+                    })
+                }
+
+                var umList = api.execute("$umBase/user/print")
+                if (umList.isEmpty() && rosMajor == 0) {
+                    umList = api.execute(if (umBase == "/tool/user-manager") "/user-manager/user/print" else "/tool/user-manager/user/print")
+                }
+                val umUsers = umList.map {
+                    val uname = it["name"] ?: it["username"] ?: ""
+                    val assignedProfile = it["profile"]
+                    val actualProfile = it["actual-profile"]
+                    UserManagerUser(
+                        username = uname,
+                        password = it["password"] ?: uname,
+                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
+                        active = it["disabled"] != "true",
+                        uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
+                        downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
+                        serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
+                        comment = it["comment"] ?: "",
+                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
+                    )
+                }
+                _userManagerUsers.value = umUsers
+                if (umUsers.isNotEmpty()) {
+                    cacheDao.insertUserManagerUsers(umUsers.map {
+                        CachedUserManagerUser(
+                            username = it.username, routerHost = conn.host, password = it.password,
+                            profile = it.profile, active = it.active, uptimeUsed = it.uptimeUsed, downloadLimit = it.downloadLimit
+                        )
+                    })
+                }
+
+                insertActivityLog("صيانة الكروت", "تمت إعادة بناء قاعدة بيانات User Manager المحلية من الراوتر (${umUsers.size} مستخدم، ${umProfiles.size} باقة)$rebuildNote", conn.host)
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إعادة بناء قاعدة User Manager") }
+            }
+        }
+    }
+
+    /** Step 7 — on v6, first runs the real, documented router-side command
+     *  `/tool/user-manager/database/rebuild-log` (confirmed from the same
+     *  verified production maintenance script as step 6's database/rebuild;
+     *  same tolerant handling since it can run for a while without
+     *  responding). Then rebuilds the local user-manager *sessions* store by
+     *  re-reading $umBase/session/print (reflects the cleanup step 5 just did
+     *  on the router). Distinct from step 6, which rebuilds the profiles/users
+     *  cache. */
+    fun rebuildUserManagerLocalRecords(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            var rebuildLogNote = ""
+            if (api != null && umBase == "/tool/user-manager") {
+                try {
+                    api.executeStrict("/tool/user-manager/database/rebuild-log")
+                    rebuildLogNote = " وتمت إعادة بناء سجل الاستخدام على الراوتر (database/rebuild-log)"
+                } catch (e: Exception) {
+                    // Non-fatal either way: continue to resync the local sessions
+                    // store even if the router-side command timed out/failed.
+                    rebuildLogNote = if (isLikelyRouterTimeout(e)) {
+                        " — أُرسل أمر إعادة بناء السجل database/rebuild-log للراوتر (قد يستغرق دون رد فوري)"
+                    } else {
+                        " — تعذّر تنفيذ database/rebuild-log على الراوتر: ${e.message}"
+                    }
+                }
+            }
+            fetchUserManagerSessions(
+                onSuccess = { sessions ->
+                    insertActivityLog("صيانة الكروت", "تمت إعادة بناء مخزن سجلات User Manager المحلي (${sessions.size} جلسة)$rebuildLogNote", _currentConnection.value?.host ?: "")
+                    onSuccess(sessions.size)
+                },
+                onError = onError
+            )
+        }
+    }
+
+    /** Step 8 — re-enables exactly the hotspot servers step 2 disabled. */
+    fun restoreHotspotAfterMaintenance(disabledServerIds: List<String>, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                disabledServerIds.forEach { id ->
+                    api.executeStrict("/ip/hotspot/set", mapOf("numbers" to id, "disabled" to "no"))
+                }
+                insertActivityLog("صيانة الكروت", "تمت إعادة تفعيل ${disabledServerIds.size} سيرفر هوتسبوت بعد التنظيف", host)
+                launch(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل إعادة تفعيل الهوتسبوت") }
+            }
+        }
+    }
+
+    /** Step 9 — verifies no hotspot server was left disabled by this wizard,
+     *  then sends the final router reboot (reuses rebootRouter()'s resilient
+     *  connection-dropped handling). */
+    fun verifyHotspotAndRebootRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            try {
+                val stillDisabled = api.executeStrict("/ip/hotspot/print").count { it["disabled"] == "true" }
+                if (stillDisabled > 0) {
+                    insertActivityLog("صيانة الكروت", "تحذير: $stillDisabled سيرفر هوتسبوت ما زال معطّلًا قبل إعادة التشغيل النهائية", host)
+                }
+            } catch (_: Exception) {
+                // Verification is best-effort — still proceed to reboot below.
+            }
+            launch(Dispatchers.Main) { rebootRouter(onSuccess, onError) }
         }
     }
 

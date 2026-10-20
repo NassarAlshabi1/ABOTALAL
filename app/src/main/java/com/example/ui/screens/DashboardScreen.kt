@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,10 +31,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.RouterBackupFile
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 @Composable
 fun DashboardScreen(
@@ -69,6 +72,7 @@ fun DashboardScreen(
     var showAboutDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
     var showPrintingSystemDialog by remember { mutableStateOf(false) }
+    var feedbackMessage by remember { mutableStateOf<String?>(null) }
 
     // Refresh animation rotation
     val infiniteTransition = rememberInfiniteTransition(label = "refresh_rotation")
@@ -889,18 +893,223 @@ fun DashboardScreen(
     }
 
     if (showBackupDialog) {
+        var backups by remember { mutableStateOf<List<RouterBackupFile>>(emptyList()) }
+        var isLoadingList by remember { mutableStateOf(true) }
+        var isCreating by remember { mutableStateOf(false) }
+        var listError by remember { mutableStateOf<String?>(null) }
+        var pendingRestoreFile by remember { mutableStateOf<String?>(null) }
+        var pendingDeleteFile by remember { mutableStateOf<String?>(null) }
+
+        fun reloadBackups() {
+            isLoadingList = true
+            listError = null
+            viewModel.fetchRouterBackups(
+                onSuccess = { list -> backups = list; isLoadingList = false },
+                onError = { err -> listError = err; isLoadingList = false }
+            )
+        }
+
+        // Fetch the real list from the router the moment the dialog opens, instead
+        // of showing a static placeholder — this is the actual fix for "backups" on
+        // the dashboard: it used to just be inert text with a Close button.
+        LaunchedEffect(showBackupDialog) { reloadBackups() }
+
         AlertDialog(
             onDismissRequest = { showBackupDialog = false },
-            title = { Text("النسخ الاحتياطية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            title = { Text("النسخ الاحتياطية لإعدادات الراوتر", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
-                Text("يمكنك أخذ نسخة احتياطية من بيانات الراوتر أو استعادتها.", fontFamily = CairoFontFamily)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "نسخة احتياطية كاملة لإعدادات الراوتر (System Backup) — تُحفظ على الراوتر نفسه ويمكن استعادتها منه في أي وقت.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 12.sp,
+                        color = textSecondary
+                    )
+
+                    Button(
+                        onClick = {
+                            isCreating = true
+                            viewModel.createRouterBackup(
+                                onSuccess = { name ->
+                                    isCreating = false
+                                    feedbackMessage = "تم إنشاء نسخة احتياطية جديدة: $name"
+                                    reloadBackups()
+                                },
+                                onError = { err ->
+                                    isCreating = false
+                                    feedbackMessage = "فشل إنشاء النسخة الاحتياطية: $err"
+                                }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isCreating,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
+                    ) {
+                        if (isCreating) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("أخذ نسخة احتياطية جديدة الآن", fontFamily = CairoFontFamily)
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    Text(
+                        "النسخ المحفوظة على الراوتر:",
+                        fontFamily = CairoFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = textPrimary
+                    )
+
+                    when {
+                        isLoadingList -> Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                        }
+                        listError != null -> Text(
+                            listError ?: "",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = Color(0xFFDC2626)
+                        )
+                        backups.isEmpty() -> Text(
+                            "لا توجد نسخ احتياطية محفوظة على الراوتر حالياً.",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = textSecondary
+                        )
+                        else -> LazyColumn(
+                            modifier = Modifier.heightIn(max = 220.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(backups) { file ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            file.name,
+                                            fontFamily = CairoFontFamily,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = textPrimary
+                                        )
+                                        Text(
+                                            "${formatBackupFileSize(file.sizeBytes)} • ${file.time}",
+                                            fontFamily = CairoFontFamily,
+                                            fontSize = 11.sp,
+                                            color = textSecondary
+                                        )
+                                    }
+                                    IconButton(onClick = { pendingRestoreFile = file.name }) {
+                                        Icon(Icons.Filled.Restore, contentDescription = "استعادة", tint = Color(0xFF0891B2))
+                                    }
+                                    IconButton(onClick = { pendingDeleteFile = file.name }) {
+                                        Icon(Icons.Filled.Delete, contentDescription = "حذف", tint = Color(0xFFDC2626))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
+                TextButton(onClick = { showBackupDialog = false }) {
+                    Text("إغلاق", fontFamily = CairoFontFamily)
+                }
+            }
+        )
+
+        // Restoring overwrites the router's entire current configuration and makes
+        // it reboot immediately — a second explicit confirmation before sending it.
+        pendingRestoreFile?.let { fileName ->
+            AlertDialog(
+                onDismissRequest = { pendingRestoreFile = null },
+                title = { Text("تأكيد الاستعادة", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626)) },
+                text = {
+                    Text(
+                        "استعادة '$fileName' ستستبدل كل إعدادات الراوتر الحالية بالإعدادات المحفوظة في هذه النسخة، وسيُعيد الراوتر تشغيل نفسه فورًا. هل أنت متأكد؟",
+                        fontFamily = CairoFontFamily
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val name = fileName
+                            pendingRestoreFile = null
+                            viewModel.restoreRouterBackup(
+                                name,
+                                onSuccess = { msg -> feedbackMessage = msg; showBackupDialog = false },
+                                onError = { err -> feedbackMessage = err }
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
+                    ) {
+                        Text("نعم، استعادة الآن", fontFamily = CairoFontFamily)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingRestoreFile = null }) {
+                        Text("إلغاء", fontFamily = CairoFontFamily)
+                    }
+                }
+            )
+        }
+
+        pendingDeleteFile?.let { fileName ->
+            AlertDialog(
+                onDismissRequest = { pendingDeleteFile = null },
+                title = { Text("حذف النسخة الاحتياطية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+                text = {
+                    Text("هل تريد حذف '$fileName' نهائيًا من الراوتر؟ لا يمكن التراجع عن هذا الإجراء.", fontFamily = CairoFontFamily)
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val name = fileName
+                            pendingDeleteFile = null
+                            viewModel.deleteRouterBackup(
+                                name,
+                                onSuccess = { feedbackMessage = "تم حذف النسخة الاحتياطية '$name'"; reloadBackups() },
+                                onError = { err -> feedbackMessage = err }
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
+                    ) {
+                        Text("حذف", fontFamily = CairoFontFamily)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDeleteFile = null }) {
+                        Text("إلغاء", fontFamily = CairoFontFamily)
+                    }
+                }
+            )
+        }
+    }
+
+    // Feedback dialog for backup create/restore/delete results (and any future
+    // async action on this screen that needs to surface a result to the user).
+    feedbackMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { feedbackMessage = null },
+            title = { Text("تنبيه النظام", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = { Text(msg, fontFamily = CairoFontFamily) },
+            confirmButton = {
                 Button(
-                    onClick = { showBackupDialog = false },
+                    onClick = { feedbackMessage = null },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
                 ) {
-                    Text("إغلاق", fontFamily = CairoFontFamily)
+                    Text("حسناً", fontFamily = CairoFontFamily)
                 }
             }
         )
@@ -1254,5 +1463,15 @@ fun WideServiceCard(
                 color = titleColor
             )
         }
+    }
+}
+
+private fun formatBackupFileSize(bytes: Long): String {
+    val b = bytes.toDouble()
+    return when {
+        b >= 1024 * 1024 * 1024 -> String.format(Locale.US, "%.2f GB", b / (1024 * 1024 * 1024))
+        b >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", b / (1024 * 1024))
+        b >= 1024 -> String.format(Locale.US, "%.0f KB", b / 1024)
+        else -> "$bytes B"
     }
 }

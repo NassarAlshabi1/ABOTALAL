@@ -10,6 +10,7 @@ import com.example.data.local.GeneratedBatchEntity
 import com.example.data.local.RouterConnection
 import com.example.data.model.HotspotProfile
 import com.example.data.model.HotspotUser
+import com.example.data.model.RouterBackupFile
 import com.example.data.model.RouterLogEntry
 import com.example.data.model.UserManagerProfile
 import com.example.data.model.UserManagerSession
@@ -196,8 +197,8 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.bulkDeleteUserManagerUsers(usernames, onSuccess, onError)
     }
 
-    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit) {
-        repository.bulkToggleUserManagerUsers(usernames, active, onSuccess)
+    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit, onError: (String) -> Unit = {}) {
+        repository.bulkToggleUserManagerUsers(usernames, active, onSuccess, onError)
     }
 
     fun addUserManagerProfile(profile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {
@@ -235,6 +236,53 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     fun backupUserManagerDatabase(onSuccess: (String) -> Unit, onError: (String) -> Unit = {}) {
         repository.backupUserManagerDatabase(onSuccess, onError)
+    }
+
+    /* Router configuration backups (full system config — distinct from the User
+     * Manager database backup above and from the MikroTik Cloud backup feature) */
+    fun fetchRouterBackups(onSuccess: (List<RouterBackupFile>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchRouterBackups(onSuccess, onError)
+    }
+
+    fun createRouterBackup(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.createRouterBackup(onSuccess, onError)
+    }
+
+    fun deleteRouterBackup(fileName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.deleteRouterBackup(fileName, onSuccess, onError)
+    }
+
+    fun restoreRouterBackup(fileName: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.restoreRouterBackup(fileName, onSuccess, onError)
+    }
+
+    /* Expired-cards maintenance wizard (9 manual steps) */
+    fun archiveExpiredCardsLocally(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.archiveExpiredCardsLocally(onSuccess, onError)
+    }
+
+    fun disableHotspotForMaintenance(onSuccess: (List<String>) -> Unit, onError: (String) -> Unit) {
+        repository.disableHotspotForMaintenance(onSuccess, onError)
+    }
+
+    fun cleanStaleUserManagerSessions(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.cleanStaleUserManagerSessions(onSuccess, onError)
+    }
+
+    fun rebuildUserManagerLocalDatabase(onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.rebuildUserManagerLocalDatabase(onSuccess, onError)
+    }
+
+    fun rebuildUserManagerLocalRecords(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.rebuildUserManagerLocalRecords(onSuccess, onError)
+    }
+
+    fun restoreHotspotAfterMaintenance(disabledServerIds: List<String>, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.restoreHotspotAfterMaintenance(disabledServerIds, onSuccess, onError)
+    }
+
+    fun verifyHotspotAndRebootRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.verifyHotspotAndRebootRouter(onSuccess, onError)
     }
 
     /* User Manager live sessions */
