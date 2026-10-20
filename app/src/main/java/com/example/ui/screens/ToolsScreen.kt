@@ -71,6 +71,26 @@ fun ToolsScreen(
     var showRebootDialog by remember { mutableStateOf(false) }
     var isOperating by remember { mutableStateOf(false) }
 
+    // REAL router state for the quick-services switches — no fictional defaults:
+    // read /ip/hotspot/print (all disabled = open network) and whether the
+    // ABO_TALAL_ANTI_SHARE mangle rule exists.
+    val isConnected by viewModel.isConnected.collectAsState()
+    LaunchedEffect(isConnected) {
+        if (isConnected) {
+            viewModel.fetchQuickServicesState(
+                onResult = { free, anti ->
+                    isFreeHotspotEnabled = free
+                    isAntiShareEnabled = anti
+                },
+                onError = { /* leave switches untouched — user can still toggle manually */ }
+            )
+        }
+    }
+
+    // Dark-mode aware background for the main tools list
+    val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val toolsScreenBg = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
+
     // Back button handling
     BackHandler(enabled = activeSubView !is ToolsActiveView.MainList) {
         activeSubView = ToolsActiveView.MainList
@@ -220,7 +240,7 @@ fun ToolsScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(padding)
-                            .background(Color(0xFFF8FAFC))
+                            .background(toolsScreenBg)
                             .padding(horizontal = 14.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
@@ -633,11 +653,10 @@ fun ToolsScreen(
                                 items = listOf(
                                     ToolGridItem("cloud", "سحابة مايكروتيك", Icons.Filled.Cloud, Color(0xFF0C5A60)),
                                     ToolGridItem("resources", "ذاكرة / CPU", Icons.Filled.Memory, Color(0xFF0C5A60)),
-                                    ToolGridItem("resources", "مراقبة المرور", Icons.Filled.Insights, Color(0xFF0284C7)),
+                                    ToolGridItem("graphing_interface", "مراقبة المرور", Icons.Filled.Insights, Color(0xFF0284C7)),
                                     ToolGridItem("routerboard", "RouterBOARD", Icons.Filled.DeveloperBoard, Color(0xFF7C3AED)),
-                                    ToolGridItem("connections", "اتصالات نشطة", Icons.Filled.OnlinePrediction, Color(0xFF10B981)),
-                                    ToolGridItem("health", "صحة الجهاز (Health)", Icons.Filled.Favorite, Color(0xFFEF4444)),
-                                    ToolGridItem("resources", "الموارد (Resources)", Icons.Filled.Widgets, Color(0xFFF59E0B))
+                                    ToolGridItem("ppp_active", "اتصالات PPP نشطة", Icons.Filled.OnlinePrediction, Color(0xFF10B981)),
+                                    ToolGridItem("health", "صحة الجهاز (Health)", Icons.Filled.Favorite, Color(0xFFEF4444))
                                 ),
                                 onItemClick = { item ->
                                     if (item.id == "cloud") {

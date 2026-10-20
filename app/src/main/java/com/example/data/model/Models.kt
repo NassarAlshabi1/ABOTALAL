@@ -58,6 +58,33 @@ data class UserManagerProfile(
     val templateName: String = ""
 )
 
+/** A live user-manager session read from `$umBase/session/print` (v6 and v7). */
+data class UserManagerSession(
+    val id: String,
+    val user: String,
+    val address: String = "",
+    val uptime: String = "0s",
+    val bytesIn: Long = 0L,
+    val bytesOut: Long = 0L,
+    val started: String = ""
+)
+
+/** One local system backup file sitting on the router (/system/backup/save output,
+ *  read back via /file/print and filtered to names ending in ".backup"). */
+data class RouterBackupFile(
+    val name: String,
+    val sizeBytes: Long = 0L,
+    val time: String = ""
+)
+
+/** One row of the router's own log buffer (/log/print). */
+data class RouterLogEntry(
+    val id: String,
+    val time: String = "",
+    val topics: String = "",
+    val message: String = ""
+)
+
 data class InterfaceStats(
     val name: String,
     val type: String,

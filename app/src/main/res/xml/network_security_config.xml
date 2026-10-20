@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security policy for NetCraft:
+  - Cleartext HTTP is permitted because MikroTik routers commonly expose the REST
+    API over plain http:// on port 80 (no TLS on small routers).
+  - HTTPS uses ONLY system trust anchors — the app no longer ships a trust-all
+    manager. Router HTTPS endpoints with self-signed certs must use a properly
+    imported certificate, or the plain native API ports 8728/8729.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

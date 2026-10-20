@@ -110,6 +110,8 @@ dependencies {
   // implementation(libs.logging.interceptor) // unused: no OkHttp logging interceptor wired up
   // implementation(libs.moshi.kotlin) // unused: router JSON is parsed by hand with org.json
   implementation(libs.okhttp)
+  // Real scannable QR (QR_CODE) and barcode (Code128) rendering for printed vouchers
+  implementation(libs.zxing.core)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit) // unused: all router calls go through MikroTikNativeApi/OkHttp directly
   testImplementation(libs.androidx.compose.ui.test.junit4)
