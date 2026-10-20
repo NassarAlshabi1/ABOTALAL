@@ -666,7 +666,7 @@ fun LoginScreen(
                                             }
                                         }
                                     }
-                                    else -> {
+                                    2 -> {
                                         // 3. Domain Mode: Domain/URL Input + Port
                                         Column(modifier = Modifier.fillMaxWidth()) {
                                             Row(
