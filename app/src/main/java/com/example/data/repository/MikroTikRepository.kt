@@ -1450,6 +1450,17 @@ class MikroTikRepository(
     private fun isNoSuchCommand(e: Exception?): Boolean =
         e?.message?.contains("no such command", ignoreCase = true) == true
 
+    // executeStrict() never lets a raw SocketTimeoutException reach the caller —
+    // MikroTikNativeApi.executeInternal() catches it, retries once internally, and
+    // on failure wraps the result in a plain IOException with an Arabic "انتهت
+    // مهلة..." message (or occasionally echoes the retry's own English "timed out"
+    // message). Detect "likely still running on the router, not a real failure"
+    // by message content instead of exception type.
+    private fun isLikelyRouterTimeout(e: Exception?): Boolean {
+        val msg = e?.message?.lowercase() ?: return false
+        return msg.contains("انتهت مهلة") || msg.contains("timeout") || msg.contains("timed out")
+    }
+
     // Adds one user-manager user using the attribute set each RouterOS version
     // actually accepts: v7 `/user-manager/user/add name=` (no customer), v6
     // `/tool/user-manager/user/add customer= username=`. When [preferred] is
@@ -2759,12 +2770,14 @@ class MikroTikRepository(
                 try {
                     api.executeStrict("/tool/user-manager/database/rebuild")
                     rebuildNote = " وتمت إعادة بناء قاعدة البيانات على الراوتر (database/rebuild)"
-                } catch (e: java.net.SocketTimeoutException) {
-                    rebuildNote = " — أُرسل أمر إعادة البناء database/rebuild للراوتر (قد يستغرق دون رد فوري)"
                 } catch (e: Exception) {
-                    // Non-fatal: continue to resync the local cache even if the
-                    // router-side rebuild command failed/unsupported on this build.
-                    rebuildNote = " — تعذّر تنفيذ database/rebuild على الراوتر: ${e.message}"
+                    // Non-fatal either way: continue to resync the local cache even
+                    // if the router-side command timed out/failed.
+                    rebuildNote = if (isLikelyRouterTimeout(e)) {
+                        " — أُرسل أمر إعادة البناء database/rebuild للراوتر (قد يستغرق دون رد فوري)"
+                    } else {
+                        " — تعذّر تنفيذ database/rebuild على الراوتر: ${e.message}"
+                    }
                 }
             }
             try {
@@ -2861,12 +2874,14 @@ class MikroTikRepository(
                 try {
                     api.executeStrict("/tool/user-manager/database/rebuild-log")
                     rebuildLogNote = " وتمت إعادة بناء سجل الاستخدام على الراوتر (database/rebuild-log)"
-                } catch (e: java.net.SocketTimeoutException) {
-                    rebuildLogNote = " — أُرسل أمر إعادة بناء السجل database/rebuild-log للراوتر (قد يستغرق دون رد فوري)"
                 } catch (e: Exception) {
-                    // Non-fatal: continue to resync the local sessions store even if
-                    // the router-side rebuild-log command failed/unsupported here.
-                    rebuildLogNote = " — تعذّر تنفيذ database/rebuild-log على الراوتر: ${e.message}"
+                    // Non-fatal either way: continue to resync the local sessions
+                    // store even if the router-side command timed out/failed.
+                    rebuildLogNote = if (isLikelyRouterTimeout(e)) {
+                        " — أُرسل أمر إعادة بناء السجل database/rebuild-log للراوتر (قد يستغرق دون رد فوري)"
+                    } else {
+                        " — تعذّر تنفيذ database/rebuild-log على الراوتر: ${e.message}"
+                    }
                 }
             }
             fetchUserManagerSessions(
