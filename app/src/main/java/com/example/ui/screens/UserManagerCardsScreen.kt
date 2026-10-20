@@ -121,6 +121,27 @@ import java.nio.charset.StandardCharsets
  * - العرض الكامل والتفصيلي
  * - شريط الترقيم والتنقل بين الصفحات
  */
+private fun isExpiredCard(user: UserManagerUser): Boolean =
+    !user.active || (user.profileExpired && user.uptimeUsed.isNotBlank() && user.uptimeUsed != "0s")
+
+@Composable
+private fun CardStatPill(modifier: Modifier, label: String, value: Int, color: Color) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = color.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.20f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 9.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(value.toString(), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = color)
+            Text(label, fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF475569), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
 @Composable
 fun UserManagerCardsScreen(
     viewModel: MikroTikViewModel,
@@ -192,8 +213,7 @@ fun UserManagerCardsScreen(
                 // Same compound signal as cleanExpiredUserManagerUsers(): disabled, or the
                 // router cleared the active profile (profileExpired) on a card that was
                 // actually used at least once.
-                "الكروت المنتهية" -> !user.active ||
-                    (user.profileExpired && user.uptimeUsed.isNotBlank() && user.uptimeUsed != "0s")
+                "الكروت المنتهية" -> isExpiredCard(user)
                 else -> true
             }
 
@@ -213,6 +233,9 @@ fun UserManagerCardsScreen(
             matchesScope && matchesSearch
         }
     }
+
+    val activeCount = rawUsers.count { it.active && !isExpiredCard(it) }
+    val expiredCount = rawUsers.count(::isExpiredCard)
 
     // Pagination calculations
     val effectivePageSize = if (pageSize <= 0) filteredUsers.size.coerceAtLeast(1) else pageSize
@@ -407,6 +430,29 @@ fun UserManagerCardsScreen(
                                 }
                             )
                         }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CardStatPill(Modifier.weight(1f), "الإجمالي", rawUsers.size, Color(0xFF0C5A60))
+                    CardStatPill(Modifier.weight(1f), "النشطة", activeCount, Color(0xFF16A34A))
+                    CardStatPill(Modifier.weight(1f), "المنتهية", expiredCount, Color(0xFFDC2626))
+                }
+
+                if (searchQuery.isNotBlank() || selectedScope != "جميع الكروت من الروتر") {
+                    TextButton(
+                        onClick = {
+                            searchQuery = ""
+                            selectedScope = "جميع الكروت من الروتر"
+                            searchFieldType = "الاسم"
+                            currentPage = 1
+                        },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("مسح البحث والفلاتر", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFF0C5A60))
                     }
                 }
 
