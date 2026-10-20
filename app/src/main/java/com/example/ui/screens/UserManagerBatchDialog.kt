@@ -147,6 +147,10 @@ fun UserManagerBatchFullDialog(
     var previewBatchForPrint by remember { mutableStateOf<GeneratedBatchRecord?>(null) }
     var previewBatchUsers by remember { mutableStateOf<List<UserManagerUser>>(emptyList()) }
     var showInAppPrintPreview by remember { mutableStateOf(false) }
+    // Deleting a batch record is permanent (it's the only local record linking
+    // these cards/price/profile together for exports and financial tracking) —
+    // require confirmation instead of deleting on the first tap.
+    var pendingDeleteBatch by remember { mutableStateOf<GeneratedBatchRecord?>(null) }
 
     // Import Batch State
     var importRawText by remember { mutableStateOf("") }
@@ -1452,10 +1456,7 @@ fun UserManagerBatchFullDialog(
 
                                                             // 3. Delete Batch
                                                             IconButton(
-                                                                onClick = {
-                                                                    onUpdateBatches(batchRecords.filter { it.batchId != batch.batchId })
-                                                                    Toast.makeText(context, "تم حذف الدفعة ${batch.batchId}", Toast.LENGTH_SHORT).show()
-                                                                },
+                                                                onClick = { pendingDeleteBatch = batch },
                                                                 modifier = Modifier.size(28.dp)
                                                             ) {
                                                                 Icon(Icons.Filled.DeleteOutline, contentDescription = "حذف", tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
@@ -1779,6 +1780,34 @@ fun UserManagerBatchFullDialog(
             },
             dismissButton = {
                 TextButton(onClick = { showAddProfileDialog = false }) {
+                    Text("إلغاء", fontFamily = CairoFontFamily)
+                }
+            }
+        )
+    }
+
+    // --- Confirm batch-record deletion (permanent local record, not just a toggle) ---
+    pendingDeleteBatch?.let { batch ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteBatch = null },
+            title = { Text("تأكيد حذف الدفعة", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "سيتم حذف سجل الدفعة '${batch.batchId}' نهائيًا من التطبيق (لا يحذف الكروت من الراوتر). لا يمكن التراجع عن هذا الإجراء. هل تريد المتابعة؟",
+                    fontFamily = CairoFontFamily
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onUpdateBatches(batchRecords.filter { it.batchId != batch.batchId })
+                    Toast.makeText(context, "تم حذف الدفعة ${batch.batchId}", Toast.LENGTH_SHORT).show()
+                    pendingDeleteBatch = null
+                }) {
+                    Text("حذف", color = Color(0xFFEF4444), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteBatch = null }) {
                     Text("إلغاء", fontFamily = CairoFontFamily)
                 }
             }
