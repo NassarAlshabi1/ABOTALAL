@@ -39,8 +39,10 @@ abstract class AppDatabase : RoomDatabase() {
         /**
          * REAL migration v3 → v4: adds the persisted generated_batches table.
          * No destructive rebuild — cached routers/users/profiles survive updates.
+         * Internal (not private) so AppDatabaseMigrationTest can exercise
+         * migrate() directly against a bare SupportSQLiteDatabase.
          */
-        private val MIGRATION_3_4 = object : Migration(3, 4) {
+        internal val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -65,8 +67,10 @@ abstract class AppDatabase : RoomDatabase() {
          * REAL migration v4 → v5: adds the expired_card_archive table used by the
          * "صيانة الكروت المنتهية" wizard's local financial-accounts migration step
          * and by the Financial Accounts screen. No destructive rebuild.
+         * Internal (not private) so AppDatabaseMigrationTest can exercise
+         * migrate() directly against a bare SupportSQLiteDatabase.
          */
-        private val MIGRATION_4_5 = object : Migration(4, 5) {
+        internal val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """
