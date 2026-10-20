@@ -55,17 +55,17 @@ private val WIZARD_STEPS = listOf(
     ),
     WizardStepUi(
         "تنظيف سجلات User Manager",
-        "ينظّف سجلات User Manager القديمة (الجلسات اليتيمة) من الراوتر.",
+        "يُغلق ويحذف جميع جلسات User Manager ويحذف سجل الاستخدام على الراوتر (close-session / session remove / log remove).",
         Color(0xFF80CBAE)
     ),
     WizardStepUi(
         "إعادة بناء قاعدة User Manager",
-        "يعيد بناء قاعدة بيانات User Manager المحلية في التطبيق من الراوتر بعد الحذف.",
+        "ينفّذ أمر إعادة بناء قاعدة البيانات على الراوتر (database/rebuild) ثم يحدّث النسخة المحلية في التطبيق.",
         Color(0xFF90CAF9)
     ),
     WizardStepUi(
         "إعادة بناء سجلات User Manager",
-        "يعيد بناء مخزن سجلات/جلسات User Manager المحلي.",
+        "ينفّذ أمر إعادة بناء سجل الاستخدام على الراوتر (database/rebuild-log) ثم يحدّث مخزن الجلسات المحلي.",
         Color(0xFFA5D6A7)
     ),
     WizardStepUi(

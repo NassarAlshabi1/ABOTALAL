@@ -2655,14 +2655,17 @@ class MikroTikRepository(
         }
     }
 
-    /** Step 5 — removes user-manager sessions on the router that reference a
-     *  username no longer present in the current user list (orphaned session
-     *  rows left behind by deleted cards). Real router-side cleanup, scoped to
-     *  $umBase/session (v6 & v7). On v6 this is now complemented by the real,
-     *  documented `/tool/user-manager/database/clear-log` command, which
-     *  clears the User Manager's accounting/usage log on the router — a
-     *  separate table from sessions, so both run rather than one replacing
-     *  the other. */
+    /** Step 5 — mirrors the verified production RouterOS v6 maintenance
+     *  script exactly:
+     *    /tool user-manager session close-session [find ];
+     *    /tool user-manager session remove [find ];
+     *    /tool user-manager log remove [find ];
+     *  On v6 this closes then removes EVERY session (safe here because step 2
+     *  already disabled every hotspot server, so nobody is still connected),
+     *  then removes every User Manager log row. On v7 (`/user-manager` has no
+     *  confirmed close-session/log-remove commands) this stays with the
+     *  original conservative behavior: only remove sessions that reference a
+     *  username no longer present in the current user list. */
     fun cleanStaleUserManagerSessions(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             val api = nativeApi
@@ -2672,39 +2675,58 @@ class MikroTikRepository(
                 return@launch
             }
             try {
-                val knownUsers = _userManagerUsers.value.map { it.username }.toSet()
-                var sessions: List<Map<String, String>> = emptyList()
-                for (base in umBases) {
-                    try {
-                        sessions = api.executeStrict("$base/session/print")
-                        break
-                    } catch (_: Exception) {}
-                }
-                val orphaned = sessions.filter { s ->
-                    val user = s["user"] ?: s["name"] ?: s["username"]
-                    user != null && user !in knownUsers
-                }
                 var removed = 0
-                orphaned.forEach { s ->
-                    val id = s[".id"] ?: return@forEach
-                    try {
-                        umWrite(api, "session/remove", mapOf("numbers" to id))
-                        removed++
-                    } catch (_: Exception) {}
-                }
-                var logCleared = false
+                var logsRemoved = 0
                 if (umBase == "/tool/user-manager") {
-                    try {
-                        api.executeStrict("/tool/user-manager/database/clear-log")
-                        logCleared = true
-                    } catch (_: Exception) {
-                        // Non-fatal: command may be unsupported on this build or the
-                        // log may already be empty — orphaned-session cleanup above
-                        // still ran and succeeded independently.
+                    val sessions = try {
+                        api.executeStrict("/tool/user-manager/session/print")
+                    } catch (_: Exception) { emptyList() }
+                    sessions.forEach { s ->
+                        val id = s[".id"] ?: return@forEach
+                        try {
+                            api.executeStrict("/tool/user-manager/session/close-session", mapOf("numbers" to id))
+                        } catch (_: Exception) {}
+                    }
+                    sessions.forEach { s ->
+                        val id = s[".id"] ?: return@forEach
+                        try {
+                            api.executeStrict("/tool/user-manager/session/remove", mapOf("numbers" to id))
+                            removed++
+                        } catch (_: Exception) {}
+                    }
+                    val logs = try {
+                        api.executeStrict("/tool/user-manager/log/print")
+                    } catch (_: Exception) { emptyList() }
+                    logs.forEach { l ->
+                        val id = l[".id"] ?: return@forEach
+                        try {
+                            api.executeStrict("/tool/user-manager/log/remove", mapOf("numbers" to id))
+                            logsRemoved++
+                        } catch (_: Exception) {}
+                    }
+                } else {
+                    val knownUsers = _userManagerUsers.value.map { it.username }.toSet()
+                    var sessions: List<Map<String, String>> = emptyList()
+                    for (base in umBases) {
+                        try {
+                            sessions = api.executeStrict("$base/session/print")
+                            break
+                        } catch (_: Exception) {}
+                    }
+                    val orphaned = sessions.filter { s ->
+                        val user = s["user"] ?: s["name"] ?: s["username"]
+                        user != null && user !in knownUsers
+                    }
+                    orphaned.forEach { s ->
+                        val id = s[".id"] ?: return@forEach
+                        try {
+                            umWrite(api, "session/remove", mapOf("numbers" to id))
+                            removed++
+                        } catch (_: Exception) {}
                     }
                 }
-                val note = if (logCleared) " وتم تفريغ سجل الاستخدام على الراوتر (database/clear-log)" else ""
-                insertActivityLog("صيانة الكروت", "تم تنظيف $removed جلسة يتيمة من سجلات User Manager على الراوتر$note", host)
+                val note = if (logsRemoved > 0) " وحُذف $logsRemoved سجل استخدام (log/remove)" else ""
+                insertActivityLog("صيانة الكروت", "تم تنظيف $removed جلسة من سجلات User Manager على الراوتر$note", host)
                 launch(Dispatchers.Main) { onSuccess(removed) }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { onError(e.message ?: "فشل تنظيف سجلات User Manager") }
@@ -2823,17 +2845,38 @@ class MikroTikRepository(
         }
     }
 
-    /** Step 7 — rebuilds the local user-manager *sessions* store by re-reading
-     *  $umBase/session/print (reflects the cleanup step 5 just did on the
-     *  router). Distinct from step 6, which rebuilds the profiles/users cache. */
+    /** Step 7 — on v6, first runs the real, documented router-side command
+     *  `/tool/user-manager/database/rebuild-log` (confirmed from the same
+     *  verified production maintenance script as step 6's database/rebuild;
+     *  same tolerant handling since it can run for a while without
+     *  responding). Then rebuilds the local user-manager *sessions* store by
+     *  re-reading $umBase/session/print (reflects the cleanup step 5 just did
+     *  on the router). Distinct from step 6, which rebuilds the profiles/users
+     *  cache. */
     fun rebuildUserManagerLocalRecords(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
-        fetchUserManagerSessions(
-            onSuccess = { sessions ->
-                insertActivityLog("صيانة الكروت", "تمت إعادة بناء مخزن سجلات User Manager المحلي (${sessions.size} جلسة)", _currentConnection.value?.host ?: "")
-                onSuccess(sessions.size)
-            },
-            onError = onError
-        )
+        repositoryScope.launch {
+            val api = nativeApi
+            var rebuildLogNote = ""
+            if (api != null && umBase == "/tool/user-manager") {
+                try {
+                    api.executeStrict("/tool/user-manager/database/rebuild-log")
+                    rebuildLogNote = " وتمت إعادة بناء سجل الاستخدام على الراوتر (database/rebuild-log)"
+                } catch (e: java.net.SocketTimeoutException) {
+                    rebuildLogNote = " — أُرسل أمر إعادة بناء السجل database/rebuild-log للراوتر (قد يستغرق دون رد فوري)"
+                } catch (e: Exception) {
+                    // Non-fatal: continue to resync the local sessions store even if
+                    // the router-side rebuild-log command failed/unsupported here.
+                    rebuildLogNote = " — تعذّر تنفيذ database/rebuild-log على الراوتر: ${e.message}"
+                }
+            }
+            fetchUserManagerSessions(
+                onSuccess = { sessions ->
+                    insertActivityLog("صيانة الكروت", "تمت إعادة بناء مخزن سجلات User Manager المحلي (${sessions.size} جلسة)$rebuildLogNote", _currentConnection.value?.host ?: "")
+                    onSuccess(sessions.size)
+                },
+                onError = onError
+            )
+        }
     }
 
     /** Step 8 — re-enables exactly the hotspot servers step 2 disabled. */
