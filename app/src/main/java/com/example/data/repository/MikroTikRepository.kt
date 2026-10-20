@@ -2364,6 +2364,15 @@ class MikroTikRepository(
     fun rebootRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             val host = _currentConnection.value?.host ?: ""
+            // The native socket may have dropped since the last screen. RouterOS
+            // v6 has no REST API at all (it was only added in v7), so falling
+            // straight to the REST fallback below would always fail on a real
+            // v6 router in this situation — reconnect the native API first. Safe
+            // no-op retry for v7/REST-only setups too: if it fails, the existing
+            // REST fallback still runs exactly as before.
+            if (nativeApi == null) {
+                _currentConnection.value?.let { conn -> tryNativeConnect(conn) }
+            }
             if (nativeApi != null) {
                 val ok = nativeApi?.reboot() ?: false
                 if (ok) {
@@ -2423,6 +2432,12 @@ class MikroTikRepository(
     fun shutdownRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
             val host = _currentConnection.value?.host ?: ""
+            // See rebootRouter() above: RouterOS v6 has no REST API at all, so
+            // reconnect the native API first instead of falling straight to the
+            // REST-only fallback below.
+            if (nativeApi == null) {
+                _currentConnection.value?.let { conn -> tryNativeConnect(conn) }
+            }
             if (nativeApi != null) {
                 val ok = nativeApi?.shutdown() ?: false
                 if (ok) {
