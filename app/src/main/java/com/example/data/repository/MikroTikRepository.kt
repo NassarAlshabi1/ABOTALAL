@@ -467,7 +467,7 @@ class MikroTikRepository(
                         downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
                         serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
                         comment = it["comment"] ?: "",
-                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
+                        profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
                     )
                 }
                 if (umUsers.isNotEmpty()) {
@@ -648,7 +648,7 @@ class MikroTikRepository(
                                 downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
                                 serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
                                 comment = it["comment"] ?: "",
-                                profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
+                                profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
                             )
                         }
                         _userManagerUsers.value = umUsers
@@ -1471,6 +1471,15 @@ class MikroTikRepository(
 
     private fun isNoSuchCommand(e: Exception?): Boolean =
         e?.message?.contains("no such command", ignoreCase = true) == true
+
+    /** RouterOS v6 may encode an exhausted User Manager profile as an empty
+     * actual-profile, "none", "-", or "unknown" depending on the v6 minor
+     * release. All of these mean that the assigned profile is no longer active.
+     */
+    private fun isExpiredActualProfile(assigned: String?, actual: String?): Boolean {
+        if (assigned.isNullOrBlank()) return false
+        return actual.isNullOrBlank() || actual.trim().lowercase() in setOf("none", "-", "unknown")
+    }
 
     // executeStrict() never lets a raw SocketTimeoutException reach the caller —
     // MikroTikNativeApi.executeInternal() catches it, retries once internally, and
@@ -2402,7 +2411,7 @@ class MikroTikRepository(
                         downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
                         serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
                         comment = it["comment"] ?: "",
-                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
+                        profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
                     )
                 }
                 launch(Dispatchers.Main) { onSuccess(users) }
@@ -2904,7 +2913,7 @@ class MikroTikRepository(
                         downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
                         serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
                         comment = it["comment"] ?: "",
-                        profileExpired = assignedProfile != null && actualProfile.isNullOrBlank()
+                        profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
                     )
                 }
                 _userManagerUsers.value = umUsers
@@ -3303,21 +3312,24 @@ class MikroTikRepository(
                         }
                         return@launch
                     }
-                    val resList = api.execute(cmd)
+                    // RouterOS v6 returns !trap for unsupported/unauthorized
+                    // menus; strict execution prevents that from looking like
+                    // a valid but empty section in the UI.
+                    val resList = api.executeStrict(cmd)
                     val spec = sectionFieldSpecs[categoryKey] ?: SectionFieldSpec()
                     val genericList = resList.mapIndexed { idx, map ->
                         val title = spec.titleKeys.firstNotNullOfOrNull { map[it] }
                             ?: "عنصر #${idx + 1}"
                         val sub = spec.subtitleKeys.firstNotNullOfOrNull { map[it] } ?: ""
-                        val status = map["status"]
-                            ?: (if (map["disabled"] == "true" || map["disabled"] == "yes") "معطل" else "نشط")
+                        val disabled = map["disabled"]?.trim()?.lowercase() in setOf("true", "yes", "on", "1")
+                        val status = map["status"] ?: if (disabled) "معطل" else "نشط"
                         RouterGenericItem(
                             id = map[".id"] ?: idx.toString(),
                             title = title,
                             subtitle = sub,
                             status = status,
                             extra = map["comment"] ?: "",
-                            isEnabled = map["disabled"] != "true",
+                            isEnabled = !disabled,
                             rawProperties = map
                         )
                     }

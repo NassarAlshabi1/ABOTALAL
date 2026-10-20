@@ -1529,16 +1529,39 @@ fun UserManagerBatchFullDialog(
 
                                         Button(
                                             onClick = {
-                                                val lines = importRawText.lines().filter { it.isNotBlank() }
-                                                if (lines.isEmpty()) {
+                                                if (selectedProfileName.isBlank()) {
+                                                    Toast.makeText(context, "يرجى اختيار باقة User Manager أولاً", Toast.LENGTH_LONG).show()
+                                                    return@Button
+                                                }
+
+                                                // RouterOS v6 exports User Manager rows as username,password.
+                                                // Accept comma/semicolon/tab separators, tolerate a UTF-8 BOM and
+                                                // quoted values, and split only once so passwords may contain spaces.
+                                                val importedUsers = importRawText
+                                                    .lineSequence()
+                                                    .map { it.trim().removePrefix("\uFEFF") }
+                                                    .filter { it.isNotBlank() && !it.startsWith("#") }
+                                                    .mapNotNull { line ->
+                                                        val fields = if (line.any { it == ',' || it == ';' || it == '\t' }) {
+                                                            line.split(Regex("[,;\\t]"), limit = 2)
+                                                        } else {
+                                                            line.split(Regex("\\s+"), limit = 2)
+                                                        }
+                                                        val username = fields.getOrNull(0)?.trim()?.trim('"', '\'').orEmpty()
+                                                        val password = fields.getOrNull(1)?.trim()?.trim('"', '\'')
+                                                            ?.takeIf { it.isNotEmpty() } ?: username
+                                                        if (username.isBlank() || username.equals("username", ignoreCase = true)) null
+                                                        else username to password
+                                                    }
+                                                    .distinctBy { it.first }
+                                                    .toList()
+
+                                                if (importedUsers.isEmpty()) {
                                                     Toast.makeText(context, "يرجى إدخال بيانات الكروت أولاً", Toast.LENGTH_SHORT).show()
                                                     return@Button
                                                 }
 
-                                                val importedUsers = lines.map { line ->
-                                                    val parts = line.split(",", " ", "\t").map { it.trim() }
-                                                    val u = parts[0]
-                                                    val p = if (parts.size > 1) parts[1] else u
+                                                val users = importedUsers.map { (u, p) ->
                                                     UserManagerUser(
                                                         username = u,
                                                         password = p,
@@ -1548,13 +1571,14 @@ fun UserManagerBatchFullDialog(
                                                         downloadLimit = "unlimited"
                                                     )
                                                 }
+                                                val batchId = "IMPORT-${System.currentTimeMillis()}"
 
                                                 viewModel.batchAddUserManagerUsers(
-                                                    users = importedUsers,
-                                                    batchName = "IMPORT-${System.currentTimeMillis() % 1000}",
+                                                    users = users,
+                                                    batchName = batchId,
                                                     onSuccess = { created ->
                                                         val record = GeneratedBatchRecord(
-                                                            batchId = "IMPORT-${System.currentTimeMillis() % 1000}",
+                                                            batchId = batchId,
                                                             date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
                                                             profileName = selectedProfileName,
                                                             count = created.size,
@@ -1565,12 +1589,12 @@ fun UserManagerBatchFullDialog(
                                                         onUpdateBatches(listOf(record) + batchRecords)
                                                         importRawText = ""
                                                         selectedTopTab = 0
-                                                        successNotification = "تم استيراد ${importedUsers.size} كرت وإضافتها للراوتر بنجاح!"
+                                                        successNotification = "تم استيراد ${created.size} كرت وإضافتها للراوتر بنجاح!"
                                                     },
                                                     onError = { err, created ->
                                                         if (created.isNotEmpty()) {
                                                             onUpdateBatches(listOf(GeneratedBatchRecord(
-                                                                batchId = "IMPORT-${System.currentTimeMillis() % 1000}",
+                                                                batchId = batchId,
                                                                 date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
                                                                 profileName = selectedProfileName,
                                                                 count = created.size,
