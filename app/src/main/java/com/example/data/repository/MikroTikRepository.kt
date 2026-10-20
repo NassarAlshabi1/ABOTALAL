@@ -72,7 +72,12 @@ class MikroTikRepository(
     private val _cloudBackups = MutableStateFlow<List<MikroTikCloudBackup>>(emptyList())
     val cloudBackups: StateFlow<List<MikroTikCloudBackup>> = _cloudBackups.asStateFlow()
 
-    // Native Socket API instance for port 8728
+    // Native Socket API instance for port 8728. @Volatile because it's written
+    // from connect/disconnect coroutines and read from many independent
+    // repositoryScope.launch{} coroutines on the IO dispatcher pool — without
+    // this, a coroutine could observe a stale/half-published reference after
+    // disconnect() runs on a different thread (e.g. mid maintenance-wizard).
+    @Volatile
     private var nativeApi: MikroTikNativeApi? = null
 
     // Real RouterOS version detected from /system/resource/print after login.
@@ -1539,6 +1544,31 @@ class MikroTikRepository(
         return null
     }
 
+    // Batched version of umResolveUserId for bulk operations: one $umBase/user/print
+    // per candidate menu base for the WHOLE batch, instead of one print per
+    // username. The per-username version makes an N-card bulk delete/toggle cost
+    // O(N^2) router round-trips (each call re-fetching the entire user table) —
+    // this costs the same O(N) round-trips regardless of batch size.
+    private fun umResolveUserIds(api: MikroTikNativeApi, usernames: Collection<String>): Map<String, String> {
+        val remaining = usernames.toMutableSet()
+        val result = mutableMapOf<String, String>()
+        for (base in umBases) {
+            if (remaining.isEmpty()) break
+            try {
+                val list = api.execute("$base/user/print")
+                list.forEach { row ->
+                    val name = row["name"] ?: row["username"]
+                    val id = row[".id"]
+                    if (name != null && id != null && name in remaining) {
+                        result[name] = id
+                        remaining.remove(name)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return result
+    }
+
     fun addUserManagerUser(user: UserManagerUser, onSuccess: () -> Unit, onError: (String) -> Unit)  {
         repositoryScope.launch {
             val api = nativeApi
@@ -1619,9 +1649,10 @@ class MikroTikRepository(
             var deleted = 0
             val succeeded = mutableSetOf<String>()
             var firstErr: String? = null
+            val idsByUsername = umResolveUserIds(api, usernames)
             usernames.forEach { u ->
                 try {
-                    umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, u) ?: u)))
+                    umWrite(api, "user/remove", mapOf("numbers" to (idsByUsername[u] ?: u)))
                     deleted++
                     succeeded.add(u)
                 } catch (e: Exception) {
@@ -1649,9 +1680,10 @@ class MikroTikRepository(
             val succeeded = mutableSetOf<String>()
             var done = 0
             var firstErr: String? = null
+            val idsByUsername = umResolveUserIds(api, usernames)
             usernames.forEach { u ->
                 try {
-                    umWrite(api, "user/set", mapOf("numbers" to (umResolveUserId(api, u) ?: u), "disabled" to if (active) "no" else "yes"))
+                    umWrite(api, "user/set", mapOf("numbers" to (idsByUsername[u] ?: u), "disabled" to if (active) "no" else "yes"))
                     done++
                     succeeded.add(u)
                 } catch (e: Exception) {
@@ -2041,9 +2073,10 @@ class MikroTikRepository(
             var removed = 0
             val succeeded = mutableSetOf<String>()
             var firstErr: String? = null
+            val idsByUsername = umResolveUserIds(api, toRemove)
             toRemove.forEach { u ->
                 try {
-                    umWrite(api, "user/remove", mapOf("numbers" to (umResolveUserId(api, u) ?: u)))
+                    umWrite(api, "user/remove", mapOf("numbers" to (idsByUsername[u] ?: u)))
                     removed++
                     succeeded.add(u)
                 } catch (e: Exception) {
