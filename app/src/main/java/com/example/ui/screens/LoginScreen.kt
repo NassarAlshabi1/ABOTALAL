@@ -75,7 +75,10 @@ fun LoginScreen(
     var routerDomain by remember { mutableStateOf("") }
     var routerPort by remember { mutableStateOf("8728") }
     var vpnServerLink by remember { mutableStateOf("") }
-    var vpnPort by remember { mutableStateOf("1701") }
+    // L2TP uses UDP 1701 only for establishing the VPN tunnel. The app logs
+    // into RouterOS after the tunnel is active, so this field must be the
+    // RouterOS API port, not the L2TP transport port.
+    var vpnPort by remember { mutableStateOf("8728") }
     var routerUser by remember { mutableStateOf("") }
     var routerPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -138,8 +141,14 @@ fun LoginScreen(
         }
         val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
         val portField = if (connectionMode == 3) vpnPort else routerPort
-        val defaultPort = if (connectionMode == 3) 1701 else 8728
-        return Pair(cleanHostStr, parsedPort ?: (portField.toIntOrNull() ?: defaultPort))
+        // L2TP/IPsec is established by Android's VPN settings. The login
+        // itself always speaks RouterOS API through the active tunnel.
+        val defaultPort = 8728
+        // An explicit port in the entered URL wins for every mode. This is
+        // needed for deployments that publish RouterOS API on a custom WAN
+        // port such as 13196. If no port is embedded, use the selected field.
+        val resolvedPort = parsedPort ?: (portField.toIntOrNull() ?: defaultPort)
+        return Pair(cleanHostStr, resolvedPort)
     }
 
     fun connectionDisplayName(host: String): String = routerCustomName.ifBlank {
@@ -719,11 +728,11 @@ fun LoginScreen(
                                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                // VPN Port Input (البورت)
+                                                // RouterOS API port reachable after the VPN tunnel is active
                                                 OutlinedTextField(
                                                     value = vpnPort,
                                                     onValueChange = { vpnPort = it },
-                                                    label = { Text("البورت") },
+                                                    label = { Text("منفذ API بعد VPN") },
                                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                     modifier = Modifier.width(82.dp),
                                                     shape = RoundedCornerShape(12.dp),
@@ -734,8 +743,8 @@ fun LoginScreen(
                                                 OutlinedTextField(
                                                     value = vpnServerLink,
                                                     onValueChange = { vpnServerLink = it },
-                                                    label = { Text("رابط / عنوان سيرفر VPN") },
-                                                    placeholder = { Text("vpn.example.com أو 1.2.3.4") },
+                                                    label = { Text("عنوان الراوتر عبر VPN") },
+                                                    placeholder = { Text("عنوان الراوتر داخل النفق أو سيرفر VPN") },
                                                     leadingIcon = {
                                                         Icon(
                                                             imageVector = Icons.Filled.VpnKey,
@@ -749,18 +758,16 @@ fun LoginScreen(
                                                 )
                                             }
 
-                                            // Quick Port Chips: L2TP / API / API-SSL
+                                            // L2TP itself uses UDP 1701 in Android VPN settings;
+                                            // these chips select the RouterOS API port used for login.
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .padding(top = 6.dp),
                                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                listOf(
-                                                    "L2TP 1701" to "1701",
-                                                    "API 8728" to "8728",
-                                                    "API-SSL 8729" to "8729"
-                                                ).forEach { (chipLabel, chipPort) ->
+                                                listOf("API 8728" to "8728", "API-SSL 8729" to "8729")
+                                                    .forEach { (chipLabel, chipPort) ->
                                                     Surface(
                                                         shape = RoundedCornerShape(8.dp),
                                                         color = if (vpnPort == chipPort) Color(0xFF0C5A60)
@@ -813,7 +820,7 @@ fun LoginScreen(
                                             }
 
                                             Text(
-                                                text = "للدخول عن بعد: أضف اتصال L2TP/IPsec من إعدادات VPN في أندرويد، ثم أدخل رابط سيرفر الـ VPN والبورت (L2TP 1701، أو منفذ RouterOS API 8728/8729) وسجّل الدخول.",
+                                                text = "أضف اتصال L2TP/IPsec من إعدادات VPN في أندرويد (يستخدم النظام منفذ 1701)، اتصل به أولاً، ثم أدخل عنوان الراوتر الذي أصبح متاحاً عبر النفق واختر منفذ RouterOS API ‏8728 أو 8729 قبل تسجيل الدخول.",
                                                 fontSize = 11.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.padding(top = 6.dp, start = 4.dp)
