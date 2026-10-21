@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
 import com.example.data.local.RouterConnection
 import com.example.data.model.HotspotUser
+import com.example.data.model.UserManagerProfile
 import com.example.data.model.UserManagerUser
 import com.example.data.model.PppoeUser
 import com.example.data.repository.MikroTikNativeApi
@@ -213,6 +214,307 @@ class V6ProtocolIntegrationTest {
                 repo.userManagerProfiles.value.any { it.name == "p500" }
             )
             assertTrue(server.commandsMatching("/tool/user-manager/profile/print").isNotEmpty())
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `v6 profile reads limits from linked limitation row`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            server.handler = { words ->
+                val cmd = words.firstOrNull() ?: ""
+                when {
+                    cmd == "/system/resource/print" -> listOf(
+                        listOf("!re", "=version=6.49.19", "=board-name=hEX"), listOf("!done")
+                    )
+                    cmd.startsWith("/user-manager/") -> listOf(listOf("!trap", "=message=no such command"))
+                    cmd == "/tool/user-manager/profile/print" -> listOf(
+                        listOf("!re", "=.id=*1", "=name=p500", "=validity=4w2d", "=price=500"), listOf("!done")
+                    )
+                    cmd == "/tool/user-manager/profile/profile-limitation/print" -> listOf(
+                        listOf("!re", "=.id=*3", "=profile=p500", "=limitation=p500-lim"), listOf("!done")
+                    )
+                    cmd == "/tool/user-manager/profile/limitation/print" -> listOf(
+                        listOf("!re", "=.id=*2", "=name=p500-lim", "=uptime-limit=1h30m", "=download-limit=1GB"), listOf("!done")
+                    )
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            pumpMainUntil(15000) { repo.userManagerProfiles.value.any { it.name == "p500" && it.downloadLimit == "1GB" } }
+            val profile = repo.userManagerProfiles.value.first { it.name == "p500" }
+            assertEquals("4w2d", profile.validity)
+            assertEquals(500, profile.price)
+            assertEquals("1h30m", profile.uptimeLimit)
+            assertTrue(server.commandsMatching("/tool/user-manager/profile/limitation/print").isNotEmpty())
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `v6 profile create and update use profile validity and separate limits`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            server.handler = { words ->
+                val cmd = words.firstOrNull() ?: ""
+                when {
+                    cmd == "/system/resource/print" -> listOf(
+                        listOf("!re", "=version=6.49.19", "=board-name=hEX"), listOf("!done")
+                    )
+                    cmd.startsWith("/user-manager/") -> listOf(listOf("!trap", "=message=no such command"))
+                    cmd == "/tool/user-manager/profile/print" -> listOf(
+                        listOf("!re", "=.id=*1", "=name=pack", "=validity=4w2d", "=price=500"), listOf("!done")
+                    )
+                    cmd == "/tool/user-manager/profile/profile-limitation/print" -> listOf(
+                        listOf("!re", "=.id=*3", "=profile=p500", "=limitation=p500-lim"),
+                        listOf("!re", "=.id=*4", "=profile=pack", "=limitation=pack-lim"),
+                        listOf("!done")
+                    )
+                    cmd == "/tool/user-manager/profile/limitation/print" -> listOf(
+                        listOf("!re", "=.id=*2", "=name=pack-lim", "=uptime-limit=1h", "=download-limit=1GB"),
+                        listOf("!re", "=.id=*5", "=name=p500-lim", "=uptime-limit=1h30m", "=download-limit=1GB"),
+                        listOf("!done")
+                    )
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            var success = false
+            var error: String? = null
+            repo.addUserManagerProfile(
+                UserManagerProfile("new-pack", validity = "4w2d", price = 500, downloadLimit = "2GB", uptimeLimit = "1h30m"),
+                onSuccess = { success = true }, onError = { error = it }
+            )
+            pumpMainUntil { success || error != null }
+            assertTrue("v6 profile creation failed: $error", success)
+            val profileAdd = server.commandsMatching("/tool/user-manager/profile/add").last()
+            assertTrue(profileAdd.contains("=validity=4w2d"))
+            assertTrue(profileAdd.contains("=price=500"))
+            val limitationAdd = server.commandsMatching("/tool/user-manager/profile/limitation/add").last()
+            assertTrue(limitationAdd.contains("=uptime-limit=1h30m"))
+            assertTrue(limitationAdd.contains("=download-limit=2GB"))
+
+            success = false
+            error = null
+            repo.updateUserManagerProfile(
+                "pack",
+                UserManagerProfile("renamed-pack", validity = "1w2d", price = 0, downloadLimit = "unlimited", uptimeLimit = "unlimited"),
+                onSuccess = { success = true }, onError = { error = it }
+            )
+            pumpMainUntil { success || error != null }
+            assertTrue("v6 profile update failed: $error", success)
+            val profileSet = server.commandsMatching("/tool/user-manager/profile/set").last()
+            assertTrue(profileSet.contains("=validity=1w2d"))
+            assertTrue(profileSet.contains("=price=0"))
+            val limitationSet = server.commandsMatching("/tool/user-manager/profile/limitation/set").last()
+            assertTrue(limitationSet.contains("=uptime-limit=0s"))
+            assertTrue(limitationSet.contains("=download-limit=0B"))
+            assertTrue(server.commandsMatching("/tool/user-manager/profile/profile-limitation/set").last().contains("=profile=renamed-pack"))
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `expired card cleanup does not delete manually disabled users`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            val users = listOf(
+                listOf("!re", "=.id=*manual", "=name=manual_disabled", "=disabled=true", "=profile=p1", "=uptime-used=2h"),
+                listOf("!re", "=.id=*expired", "=name=expired_card", "=disabled=false", "=profile=p1", "=uptime-used=2h")
+            )
+            server.handler = { words ->
+                when (words.firstOrNull()) {
+                    "/system/resource/print" -> listOf(listOf("!re", "=version=6.49.19"), listOf("!done"))
+                    "/tool/user-manager/user/print" -> users + listOf(listOf("!done"))
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            pumpMainUntil(15_000) { repo.userManagerUsers.value.size == 2 }
+
+            var removed: Int? = null
+            var error: String? = null
+            repo.cleanExpiredUserManagerUsers(onSuccess = { removed = it }, onError = { error = it })
+            pumpMainUntil { removed != null || error != null }
+
+            assertTrue("cleanup failed: $error", removed != null)
+            assertEquals(1, removed)
+            val deletes = server.commandsMatching("/tool/user-manager/user/remove")
+            assertEquals(1, deletes.size)
+            assertTrue("only the router-confirmed expired card may be deleted", deletes.single().contains("=numbers=*expired"))
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `v6 maintenance closes and clears sessions and usage logs in the supplied order`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            server.handler = { words ->
+                when (words.firstOrNull()) {
+                    "/system/resource/print" -> listOf(listOf("!re", "=version=6.49.19"), listOf("!done"))
+                    "/tool/user-manager/session/print" -> listOf(
+                        listOf("!re", "=.id=*s1", "=user=alice"),
+                        listOf("!re", "=.id=*s2", "=user=ppp-client"),
+                        listOf("!done")
+                    )
+                    "/tool/user-manager/log/print" -> listOf(listOf("!re", "=.id=*l1"), listOf("!done"))
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            var removed: Int? = null
+            var error: String? = null
+            repo.cleanStaleUserManagerSessions(onSuccess = { removed = it }, onError = { error = it })
+            pumpMainUntil { removed != null || error != null }
+
+            assertTrue("v6 session cleanup failed: $error", removed != null)
+            assertEquals(2, removed)
+            assertEquals(2, server.commandsMatching("/tool/user-manager/session/close-session").size)
+            assertEquals(2, server.commandsMatching("/tool/user-manager/session/remove").size)
+            assertEquals(1, server.commandsMatching("/tool/user-manager/log/remove").size)
+            assertTrue("all sessions must be closed before the first is removed",
+                server.received.indexOfFirst { it.firstOrNull()?.startsWith("/tool/user-manager/session/close-session") == true } <
+                    server.received.indexOfFirst { it.firstOrNull()?.startsWith("/tool/user-manager/session/remove") == true })
+            assertTrue("logs must be purged only after session cleanup",
+                server.received.indexOfFirst { it.firstOrNull()?.startsWith("/tool/user-manager/log/remove") == true } >
+                    server.received.indexOfLast { it.firstOrNull()?.startsWith("/tool/user-manager/session/remove") == true })
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `v7 maintenance removes only orphan sessions and preserves active sessions and logs`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            server.handler = { words ->
+                when (words.firstOrNull()) {
+                    "/system/resource/print" -> listOf(listOf("!re", "=version=7.16.2"), listOf("!done"))
+                    "/user-manager/user/print" -> listOf(listOf("!re", "=.id=*u1", "=name=alice"), listOf("!done"))
+                    "/user-manager/session/print" -> listOf(
+                        listOf("!re", "=.id=*active", "=user=alice"),
+                        listOf("!re", "=.id=*orphan", "=user=deleted_user"),
+                        listOf("!done")
+                    )
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            var removed: Int? = null
+            var error: String? = null
+            repo.cleanStaleUserManagerSessions(onSuccess = { removed = it }, onError = { error = it })
+            pumpMainUntil { removed != null || error != null }
+
+            assertTrue("v7 session cleanup failed: $error", removed != null)
+            assertEquals(1, removed)
+            val deletes = server.commandsMatching("/user-manager/session/remove")
+            assertEquals(1, deletes.size)
+            assertTrue(deletes.single().contains("=numbers=*orphan"))
+            assertTrue(server.commandsMatching("/user-manager/session/close-session").isEmpty())
+            assertTrue(server.commandsMatching("/user-manager/log/remove").isEmpty())
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `partial hotspot disable rolls back and reports any server left disabled`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            server.handler = { words ->
+                val command = words.firstOrNull() ?: ""
+                when {
+                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=7.16.2"), listOf("!done"))
+                    command == "/ip/hotspot/print" -> listOf(
+                        listOf("!re", "=.id=*hs1", "=disabled=false"),
+                        listOf("!re", "=.id=*hs2", "=disabled=false"),
+                        listOf("!done")
+                    )
+                    command == "/ip/hotspot/set" && words.contains("=numbers=*hs2") && words.contains("=disabled=yes") ->
+                        listOf(listOf("!trap", "=message=simulated disable failure"))
+                    command == "/ip/hotspot/set" && words.contains("=numbers=*hs1") && words.contains("=disabled=no") ->
+                        listOf(listOf("!trap", "=message=simulated rollback failure"))
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            var error: String? = null
+            var stillDisabled: List<String>? = null
+            repo.disableHotspotForMaintenance(
+                onSuccess = { error = "unexpected success" },
+                onError = { message, ids -> error = message; stillDisabled = ids }
+            )
+            pumpMainUntil { error != null }
+
+            assertTrue("failure must report the hotspot server that could not be restored: $error",
+                error?.contains("تعذر إعادة تفعيل بعض الخوادم") == true)
+            assertEquals(listOf("*hs1"), stillDisabled)
+            assertTrue(server.commandsMatching("/ip/hotspot/set").any {
+                it.contains("=numbers=*hs1") && it.contains("=disabled=yes")
+            })
+            assertTrue(server.commandsMatching("/ip/hotspot/set").any {
+                it.contains("=numbers=*hs1") && it.contains("=disabled=no")
+            })
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `reboot flow re-enables tracked hotspot servers before reboot`() = runBlocking {
+        val server = ScriptableMockServer()
+        val isDisabled = java.util.concurrent.atomic.AtomicBoolean(true)
+        try {
+            server.handler = { words ->
+                val command = words.firstOrNull() ?: ""
+                when {
+                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=7.16.2"), listOf("!done"))
+                    command == "/ip/hotspot/print" -> listOf(
+                        listOf("!re", "=.id=*hs1", "=disabled=${isDisabled.get()}"),
+                        listOf("!done")
+                    )
+                    command == "/ip/hotspot/set" && words.contains("=numbers=*hs1") && words.contains("=disabled=no") -> {
+                        isDisabled.set(false)
+                        listOf(listOf("!done"))
+                    }
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            var success: String? = null
+            var error: String? = null
+            repo.verifyHotspotAndRebootRouter(
+                listOf("*hs1"),
+                onSuccess = { success = it },
+                onError = { error = it }
+            )
+            pumpMainUntil(15_000) { success != null || error != null }
+
+            assertTrue("reboot flow failed: $error", success != null)
+            val enableIndex = server.received.indexOfFirst {
+                it.firstOrNull() == "/ip/hotspot/set" && it.contains("=numbers=*hs1") && it.contains("=disabled=no")
+            }
+            val rebootIndex = server.received.indexOfFirst { it.firstOrNull() == "/system/reboot" }
+            assertTrue("Hotspot must be enabled before reboot", enableIndex >= 0 && rebootIndex > enableIndex)
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `reboot is blocked if hotspot reactivation fails`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            server.handler = { words ->
+                val command = words.firstOrNull() ?: ""
+                when {
+                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=7.16.2"), listOf("!done"))
+                    command == "/ip/hotspot/print" -> listOf(listOf("!re", "=.id=*hs1", "=disabled=true"), listOf("!done"))
+                    command == "/ip/hotspot/set" -> listOf(listOf("!trap", "=message=simulated enable failure"))
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = connectRepoToMockRouter(server)
+            var error: String? = null
+            repo.verifyHotspotAndRebootRouter(
+                listOf("*hs1"),
+                onSuccess = { error = "unexpected success" },
+                onError = { error = it }
+            )
+            pumpMainUntil { error != null }
+
+            assertTrue(error?.contains("لن يُعاد تشغيل الراوتر") == true)
+            assertTrue("reboot must not be sent after a failed Hotspot restore", server.commandsMatching("/system/reboot").isEmpty())
         } finally { server.shutdown() }
     }
 }

@@ -870,7 +870,7 @@ fun ProfileEditDialog(
                     OutlinedTextField(
                         value = validity,
                         onValueChange = { validity = it },
-                        label = { Text("الصلاحية (مثال: 10 ايام)", fontFamily = CairoFontFamily) },
+                        label = { Text("الصلاحية (مثال: 10d أو 4w2d)", fontFamily = CairoFontFamily) },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
                         singleLine = true
@@ -878,7 +878,7 @@ fun ProfileEditDialog(
                     OutlinedTextField(
                         value = uptimeLimit,
                         onValueChange = { uptimeLimit = it },
-                        label = { Text("الوقت (مثال: 72 ساعات)", fontFamily = CairoFontFamily) },
+                        label = { Text("حد الاستخدام (مثال: 1h30m)", fontFamily = CairoFontFamily) },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
                         singleLine = true

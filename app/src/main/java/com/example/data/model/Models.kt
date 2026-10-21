@@ -46,7 +46,11 @@ data class UserManagerUser(
     // card's validity/limit has run out, even though it is still "active"
     // (disabled == false). Defaults to false: unknown routers/paths never flag it.
     val profileExpired: Boolean = false
-)
+) {
+    /** Expiry confirmed by RouterOS after use; disabled cards are never swept automatically. */
+    val isConfirmedExpired: Boolean
+        get() = active && profileExpired && uptimeUsed.isNotBlank() && uptimeUsed != "0s"
+}
 
 data class UserManagerProfile(
     val name: String,
@@ -239,5 +243,3 @@ data class MikroTikCloudBackup(
     val time: String = "",
     val encrypted: Boolean = true
 )
-
-

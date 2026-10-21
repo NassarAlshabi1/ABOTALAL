@@ -55,7 +55,7 @@ private val WIZARD_STEPS = listOf(
     ),
     WizardStepUi(
         "تنظيف سجلات User Manager",
-        "يُغلق ويحذف جميع جلسات User Manager ويحذف سجل الاستخدام على الراوتر (close-session / session remove / log remove).",
+        "في RouterOS v6: يغلق ويحذف جميع الجلسات ويمسح السجلات بعد تأكيد إضافي. في v7: يحذف الجلسات اليتيمة فقط.",
         Color(0xFF80CBAE)
     ),
     WizardStepUi(
@@ -75,7 +75,7 @@ private val WIZARD_STEPS = listOf(
     ),
     WizardStepUi(
         "إعادة تشغيل الراوتر",
-        "يتحقق من حالة الهوتسبوت أولاً، ثم يرسل أمر إعادة تشغيل الراوتر النهائي.",
+        "يعيد تفعيل خوادم Hotspot التي أوقفها المعالج ويتحقق منها، ثم ينتظر 5 ثوانٍ قبل reboot.",
         Color(0xFFEF9A9A)
     )
 )
@@ -96,9 +96,7 @@ fun UserManagerMaintenanceWizardScreen(
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val userManagerUsers by viewModel.userManagerUsers.collectAsState()
     val expiredCount = remember(userManagerUsers) {
-        userManagerUsers.count {
-            !it.active || (it.profileExpired && it.uptimeUsed.isNotBlank() && it.uptimeUsed != "0s")
-        }
+        userManagerUsers.count { it.isConfirmedExpired }
     }
 
     val screenBg = if (isDarkMode) Color(0xFF0F172A) else Color(0xFF0B1220)
@@ -108,9 +106,8 @@ fun UserManagerMaintenanceWizardScreen(
     val messages = remember { mutableStateListOf(*Array<String?>(9) { null }) }
     var runningIndex by remember { mutableStateOf(-1) }
     var disabledHotspotIds by remember { mutableStateOf<List<String>>(emptyList()) }
-    // Steps 3 (delete expired cards) and 8 (reboot router) are destructive and
-    // irreversible — unlike the other 7 steps they require an explicit
-    // confirmation dialog before executeStep() actually runs.
+    // Expired-card removal, v6 session/log purge, and reboot require explicit
+    // confirmation because they are destructive or interrupt service.
     var pendingConfirmIndex by remember { mutableStateOf<Int?>(null) }
 
     fun setStatus(index: Int, status: WizardStepStatus, message: String? = null) {
@@ -139,7 +136,10 @@ fun UserManagerMaintenanceWizardScreen(
             1 -> run(index) { done ->
                 viewModel.disableHotspotForMaintenance(
                     onSuccess = { ids -> disabledHotspotIds = ids; done(true, "تم تعطيل ${ids.size} سيرفر") },
-                    onError = { err -> done(false, err) }
+                    onError = { err, ids ->
+                        disabledHotspotIds = ids
+                        done(false, err)
+                    }
                 )
             }
             2 -> run(index) { done ->
@@ -156,7 +156,7 @@ fun UserManagerMaintenanceWizardScreen(
             }
             4 -> run(index) { done ->
                 viewModel.cleanStaleUserManagerSessions(
-                    onSuccess = { n -> done(true, "تم تنظيف $n سجل يتيم") },
+                    onSuccess = { n -> done(true, "تم تنظيف $n جلسة") },
                     onError = { err -> done(false, err) }
                 )
             }
@@ -173,14 +173,25 @@ fun UserManagerMaintenanceWizardScreen(
                 )
             }
             7 -> run(index) { done ->
+                val isEmergencyRecovery = statuses.take(7).any { it == WizardStepStatus.FAILED }
                 viewModel.restoreHotspotAfterMaintenance(
                     disabledHotspotIds,
-                    onSuccess = { done(true, "تم تفعيل ${disabledHotspotIds.size} سيرفر") },
+                    onSuccess = {
+                        if (isEmergencyRecovery) {
+                            disabledHotspotIds = emptyList()
+                            for (stepIndex in 1 until statuses.size) setStatus(stepIndex, WizardStepStatus.PENDING)
+                            done(true, "تمت الاستعادة الطارئة؛ أعد التسلسل من خطوة تعطيل Hotspot")
+                            setStatus(index, WizardStepStatus.PENDING, "استعادة طارئة مكتملة؛ أعد المعالج من خطوة تعطيل Hotspot")
+                        } else {
+                            done(true, "تم تفعيل ${disabledHotspotIds.size} سيرفر")
+                        }
+                    },
                     onError = { err -> done(false, err) }
                 )
             }
             8 -> run(index) { done ->
                 viewModel.verifyHotspotAndRebootRouter(
+                    disabledHotspotIds,
                     onSuccess = { msg -> done(true, msg) },
                     onError = { err -> done(false, err) }
                 )
@@ -189,7 +200,7 @@ fun UserManagerMaintenanceWizardScreen(
     }
 
     fun requestStep(index: Int) {
-        if (index == 3 || index == 8) {
+        if (index == 3 || index == 4 || index == 8) {
             pendingConfirmIndex = index
         } else {
             executeStep(index)
@@ -201,14 +212,21 @@ fun UserManagerMaintenanceWizardScreen(
             onDismissRequest = { pendingConfirmIndex = null },
             title = {
                 Text(
-                    if (idx == 3) "تأكيد حذف الكروت المنتهية" else "تأكيد إعادة تشغيل الراوتر",
+                    when (idx) {
+                        3 -> "تأكيد حذف الكروت المنتهية"
+                        4 -> "تأكيد تنظيف جلسات User Manager"
+                        else -> "تأكيد إعادة تشغيل الراوتر"
+                    },
                     fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
-                    if (idx == 3) "سيتم حذف $expiredCount كرت منتهي من الراوتر بشكل نهائي ولا يمكن التراجع عن هذا الإجراء. هل تريد المتابعة؟"
-                    else "سيتم إرسال أمر إعادة تشغيل الراوتر فوراً وسينقطع الاتصال لفترة قصيرة. هل تريد المتابعة؟",
+                    when (idx) {
+                        3 -> "سيتم حذف $expiredCount بطاقة أبلغ RouterOS بانتهاء صلاحيتها بعد استخدامها. البطاقات المعطّلة يدويًا لن تُحذف. لا يمكن التراجع عن الحذف. هل تريد المتابعة؟"
+                        4 -> "في RouterOS v6 سيُغلق هذا الإجراء جميع جلسات User Manager ويحذفها ويمسح سجلات الاستخدام؛ قد يقطع جلسات خدمات أخرى تستخدم User Manager/RADIUS. في v7 ستُحذف الجلسات اليتيمة فقط. هل تريد المتابعة؟"
+                        else -> "قبل reboot سيعيد المعالج تفعيل خوادم Hotspot التي عطّلها ويتحقق منها؛ إذا فشل التفعيل فلن يُعاد تشغيل الراوتر. هل تريد المتابعة؟"
+                    },
                     fontFamily = CairoFontFamily, fontSize = 13.sp
                 )
             },
@@ -218,7 +236,11 @@ fun UserManagerMaintenanceWizardScreen(
                     executeStep(idx)
                 }) {
                     Text(
-                        if (idx == 3) "حذف" else "إعادة تشغيل",
+                        when (idx) {
+                            3 -> "حذف"
+                            4 -> "تنظيف الجلسات والسجلات"
+                            else -> "استعادة Hotspot ثم إعادة التشغيل"
+                        },
                         color = Color(0xFFF87171), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold
                     )
                 }
@@ -299,6 +321,10 @@ fun UserManagerMaintenanceWizardScreen(
             itemsIndexed(WIZARD_STEPS) { index, step ->
                 val status = statuses[index]
                 val message = messages[index]
+                val nextPendingIndex = statuses.indexOfFirst { it != WizardStepStatus.DONE }
+                val isHotspotRecovery = index == 7 && disabledHotspotIds.isNotEmpty() &&
+                    statuses.take(7).any { it == WizardStepStatus.FAILED }
+                val canRunInOrder = index == nextPendingIndex || isHotspotRecovery
                 val description = if (index == 3) "سيتم حذف الكروت المنتهية وعددها $expiredCount." else step.description
 
                 Surface(
@@ -328,7 +354,7 @@ fun UserManagerMaintenanceWizardScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Button(
                                 onClick = { requestStep(index) },
-                                enabled = runningIndex == -1 && status != WizardStepStatus.RUNNING,
+                                enabled = runningIndex == -1 && status != WizardStepStatus.RUNNING && canRunInOrder,
                                 colors = ButtonDefaults.buttonColors(containerColor = step.color, contentColor = Color(0xFF0B1220)),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                             ) {

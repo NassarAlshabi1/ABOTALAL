@@ -273,7 +273,10 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.archiveExpiredCardsLocally(onSuccess, onError)
     }
 
-    fun disableHotspotForMaintenance(onSuccess: (List<String>) -> Unit, onError: (String) -> Unit) {
+    fun disableHotspotForMaintenance(
+        onSuccess: (List<String>) -> Unit,
+        onError: (String, List<String>) -> Unit
+    ) {
         repository.disableHotspotForMaintenance(onSuccess, onError)
     }
 
@@ -293,8 +296,12 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.restoreHotspotAfterMaintenance(disabledServerIds, onSuccess, onError)
     }
 
-    fun verifyHotspotAndRebootRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
-        repository.verifyHotspotAndRebootRouter(onSuccess, onError)
+    fun verifyHotspotAndRebootRouter(
+        disabledServerIds: List<String>,
+        onSuccess: (String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.verifyHotspotAndRebootRouter(disabledServerIds, onSuccess, onError)
     }
 
     /* User Manager live sessions */
