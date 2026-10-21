@@ -333,20 +333,20 @@ fun DashboardScreen(
                     )
                 }
 
-                // الصف السفلي من الكروت: الكروت المباعة | الكروت المتبقية
+                // الصف السفلي من الكروت: الكروت النشطة في User Manager | كروت الهوتسبوت
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // كرت الكروت المباعة (يمين)
+                    // الكروت النشطة تُحسب من User Manager فقط، وليس من جلسات الهوتسبوت.
                     StatCardItem(
                         modifier = Modifier.weight(1f),
-                        title = "الكروت المباعة",
+                        title = "الكروت النشطة",
                         icon = Icons.Filled.CheckCircle,
                         iconTint = Color(0xFF10B981),
                         iconBackground = Color(0xFFD1FAE5),
-                        value = "-",
-                        footer = "الكروت النشطة: ${userManagerUsers.count { it.active }}",
+                        value = "${userManagerUsers.count { it.active }}",
+                        footer = "User Manager",
                         isDarkMode = isDarkMode,
                         onClick = { navigateToTab(2) }
                     )
