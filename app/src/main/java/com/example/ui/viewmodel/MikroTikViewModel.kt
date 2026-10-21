@@ -83,10 +83,16 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     // Connect to real saved router
     fun connectRouter(connection: RouterConnection, onSuccess: () -> Unit) {
+        connectRouter(connection, connection.host, connection.port, onSuccess)
+    }
+
+    // Connect to a temporary target (such as the active VPN endpoint) while
+    // preserving the saved router's original host and port in Room.
+    fun connectRouter(connection: RouterConnection, targetHost: String, targetPort: Int, onSuccess: () -> Unit) {
         _isConnecting.value = true
         _connectionError.value = null
         repository.connectToRouter(
-            connection = connection,
+            connection = connection.copy(host = targetHost.trim(), port = targetPort),
             onSuccess = {
                 _isConnecting.value = false
                 // Save/update connection timestamp in DB

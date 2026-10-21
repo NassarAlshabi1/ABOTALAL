@@ -1338,7 +1338,14 @@ fun LoginScreen(
                                         // Quick Connect Lightning
                                         IconButton(
                                             onClick = {
-                                                viewModel.connectRouter(conn) { onLoginSuccess() }
+                                                val (targetHost, targetPort) = if (connectionMode == 3) {
+                                                    resolveTarget()
+                                                } else {
+                                                    Pair(conn.host, conn.port)
+                                                }
+                                                viewModel.connectRouter(conn, targetHost, targetPort) {
+                                                    onLoginSuccess()
+                                                }
                                             },
                                             modifier = Modifier.size(32.dp)
                                         ) {
