@@ -48,8 +48,12 @@ fun DashboardScreen(
     val logs by viewModel.activityLogs.collectAsState()
     val hotspotUsers by viewModel.hotspotUsers.collectAsState()
     val userManagerUsers by viewModel.userManagerUsers.collectAsState()
+    val profiles by viewModel.userManagerProfiles.collectAsState()
     val activeHotspot by viewModel.activeHotspot.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val profilePrices = remember(profiles) { profiles.associate { it.name to it.price } }
+    val cardsAccountValue = userManagerUsers.sumOf { profilePrices[it.profile] ?: 0 }
+    val formattedCardsAccountValue = String.format(Locale.getDefault(), "%,d", cardsAccountValue)
 
     val coroutineScope = rememberCoroutineScope()
     var isRefreshing by remember { mutableStateOf(false) }
@@ -297,20 +301,20 @@ fun DashboardScreen(
         // 3. شبكة إحصائيات الكروت (4 بطاقات 2 × 2 Grid - مطابقة تماماً للشاشة)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // الصف العلوي من الكروت: إجمالي البيع | الكروت المولدة
+                // الصف العلوي من الكروت: قيمة الحسابات | الكروت المولدة
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // كرت إجمالي البيع (يمين)
+                    // قيمة الحسابات محسوبة من أسعار الباقات المحمّلة من الراوتر.
                     StatCardItem(
                         modifier = Modifier.weight(1f),
-                        title = "إجمالي البيع",
+                        title = "قيمة الحسابات",
                         icon = Icons.Filled.PointOfSale,
                         iconTint = Color(0xFF0284C7),
                         iconBackground = Color(0xFFE0F2FE),
-                        value = "-",
-                        footer = "نظام اليوزرمانجر",
+                        value = "$formattedCardsAccountValue ر.س",
+                        footer = "حسب أسعار باقات اليوزرمانجر",
                         isDarkMode = isDarkMode,
                         onClick = { showFinancialReportDialog = true }
                     )
@@ -332,7 +336,7 @@ fun DashboardScreen(
                 // الصف السفلي من الكروت: الكروت المباعة | الكروت المتبقية
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // كرت الكروت المباعة (يمين)
                     StatCardItem(
@@ -342,7 +346,7 @@ fun DashboardScreen(
                         iconTint = Color(0xFF10B981),
                         iconBackground = Color(0xFFD1FAE5),
                         value = "-",
-                        footer = "كروت يوزرمنجر: 0",
+                        footer = "الكروت النشطة: ${userManagerUsers.count { it.active }}",
                         isDarkMode = isDarkMode,
                         onClick = { navigateToTab(2) }
                     )
@@ -354,7 +358,7 @@ fun DashboardScreen(
                         icon = Icons.Filled.Article,
                         iconTint = Color(0xFF0284C7),
                         iconBackground = Color(0xFFE0F2FE),
-                        value = "-",
+                        value = "${hotspotUsers.size}",
                         footer = "كروت الهوتسبوت: ${hotspotUsers.size}",
                         isDarkMode = isDarkMode,
                         onClick = { navigateToTab(1) }
@@ -857,7 +861,11 @@ fun DashboardScreen(
             onDismissRequest = { showFinancialReportDialog = false },
             title = { Text("الحسابات المالية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
-                Text("إجمالي المبيعات المحصلة لكروت النظام: 0 ريال.", fontFamily = CairoFontFamily)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("قيمة الكروت الحالية حسب أسعار الباقات: $formattedCardsAccountValue ريال.", fontFamily = CairoFontFamily)
+                    Text("عدد كروت User Manager: ${userManagerUsers.size}", fontFamily = CairoFontFamily)
+                    Text("هذه قيمة تقديرية للحسابات وليست سجل مبيعات محصل.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color.Gray)
+                }
             },
             confirmButton = {
                 Button(
@@ -1274,18 +1282,18 @@ fun StatCardItem(
 
     Surface(
         modifier = modifier
-            .shadow(elevation = 2.dp, shape = RoundedCornerShape(18.dp))
-            .clip(RoundedCornerShape(18.dp))
+            .shadow(elevation = 2.dp, shape = RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable { onClick() },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(14.dp),
         color = cardBg,
         border = if (isDarkMode) BorderStroke(1.dp, Color(0xFF334155)) else null
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(9.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1302,14 +1310,14 @@ fun StatCardItem(
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = if (isDarkMode) iconTint.copy(alpha = 0.2f) else iconBackground,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(24.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = icon,
                             contentDescription = null,
                             tint = iconTint,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(14.dp)
                         )
                     }
                 }
@@ -1318,7 +1326,7 @@ fun StatCardItem(
             Text(
                 text = value,
                 fontFamily = CairoFontFamily,
-                fontSize = 22.sp,
+                fontSize = 19.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = valueColor
             )
@@ -1326,7 +1334,7 @@ fun StatCardItem(
             Text(
                 text = footer,
                 fontFamily = CairoFontFamily,
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Normal,
                 color = footerColor,
                 maxLines = 1,
@@ -1356,11 +1364,11 @@ fun ServiceCard(
 
     Surface(
         modifier = modifier
-            .height(100.dp)
-            .shadow(elevation = if (hasBorder) 1.dp else 2.dp, shape = RoundedCornerShape(18.dp))
-            .clip(RoundedCornerShape(18.dp))
+            .height(78.dp)
+            .shadow(elevation = if (hasBorder) 1.dp else 2.dp, shape = RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable { onClick() },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(14.dp),
         color = actualBg,
         border = if (isDarkMode) {
             BorderStroke(1.dp, Color(0xFF334155))
@@ -1380,24 +1388,24 @@ fun ServiceCard(
             Surface(
                 shape = CircleShape,
                 color = contentColor.copy(alpha = if (isDarkMode) 0.22f else 0.15f),
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(32.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = icon,
                         contentDescription = title,
                         tint = contentColor,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             Text(
                 text = title,
                 fontFamily = CairoFontFamily,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = titleColor,
                 textAlign = TextAlign.Center,
