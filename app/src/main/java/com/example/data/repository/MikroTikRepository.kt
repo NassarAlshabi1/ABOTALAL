@@ -2626,53 +2626,62 @@ class MikroTikRepository(
             try {
                 val resource = api.executeStrict("/system/resource/print").firstOrNull()
                     ?: throw IOException("تعذر قراءة بيانات الراوتر؛ لم يتم إرسال أي تحليل")
-                data class Spec(val group: String, val key: String, val path: String, val properties: String, val query: String = "", val limit: Int = 100)
-                val specs = listOf(
-                    Spec("network", "interfaces", "/interface/print", ".id,name,type,running,disabled,mtu,actual-mtu"),
-                    Spec("network", "addresses", "/ip/address/print", ".id,address,network,interface,disabled"),
-                    Spec("network", "dns", "/ip/dns/print", "servers,allow-remote-requests,cache-size,cache-used"),
-                    Spec("network", "dhcp_servers", "/ip/dhcp-server/print", ".id,name,interface,address-pool,lease-time,disabled"),
-                    Spec("network", "dhcp_leases", "/ip/dhcp-server/lease/print", ".id,server,address,mac-address,status,expires-after", limit = 60),
-                    Spec("queues", "simple_queues", "/queue/simple/print", ".id,name,target,max-limit,limit-at,queue,disabled", limit = 150),
-                    Spec("queues", "queue_tree", "/queue/tree/print", ".id,name,parent,packet-mark,max-limit,limit-at,disabled", limit = 150),
-                    Spec("queues", "queue_types", "/queue/type/print", ".id,name,kind,pcq-rate,pcq-limit,pcq-total-limit", limit = 80),
-                    Spec("firewall", "filter", "/ip/firewall/filter/print", ".id,chain,action,protocol,src-address,dst-address,in-interface,out-interface,connection-state,disabled,packets,bytes", limit = 200),
-                    Spec("firewall", "nat", "/ip/firewall/nat/print", ".id,chain,action,protocol,src-address,dst-address,in-interface,out-interface,to-addresses,to-ports,disabled,packets,bytes", limit = 160),
-                    Spec("firewall", "mangle", "/ip/firewall/mangle/print", ".id,chain,action,protocol,connection-mark,packet-mark,new-connection-mark,new-packet-mark,src-address,dst-address,disabled,packets,bytes", limit = 200),
-                    Spec("hotspot", "hotspot_servers", "/ip/hotspot/print", ".id,name,interface,address-pool,profile,disabled", limit = 80),
-                    Spec("hotspot", "hotspot_active", "/ip/hotspot/active/print", ".id,user,address,mac-address,uptime,bytes-in,bytes-out"),
-                    Spec("performance", "established_connections", "/ip/firewall/connection/print", ".id,protocol,tcp-state,src-address,dst-address,reply-src-address,reply-dst-address,timeout,orig-packets,orig-bytes,reply-bytes", "?tcp-state=established", 60),
-                    Spec("scripts", "scripts", "/system/script/print", ".id,name,owner,policy,run-count,last-started,disabled"),
-                    Spec("scripts", "scheduler", "/system/scheduler/print", ".id,name,start-date,start-time,interval,disabled,run-count"),
-                    Spec("scripts", "error_logs", "/log/print", ".id,time,topics,message", "?topics~error", 80)
+                val version = resource["version"].orEmpty()
+                val selectedGroups = if ("all" in selectedSections) {
+                    setOf("network", "queues", "firewall", "hotspot", "performance", "scripts", "security", "wireless", "routing", "ipv6")
+                } else selectedSections
+                val baseSpecs = listOf(
+                    AiDoctorDiagnostics.ReadSpec("network", "interfaces", "/interface/print", ".id,name,type,running,disabled,mtu,actual-mtu"),
+                    AiDoctorDiagnostics.ReadSpec("network", "addresses", "/ip/address/print", ".id,address,network,interface,disabled"),
+                    AiDoctorDiagnostics.ReadSpec("network", "dns", "/ip/dns/print", "servers,allow-remote-requests,cache-size,cache-used"),
+                    AiDoctorDiagnostics.ReadSpec("network", "dhcp_servers", "/ip/dhcp-server/print", ".id,name,interface,address-pool,lease-time,disabled"),
+                    AiDoctorDiagnostics.ReadSpec("network", "dhcp_leases", "/ip/dhcp-server/lease/print", ".id,server,address,mac-address,status,expires-after", limit = 60),
+                    AiDoctorDiagnostics.ReadSpec("queues", "simple_queues", "/queue/simple/print", ".id,name,target,max-limit,limit-at,queue,disabled", limit = 150),
+                    AiDoctorDiagnostics.ReadSpec("queues", "queue_tree", "/queue/tree/print", ".id,name,parent,packet-mark,max-limit,limit-at,disabled", limit = 150),
+                    AiDoctorDiagnostics.ReadSpec("queues", "queue_types", "/queue/type/print", ".id,name,kind,pcq-rate,pcq-limit,pcq-total-limit", limit = 80),
+                    AiDoctorDiagnostics.ReadSpec("firewall", "filter", "/ip/firewall/filter/print", ".id,chain,action,protocol,src-address,dst-address,in-interface,out-interface,connection-state,disabled,packets,bytes", limit = 200),
+                    AiDoctorDiagnostics.ReadSpec("firewall", "nat", "/ip/firewall/nat/print", ".id,chain,action,protocol,src-address,dst-address,in-interface,out-interface,to-addresses,to-ports,disabled,packets,bytes", limit = 160),
+                    AiDoctorDiagnostics.ReadSpec("firewall", "mangle", "/ip/firewall/mangle/print", ".id,chain,action,protocol,connection-mark,packet-mark,new-connection-mark,new-packet-mark,src-address,dst-address,disabled,packets,bytes", limit = 200),
+                    AiDoctorDiagnostics.ReadSpec("hotspot", "hotspot_servers", "/ip/hotspot/print", ".id,name,interface,address-pool,profile,disabled", limit = 80),
+                    AiDoctorDiagnostics.ReadSpec("hotspot", "hotspot_active", "/ip/hotspot/active/print", ".id,user,address,mac-address,uptime,bytes-in,bytes-out"),
+                    AiDoctorDiagnostics.ReadSpec("performance", "established_connections", "/ip/firewall/connection/print", ".id,protocol,tcp-state,src-address,dst-address,reply-src-address,reply-dst-address,timeout,orig-packets,orig-bytes,reply-bytes", "?tcp-state=established", 60),
+                    AiDoctorDiagnostics.ReadSpec("scripts", "scripts", "/system/script/print", ".id,name,owner,policy,run-count,last-started,disabled"),
+                    AiDoctorDiagnostics.ReadSpec("scripts", "scheduler", "/system/scheduler/print", ".id,name,start-date,start-time,interval,disabled,run-count"),
+                    AiDoctorDiagnostics.ReadSpec("scripts", "error_logs", "/log/print", ".id,time,topics,message", "?topics~error", 80)
                 )
+                val specs = baseSpecs + AiDoctorDiagnostics.additionalReadSpecs(version, selectedGroups)
                 val output = JSONObject()
                 output.put("router", JSONObject()
                     .put("host", connection.host)
-                    .put("routeros_version", resource["version"] ?: "unknown")
+                    .put("routeros_version", version.ifBlank { "unknown" })
+                    .put("routeros_major", AiDoctorDiagnostics.majorVersion(version) ?: JSONObject.NULL)
                     .put("board", resource["board-name"] ?: "unknown")
                     .put("uptime", resource["uptime"] ?: "unknown")
                     .put("cpu_load_percent", resource["cpu-load"] ?: "unknown")
                     .put("free_memory", resource["free-memory"] ?: "unknown")
                     .put("total_memory", resource["total-memory"] ?: "unknown"))
                 val errors = JSONArray()
-                val selectedGroups = if ("all" in selectedSections) setOf("network", "queues", "firewall", "hotspot", "performance", "scripts") else selectedSections
+                val collectedRows = mutableMapOf<String, List<Map<String, String>>>()
+                val truncatedKeys = mutableSetOf<String>()
                 for (spec in specs.filter { it.group in selectedGroups }) {
                     try {
                         val params = buildList {
                             add(".proplist=${spec.properties}")
                             if (spec.query.isNotBlank()) add(spec.query)
                         }
-                        val rows = api.executeStrict(spec.path, *params.toTypedArray()).take(spec.limit)
+                        val fetchedRows = api.executeStrict(spec.path, *params.toTypedArray())
+                        if (fetchedRows.size > spec.limit) truncatedKeys += spec.key
+                        val rows = fetchedRows.take(spec.limit)
+                        collectedRows[spec.key] = rows
                         val safeRows = JSONArray()
                         rows.forEach { row ->
                             val safeRow = JSONObject()
                             row.forEach { (key, raw) ->
                                 val lower = key.lowercase()
-                                val privateField = listOf("password", "secret", "private", "community", "token", "source", "on-event", "certificate", "key")
+                                val privateField = listOf("password", "passphrase", "secret", "private", "community", "token", "source", "on-event", "certificate", "key")
                                     .any(lower::contains)
                                 if (!privateField) {
-                                    val safeValue = RouterDiagnosticRedactor.redact(raw.take(500))
+                                    val safeValue = RouterDiagnosticRedactor.redactAndLimit(raw, 500)
                                     safeRow.put(key, safeValue)
                                 }
                             }
@@ -2684,7 +2693,21 @@ class MikroTikRepository(
                     }
                 }
                 output.put("collection_errors", errors)
-                output.put("privacy_note", "Read-only RouterOS data; credential fields, script source, scheduler commands, and private keys are excluded or redacted.")
+                output.put("collection_truncated", JSONArray().apply { truncatedKeys.forEach(::put) })
+                output.put("heuristic_findings", JSONArray().apply {
+                    AiDoctorDiagnostics.securityFindings(collectedRows, truncatedKeys).forEach { finding ->
+                        put(JSONObject()
+                            .put("severity", finding.severity)
+                            .put("category", finding.category)
+                            .put("title", finding.title)
+                            .put("evidence", finding.evidence)
+                            .put("recommendation", finding.recommendation))
+                    }
+                })
+                if ("wireless" in selectedGroups && AiDoctorDiagnostics.majorVersion(version) !in setOf(6, 7)) {
+                    output.put("compatibility_note", "لم يُكتشف إصدار RouterOS 6 أو 7؛ لم تُجرّب مسارات Wi-Fi خاصة بإصدار لتجنب أوامر غير متوافقة.")
+                }
+                output.put("privacy_note", "Read-only RouterOS data. Wi-Fi passphrases and SNMP community names are not requested; credential fields, script source, scheduler commands, and private keys are excluded or redacted.")
                 val snapshot = output.toString()
                 if (snapshot.length > 100_000) throw IOException("تقرير الفحص كبير جدًا؛ اختر أقسامًا أقل ثم أعد المحاولة")
                 launch(Dispatchers.Main) { onSuccess(snapshot) }
