@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -260,12 +261,31 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.createRouterBackup(onSuccess, onError)
     }
 
+    fun downloadRouterBackup(
+        fileName: String,
+        folderUri: Uri,
+        expectedSizeBytes: Long,
+        onProgress: (Long) -> Unit,
+        onSuccess: (Long) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.downloadRouterBackup(fileName, folderUri, expectedSizeBytes, onProgress, onSuccess, onError)
+    }
+
     fun deleteRouterBackup(fileName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repository.deleteRouterBackup(fileName, onSuccess, onError)
     }
 
     fun restoreRouterBackup(fileName: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         repository.restoreRouterBackup(fileName, onSuccess, onError)
+    }
+
+    fun probeAiDoctorRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.probeAiDoctorRouter(onSuccess, onError)
+    }
+
+    fun collectAiDoctorData(selectedSections: Set<String>, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.collectAiDoctorData(selectedSections, onSuccess, onError)
     }
 
     /* Expired-cards maintenance wizard (9 manual steps) */

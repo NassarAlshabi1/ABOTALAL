@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -26,6 +31,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -313,7 +319,7 @@ fun DashboardScreen(
                         icon = Icons.Filled.PointOfSale,
                         iconTint = Color(0xFF0284C7),
                         iconBackground = Color(0xFFE0F2FE),
-                        value = "$formattedCardsAccountValue ر.س",
+                        value = "$formattedCardsAccountValue ريال",
                         footer = "حسب أسعار باقات اليوزرمانجر",
                         isDarkMode = isDarkMode,
                         onClick = { showFinancialReportDialog = true }
@@ -741,43 +747,6 @@ fun DashboardScreen(
             }
         }
 
-        // Row of quick tool buttons in Dashboard
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                ServiceCard(
-                    modifier = Modifier.weight(1f),
-                    title = "إشعارات التيليجرام",
-                    icon = Icons.Filled.Send,
-                    backgroundColor = if (isDarkMode) Color(0xFF0088CC).copy(alpha = 0.2f) else Color(0xFFE0F2FE),
-                    contentColor = Color(0xFF0088CC),
-                    isDarkMode = isDarkMode,
-                    onClick = { navigateToTab(6) }
-                )
-
-                ServiceCard(
-                    modifier = Modifier.weight(1f),
-                    title = "حسابات البروباند",
-                    icon = Icons.Filled.Dns,
-                    backgroundColor = if (isDarkMode) Color(0xFF2563EB).copy(alpha = 0.2f) else Color(0xFFDBEAFE),
-                    contentColor = Color(0xFF2563EB),
-                    isDarkMode = isDarkMode,
-                    onClick = { navigateToTab(6) }
-                )
-
-                ServiceCard(
-                    modifier = Modifier.weight(1f),
-                    title = "مجلد الهوتسبوت",
-                    icon = Icons.Filled.FolderSpecial,
-                    backgroundColor = if (isDarkMode) Color(0xFF0D9488).copy(alpha = 0.2f) else Color(0xFFCCFBF1),
-                    contentColor = Color(0xFF0D9488),
-                    isDarkMode = isDarkMode,
-                    onClick = { navigateToTab(6) }
-                )
-            }
-        }
     }
 
     // --- Dialogs ---
@@ -901,12 +870,62 @@ fun DashboardScreen(
     }
 
     if (showBackupDialog) {
+        val context = LocalContext.current
+        val backupPrefs = remember { context.getSharedPreferences("router_backup_preferences", android.content.Context.MODE_PRIVATE) }
         var backups by remember { mutableStateOf<List<RouterBackupFile>>(emptyList()) }
         var isLoadingList by remember { mutableStateOf(true) }
         var isCreating by remember { mutableStateOf(false) }
         var listError by remember { mutableStateOf<String?>(null) }
         var pendingRestoreFile by remember { mutableStateOf<String?>(null) }
         var pendingDeleteFile by remember { mutableStateOf<String?>(null) }
+        var pendingDownloadFile by remember { mutableStateOf<RouterBackupFile?>(null) }
+        var backupFolderUriText by remember { mutableStateOf(backupPrefs.getString("folder_uri", null)) }
+        var downloadingBackupName by remember { mutableStateOf<String?>(null) }
+        var downloadedBackupBytes by remember { mutableLongStateOf(0L) }
+        val backupFolderUri = backupFolderUriText?.let(Uri::parse)
+        val backupFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri == null) {
+                pendingDownloadFile = null
+            } else {
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                    backupPrefs.edit().putString("folder_uri", uri.toString()).apply()
+                    backupFolderUriText = uri.toString()
+                } catch (e: Exception) {
+                    pendingDownloadFile = null
+                    feedbackMessage = "تعذر حفظ صلاحية الوصول إلى المجلد المختار: ${e.localizedMessage ?: "أعد اختيار مجلد آخر"}"
+                }
+            }
+        }
+
+        fun startBackupDownload(file: RouterBackupFile) {
+            val folderUri = backupFolderUri
+            if (folderUri == null) {
+                feedbackMessage = "اختر أولاً مجلد التنزيل على الهاتف أو بطاقة الذاكرة الخارجية."
+                return
+            }
+            pendingDownloadFile = null
+            downloadingBackupName = file.name
+            downloadedBackupBytes = 0L
+            viewModel.downloadRouterBackup(
+                fileName = file.name,
+                folderUri = folderUri,
+                expectedSizeBytes = file.sizeBytes,
+                onProgress = { downloadedBackupBytes = it },
+                onSuccess = { bytes ->
+                    downloadingBackupName = null
+                    downloadedBackupBytes = bytes
+                    feedbackMessage = "تم تنزيل النسخة '${file.name}' بنجاح (${formatBackupFileSize(bytes)}) إلى المجلد المختار."
+                },
+                onError = { error ->
+                    downloadingBackupName = null
+                    feedbackMessage = "فشل تنزيل النسخة '${file.name}': $error"
+                }
+            )
+        }
 
         fun reloadBackups() {
             isLoadingList = true
@@ -931,6 +950,42 @@ fun DashboardScreen(
                         "نسخة احتياطية كاملة لإعدادات الراوتر (System Backup) — تُحفظ على الراوتر نفسه ويمكن استعادتها منه في أي وقت.",
                         fontFamily = CairoFontFamily,
                         fontSize = 12.sp,
+                        color = textSecondary
+                    )
+
+                    OutlinedButton(
+                        onClick = { backupFolderPicker.launch(backupFolderUri) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (backupFolderUri == null) "اختيار مجلد على الهاتف أو بطاقة SD"
+                            else "تغيير مجلد التنزيل المحفوظ",
+                            fontFamily = CairoFontFamily
+                        )
+                    }
+                    Text(
+                        if (backupFolderUri == null)
+                            "لم يتم اختيار مجلد بعد. سيُحفظ اختيارك للاستخدام القادم. يمكنك اختيار مجلد داخل بطاقة SD."
+                        else {
+                            val folder = runCatching { DocumentsContract.getTreeDocumentId(backupFolderUri).substringAfter(':') }.getOrNull()
+                            "مجلد الحفظ: ${folder?.takeIf { it.isNotBlank() } ?: "المجلد المختار"} — محفوظ على هذا الجهاز."
+                        },
+                        fontFamily = CairoFontFamily,
+                        fontSize = 11.sp,
+                        color = textSecondary
+                    )
+                    Text(
+                        "تنبيه أمني: نقل النسخة يتم عبر FTP غير مشفّر. استخدم شبكة محلية موثوقة أو VPN؛ لا تفتح خدمة FTP للإنترنت. النسخة قد تحتوي كلمات مرور ومفاتيح الراوتر.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 11.sp,
+                        color = Color(0xFFB45309)
+                    )
+                    Text(
+                        "قد يمنع Android اختيار جذر بطاقة SD مباشرة؛ اختر مجلدًا داخل البطاقة.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 10.sp,
                         color = textSecondary
                     )
 
@@ -1017,6 +1072,27 @@ fun DashboardScreen(
                                             fontSize = 11.sp,
                                             color = textSecondary
                                         )
+                                        if (downloadingBackupName == file.name) {
+                                            Text(
+                                                "جارٍ التنزيل: ${formatBackupFileSize(downloadedBackupBytes)} من ${formatBackupFileSize(file.sizeBytes)}",
+                                                fontFamily = CairoFontFamily,
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF0284C7)
+                                            )
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            pendingDownloadFile = file
+                                            if (backupFolderUri == null) backupFolderPicker.launch(null)
+                                        },
+                                        enabled = downloadingBackupName == null
+                                    ) {
+                                        if (downloadingBackupName == file.name) {
+                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                        } else {
+                                            Icon(Icons.Filled.Download, contentDescription = "تنزيل إلى الهاتف", tint = Color(0xFF059669))
+                                        }
                                     }
                                     IconButton(onClick = { pendingRestoreFile = file.name }) {
                                         Icon(Icons.Filled.Restore, contentDescription = "استعادة", tint = Color(0xFF0891B2))
@@ -1036,6 +1112,30 @@ fun DashboardScreen(
                 }
             }
         )
+
+        pendingDownloadFile?.takeIf { backupFolderUri != null }?.let { file ->
+            AlertDialog(
+                onDismissRequest = { pendingDownloadFile = null },
+                title = { Text("تأكيد تنزيل النسخة", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        "سيتم حفظ '${file.name}' (${formatBackupFileSize(file.sizeBytes)}) في المجلد الذي اخترته. ملف النسخة يحتوي بيانات حساسة، وFTP يرسل كلمة المرور والملف دون تشفير. تابع فقط عبر LAN موثوقة أو VPN، وتأكد من عدم إتاحة FTP من الإنترنت.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 13.sp
+                    )
+                },
+                confirmButton = {
+                    Button(onClick = { startBackupDownload(file) }) {
+                        Text("متابعة التنزيل", fontFamily = CairoFontFamily)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDownloadFile = null }) {
+                        Text("إلغاء", fontFamily = CairoFontFamily)
+                    }
+                }
+            )
+        }
 
         // Restoring overwrites the router's entire current configuration and makes
         // it reboot immediately — a second explicit confirmation before sending it.

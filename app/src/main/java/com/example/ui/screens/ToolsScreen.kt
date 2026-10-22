@@ -40,6 +40,7 @@ sealed class ToolsActiveView {
     object TelegramConfig : ToolsActiveView()
     object PppoeManager : ToolsActiveView()
     object CloudManager : ToolsActiveView()
+    object AiDoctor : ToolsActiveView()
     data class GenericTool(val key: String, val title: String, val subtitle: String) : ToolsActiveView()
 }
 
@@ -60,32 +61,8 @@ fun ToolsScreen(
     val context = LocalContext.current
     var activeSubView by remember { mutableStateOf<ToolsActiveView>(ToolsActiveView.MainList) }
 
-    // Dialog states for Quick Services
-    var showHtmlDirDialog by remember { mutableStateOf(false) }
-    var showFreeHotspotDialog by remember { mutableStateOf(false) }
-    var isFreeHotspotEnabled by remember { mutableStateOf(false) }
-
-    var showAntiShareDialog by remember { mutableStateOf(false) }
-    var isAntiShareEnabled by remember { mutableStateOf(false) }
-
     var showRebootDialog by remember { mutableStateOf(false) }
     var isOperating by remember { mutableStateOf(false) }
-
-    // REAL router state for the quick-services switches — no fictional defaults:
-    // read /ip/hotspot/print (all disabled = open network) and whether the
-    // ABO_TALAL_ANTI_SHARE mangle rule exists.
-    val isConnected by viewModel.isConnected.collectAsState()
-    LaunchedEffect(isConnected) {
-        if (isConnected) {
-            viewModel.fetchQuickServicesState(
-                onResult = { free, anti ->
-                    isFreeHotspotEnabled = free
-                    isAntiShareEnabled = anti
-                },
-                onError = { /* leave switches untouched — user can still toggle manually */ }
-            )
-        }
-    }
 
     // Dark-mode aware background for the main tools list
     val isDarkMode by viewModel.isDarkMode.collectAsState()
@@ -123,6 +100,10 @@ fun ToolsScreen(
                 viewModel = viewModel,
                 onBack = { activeSubView = ToolsActiveView.MainList }
             )
+        }
+
+        is ToolsActiveView.AiDoctor -> {
+            AiDoctorScreen(viewModel = viewModel, onBack = { activeSubView = ToolsActiveView.MainList })
         }
 
         is ToolsActiveView.GenericTool -> {
@@ -246,82 +227,27 @@ fun ToolsScreen(
                     ) {
                         item { Spacer(modifier = Modifier.height(6.dp)) }
 
-                        /* ========================================================
-                           SECTION 1: HERO SERVICES & CARDS (SCREENSHOT 1)
-                           ======================================================== */
                         item {
-                            Text(
-                                text = "الخدمات السريعة والمتقدمة",
-                                fontFamily = CairoFontFamily,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = Color(0xFF0F172A)
-                            )
-                        }
-
-                        // Row 1: PPPoE & HTML Directory
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0C5A60)),
+                                elevation = CardDefaults.cardElevation(4.dp),
+                                modifier = Modifier.fillMaxWidth().clickable { activeSubView = ToolsActiveView.AiDoctor }
                             ) {
-                                // 1. PPPoE Card
-                                HeroServiceCard(
-                                    modifier = Modifier.weight(1f),
-                                    title = "حسابات البروباند",
-                                    subtitle = "إدارة مشتركي PPPoE والاشتراكات المنزلية",
-                                    actionButtonText = "اضغط للدخول",
-                                    headerBgColor = Color(0xFF1E3A8A),
-                                    accentColor = Color(0xFF2563EB),
-                                    icon = Icons.Filled.Dns,
-                                    onClick = { activeSubView = ToolsActiveView.PppoeManager }
-                                )
-
-                                // 2. HTML Directory Card
-                                HeroServiceCard(
-                                    modifier = Modifier.weight(1f),
-                                    title = "تغيير مجلد HTML",
-                                    subtitle = "تبديل صفحة تسجيل الدخول لهوتسبوت المايكروتك",
-                                    actionButtonText = "تغيير المجلد",
-                                    headerBgColor = Color(0xFF0C5A60),
-                                    accentColor = Color(0xFF0284C7),
-                                    icon = Icons.Filled.FolderSpecial,
-                                    onClick = { showHtmlDirDialog = true }
-                                )
-                            }
-                        }
-
-                        // Row 2: Free Network & Anti-Share (TTL)
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                // 3. Free Hotspot
-                                HeroServiceCard(
-                                    modifier = Modifier.weight(1f),
-                                    title = "تفعيل الشبكة مجاناً",
-                                    subtitle = if (isFreeHotspotEnabled) "الشبكة مفتوحة مجاناً" else "مقفلة بنظام الكروت",
-                                    actionButtonText = if (isFreeHotspotEnabled) "إعادة القفل" else "تفعيل مجاناً",
-                                    badgeText = "FREE",
-                                    headerBgColor = Color(0xFF6B21A8),
-                                    accentColor = Color(0xFF9333EA),
-                                    icon = Icons.Filled.WifiTethering,
-                                    onClick = { showFreeHotspotDialog = true }
-                                )
-
-                                // 4. Anti-Share / Bluetooth Net Share (TTL=1)
-                                HeroServiceCard(
-                                    modifier = Modifier.weight(1f),
-                                    title = "إيقاف مشاركة النت",
-                                    subtitle = if (isAntiShareEnabled) "الحظر مفعل (TTL=1)" else "المشاركة مسموحة",
-                                    actionButtonText = if (isAntiShareEnabled) "إلغاء الحظر" else "تفعيل الحظر",
-                                    badgeText = "TTL=1",
-                                    headerBgColor = Color(0xFF9F1239),
-                                    accentColor = Color(0xFFE11D48),
-                                    icon = Icons.Filled.BluetoothDisabled,
-                                    onClick = { showAntiShareDialog = true }
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().background(
+                                        Brush.horizontalGradient(listOf(Color(0xFF063B40), Color(0xFF0C5A60), Color(0xFF0284C7)))
+                                    ).padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(Icons.Filled.HealthAndSafety, contentDescription = null, tint = Color.White, modifier = Modifier.size(34.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("AI Doctor", fontFamily = CairoFontFamily, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                        Text("فحص قراءة فقط وتشخيص توافق RouterOS v6/v7", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFFBAE6FD))
+                                    }
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "فتح", tint = Color.White)
+                                }
                             }
                         }
 
@@ -673,199 +599,6 @@ fun ToolsScreen(
                 }
             }
         }
-    }
-
-    // Dialog: Change HTML Directory
-    if (showHtmlDirDialog) {
-        var selectedDir by remember { mutableStateOf("hotspot") }
-        var customDir by remember { mutableStateOf("") }
-        val presets = listOf("hotspot", "login_v2", "modern_dark", "hotspot_pro", "default")
-
-        AlertDialog(
-            onDismissRequest = { showHtmlDirDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Filled.FolderSpecial, contentDescription = null, tint = Color(0xFF0C5A60))
-                    Text("تغيير مجلد صفحة تسجيل الدخول", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "اختر مجلد صفحة الهوتسبوت أو أدخل اسم المجلد المحفوظ داخل ذاكرة الراوتر:",
-                        fontFamily = CairoFontFamily,
-                        fontSize = 12.sp,
-                        color = Color.DarkGray
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        presets.take(3).forEach { p ->
-                            FilterChip(
-                                selected = selectedDir == p && customDir.isBlank(),
-                                onClick = {
-                                    selectedDir = p
-                                    customDir = ""
-                                },
-                                label = { Text(p, fontSize = 11.sp) }
-                            )
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = customDir,
-                        onValueChange = { customDir = it },
-                        label = { Text("أو اسم مجلد مخصص") },
-                        placeholder = { Text("مثال: modern_page") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val finalDir = customDir.trim().ifBlank { selectedDir }
-                        isOperating = true
-                        viewModel.setHtmlDirectory(
-                            dirName = finalDir,
-                            onSuccess = {
-                                isOperating = false
-                                showHtmlDirDialog = false
-                                Toast.makeText(context, "✅ تم ضبط مجلد الهوتسبوت إلى ($finalDir) على الراوتر", Toast.LENGTH_LONG).show()
-                            },
-                            onError = { err ->
-                                isOperating = false
-                                Toast.makeText(context, "فشل التطبيق: $err", Toast.LENGTH_LONG).show()
-                            }
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
-                ) {
-                    if (isOperating) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("تطبيق على الراوتر", fontFamily = CairoFontFamily)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showHtmlDirDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
-    }
-
-    // Dialog: Free Hotspot Toggle
-    if (showFreeHotspotDialog) {
-        AlertDialog(
-            onDismissRequest = { showFreeHotspotDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Filled.WifiTethering, contentDescription = null, tint = Color(0xFF9333EA))
-                    Text(if (isFreeHotspotEnabled) "إعادة قفل الشبكة بنظام الكروت" else "تفعيل الشبكة مجاناً", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Text(
-                    text = if (isFreeHotspotEnabled) {
-                        "سيتم إعادة تشغيل نظام كروت الهوتسبوت ولن يتمكن المستخدمون من التصفح إلا بعد إدخال كرت صالح."
-                    } else {
-                        "سيتم فتح الشبكة لجميع المتصلين بالواي فاي بدون طلب تسجيل دخول أو كروت (وضع الطوارئ أو المناسبات)."
-                    },
-                    fontFamily = CairoFontFamily,
-                    fontSize = 13.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val newStatus = !isFreeHotspotEnabled
-                        isOperating = true
-                        viewModel.toggleFreeHotspot(
-                            enableFree = newStatus,
-                            onSuccess = {
-                                isOperating = false
-                                isFreeHotspotEnabled = newStatus
-                                showFreeHotspotDialog = false
-                                Toast.makeText(context, if (newStatus) "تم فتح الشبكة مجاناً" else "تمت إعادة نظام الكروت", Toast.LENGTH_SHORT).show()
-                            },
-                            onError = { err ->
-                                isOperating = false
-                                Toast.makeText(context, "فشل: $err", Toast.LENGTH_LONG).show()
-                            }
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isFreeHotspotEnabled) Color(0xFF0C5A60) else Color(0xFF9333EA)
-                    )
-                ) {
-                    Text(if (isFreeHotspotEnabled) "قفل وتفعيل الكروت" else "فتح الشبكة مجاناً", fontFamily = CairoFontFamily)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showFreeHotspotDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
-    }
-
-    // Dialog: Anti-Share (TTL=1)
-    if (showAntiShareDialog) {
-        AlertDialog(
-            onDismissRequest = { showAntiShareDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Filled.BluetoothDisabled, contentDescription = null, tint = Color(0xFFE11D48))
-                    Text("حظر مشاركة النت والبلوتوث", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Text(
-                    text = if (isAntiShareEnabled) {
-                        "هل تود إلغاء حظر مشاركة الإنترنت؟ سيتمكن العملاء من إعادة بث الإنترنت عبر هواتفهم."
-                    } else {
-                        "سيقوم الراوتر بتطبيق قاعدة Mangle وضبط (TTL=1) لمنع المستخدمين من إعادة بث النت عبر نقطة اتصال الهواتف أو البلوتوث."
-                    },
-                    fontFamily = CairoFontFamily,
-                    fontSize = 13.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val newStatus = !isAntiShareEnabled
-                        isOperating = true
-                        viewModel.toggleTtlBypass(
-                            blockSharing = newStatus,
-                            onSuccess = {
-                                isOperating = false
-                                isAntiShareEnabled = newStatus
-                                showAntiShareDialog = false
-                                Toast.makeText(context, if (newStatus) "تم تفعيل حظر المشاركة" else "تم إلغاء حظر المشاركة", Toast.LENGTH_SHORT).show()
-                            },
-                            onError = { err ->
-                                isOperating = false
-                                Toast.makeText(context, "فشل: $err", Toast.LENGTH_LONG).show()
-                            }
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isAntiShareEnabled) Color(0xFF0C5A60) else Color(0xFFE11D48)
-                    )
-                ) {
-                    Text(if (isAntiShareEnabled) "إلغاء الحظر" else "تفعيل الحظر الفوري", fontFamily = CairoFontFamily)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAntiShareDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
     }
 
     // Dialog: Router Reboot Confirmation

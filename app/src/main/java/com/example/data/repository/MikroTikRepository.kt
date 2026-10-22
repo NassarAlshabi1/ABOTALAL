@@ -1,6 +1,8 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.net.Uri
+import android.provider.DocumentsContract
 import android.util.Log
 import com.example.data.local.ActivityLog
 import com.example.data.local.ActivityLogDao
@@ -12,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -2586,6 +2589,111 @@ class MikroTikRepository(
     // backup above and from the MikroTik Cloud backup feature (CloudScreen).
     // ==========================================
 
+    fun probeAiDoctorRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val connection = _currentConnection.value
+            if (api == null || connection == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "اتصل بالراوتر أولاً من شاشة تسجيل الدخول") }
+                return@launch
+            }
+            try {
+                val resource = api.executeStrict("/system/resource/print").firstOrNull()
+                    ?: throw IOException("لم يُرجع الراوتر بيانات الموارد")
+                launch(Dispatchers.Main) {
+                    onSuccess("${connection.host}:${connection.port} — RouterOS ${resource["version"] ?: "غير معروف"}")
+                }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "فشل اختبار الاتصال بالراوتر") }
+            }
+        }
+    }
+
+    /** Read-only diagnostics. Script sources, scheduler commands, credentials,
+     *  and private keys are never requested from the router. */
+    fun collectAiDoctorData(selectedSections: Set<String>, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val connection = _currentConnection.value
+            if (api == null || connection == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "اتصل بالراوتر أولاً من شاشة تسجيل الدخول") }
+                return@launch
+            }
+            if (selectedSections.isEmpty()) {
+                launch(Dispatchers.Main) { onError("اختر قسمًا واحدًا على الأقل للفحص") }
+                return@launch
+            }
+            try {
+                val resource = api.executeStrict("/system/resource/print").firstOrNull()
+                    ?: throw IOException("تعذر قراءة بيانات الراوتر؛ لم يتم إرسال أي تحليل")
+                data class Spec(val group: String, val key: String, val path: String, val properties: String, val query: String = "", val limit: Int = 100)
+                val specs = listOf(
+                    Spec("network", "interfaces", "/interface/print", ".id,name,type,running,disabled,mtu,actual-mtu"),
+                    Spec("network", "addresses", "/ip/address/print", ".id,address,network,interface,disabled"),
+                    Spec("network", "dns", "/ip/dns/print", "servers,allow-remote-requests,cache-size,cache-used"),
+                    Spec("network", "dhcp_servers", "/ip/dhcp-server/print", ".id,name,interface,address-pool,lease-time,disabled"),
+                    Spec("network", "dhcp_leases", "/ip/dhcp-server/lease/print", ".id,server,address,mac-address,status,expires-after", limit = 60),
+                    Spec("queues", "simple_queues", "/queue/simple/print", ".id,name,target,max-limit,limit-at,queue,disabled", limit = 150),
+                    Spec("queues", "queue_tree", "/queue/tree/print", ".id,name,parent,packet-mark,max-limit,limit-at,disabled", limit = 150),
+                    Spec("queues", "queue_types", "/queue/type/print", ".id,name,kind,pcq-rate,pcq-limit,pcq-total-limit", limit = 80),
+                    Spec("firewall", "filter", "/ip/firewall/filter/print", ".id,chain,action,protocol,src-address,dst-address,in-interface,out-interface,connection-state,disabled,packets,bytes", limit = 200),
+                    Spec("firewall", "nat", "/ip/firewall/nat/print", ".id,chain,action,protocol,src-address,dst-address,in-interface,out-interface,to-addresses,to-ports,disabled,packets,bytes", limit = 160),
+                    Spec("firewall", "mangle", "/ip/firewall/mangle/print", ".id,chain,action,protocol,connection-mark,packet-mark,new-connection-mark,new-packet-mark,src-address,dst-address,disabled,packets,bytes", limit = 200),
+                    Spec("hotspot", "hotspot_servers", "/ip/hotspot/print", ".id,name,interface,address-pool,profile,disabled", limit = 80),
+                    Spec("hotspot", "hotspot_active", "/ip/hotspot/active/print", ".id,user,address,mac-address,uptime,bytes-in,bytes-out"),
+                    Spec("performance", "established_connections", "/ip/firewall/connection/print", ".id,protocol,tcp-state,src-address,dst-address,reply-src-address,reply-dst-address,timeout,orig-packets,orig-bytes,reply-bytes", "?tcp-state=established", 60),
+                    Spec("scripts", "scripts", "/system/script/print", ".id,name,owner,policy,run-count,last-started,disabled"),
+                    Spec("scripts", "scheduler", "/system/scheduler/print", ".id,name,start-date,start-time,interval,disabled,run-count"),
+                    Spec("scripts", "error_logs", "/log/print", ".id,time,topics,message", "?topics~error", 80)
+                )
+                val output = JSONObject()
+                output.put("router", JSONObject()
+                    .put("host", connection.host)
+                    .put("routeros_version", resource["version"] ?: "unknown")
+                    .put("board", resource["board-name"] ?: "unknown")
+                    .put("uptime", resource["uptime"] ?: "unknown")
+                    .put("cpu_load_percent", resource["cpu-load"] ?: "unknown")
+                    .put("free_memory", resource["free-memory"] ?: "unknown")
+                    .put("total_memory", resource["total-memory"] ?: "unknown"))
+                val errors = JSONArray()
+                val selectedGroups = if ("all" in selectedSections) setOf("network", "queues", "firewall", "hotspot", "performance", "scripts") else selectedSections
+                for (spec in specs.filter { it.group in selectedGroups }) {
+                    try {
+                        val params = buildList {
+                            add(".proplist=${spec.properties}")
+                            if (spec.query.isNotBlank()) add(spec.query)
+                        }
+                        val rows = api.executeStrict(spec.path, *params.toTypedArray()).take(spec.limit)
+                        val safeRows = JSONArray()
+                        rows.forEach { row ->
+                            val safeRow = JSONObject()
+                            row.forEach { (key, raw) ->
+                                val lower = key.lowercase()
+                                val privateField = listOf("password", "secret", "private", "community", "token", "source", "on-event", "certificate", "key")
+                                    .any(lower::contains)
+                                if (!privateField) {
+                                    val safeValue = RouterDiagnosticRedactor.redact(raw.take(500))
+                                    safeRow.put(key, safeValue)
+                                }
+                            }
+                            safeRows.put(safeRow)
+                        }
+                        output.put(spec.key, safeRows)
+                    } catch (e: Exception) {
+                        errors.put("${spec.path}: ${e.message?.take(160) ?: e.javaClass.simpleName}")
+                    }
+                }
+                output.put("collection_errors", errors)
+                output.put("privacy_note", "Read-only RouterOS data; credential fields, script source, scheduler commands, and private keys are excluded or redacted.")
+                val snapshot = output.toString()
+                if (snapshot.length > 100_000) throw IOException("تقرير الفحص كبير جدًا؛ اختر أقسامًا أقل ثم أعد المحاولة")
+                launch(Dispatchers.Main) { onSuccess(snapshot) }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "تعذر جمع بيانات فعلية من الراوتر") }
+            }
+        }
+    }
+
     /** Lists the router's own local system backups: real /file/print rows whose
      *  name ends in ".backup" (what /system/backup/save produces). */
     fun fetchRouterBackups(onSuccess: (List<RouterBackupFile>) -> Unit, onError: (String) -> Unit) {
@@ -2634,6 +2742,95 @@ class MikroTikRepository(
         }
     }
 
+    /** Downloads one existing binary backup from the router's FTP service into a
+     *  user-selected SAF folder (which may be on removable storage). RouterOS FTP
+     *  is unencrypted; the UI must warn users to use a trusted LAN or VPN. */
+    fun downloadRouterBackup(
+        fileName: String,
+        folderUri: Uri,
+        expectedSizeBytes: Long,
+        onProgress: (Long) -> Unit,
+        onSuccess: (Long) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val connection = _currentConnection.value
+            if (api == null || connection == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            var temporaryDocument: Uri? = null
+            try {
+                if (!fileName.endsWith(".backup", ignoreCase = true) || !fileName.matches(Regex("[A-Za-z0-9._ -]+"))) {
+                    throw IOException("اسم ملف النسخة غير صالح")
+                }
+                val hasPersistedWriteGrant = context.contentResolver.persistedUriPermissions.any {
+                    it.uri == folderUri && it.isWritePermission
+                }
+                if (!hasPersistedWriteGrant) {
+                    throw IOException("صلاحية مجلد الحفظ لم تعد متاحة. اختر المجلد على الهاتف أو بطاقة SD مرة أخرى.")
+                }
+                val remoteFile = api.executeStrict("/file/print")
+                    .firstOrNull { it["name"] == fileName }
+                    ?: throw IOException("النسخة '$fileName' لم تعد موجودة على الراوتر")
+                val size = remoteFile["size"]?.toLongOrNull()?.takeIf { it > 0L }
+                    ?: expectedSizeBytes.takeIf { it > 0L }
+                    ?: throw IOException("حجم النسخة غير معروف؛ أعد تحميل قائمة النسخ قبل التنزيل")
+                val ftpService = api.executeStrict("/ip/service/print", "?name=ftp")
+                    .firstOrNull { it["name"] == "ftp" }
+                    ?: throw IOException("تعذر قراءة إعداد خدمة FTP على الراوتر")
+                if (ftpService["disabled"] == "true") {
+                    throw IOException("خدمة FTP معطّلة على الراوتر. فعّلها من IP > Services بعد حصر الوصول على شبكة موثوقة فقط")
+                }
+                val ftpPort = ftpService["port"]?.toIntOrNull()?.takeIf { it in 1..65535 }
+                    ?: throw IOException("منفذ FTP الذي أعلنه الراوتر غير صالح")
+
+                val parentDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
+                    folderUri,
+                    DocumentsContract.getTreeDocumentId(folderUri)
+                )
+                temporaryDocument = DocumentsContract.createDocument(
+                    context.contentResolver,
+                    parentDocumentUri,
+                    "application/octet-stream",
+                    "$fileName.part"
+                ) ?: throw IOException("تعذر إنشاء ملف مؤقت في المجلد المختار")
+                val output = context.contentResolver.openOutputStream(temporaryDocument, "w")
+                    ?: throw IOException("تعذر فتح الملف المؤقت للكتابة في المجلد المختار")
+                val transferContext = currentCoroutineContext()
+                val downloaded = output.use {
+                    RouterFtpClient(
+                        host = connection.host,
+                        port = ftpPort,
+                        username = connection.username,
+                        password = connection.password
+                    ).download(
+                        fileName = fileName,
+                        output = it,
+                        expectedSize = size,
+                        coroutineContext = transferContext,
+                        onProgress = { bytes -> launch(Dispatchers.Main) { onProgress(bytes) } }
+                    )
+                }
+                if (DocumentsContract.renameDocument(context.contentResolver, temporaryDocument, fileName) == null) {
+                    throw IOException("موفر التخزين لا يدعم إكمال التنزيل الآمن بإعادة تسمية الملف المؤقت؛ اختر مجلدًا آخر")
+                }
+                temporaryDocument = null
+                insertActivityLog("تنزيل نسخة احتياطية", "تم تنزيل ملف النسخة '$fileName' إلى موقع الحفظ الذي اختاره المستخدم ($downloaded بايت)", connection.host)
+                launch(Dispatchers.Main) { onSuccess(downloaded) }
+            } catch (e: Exception) {
+                var cleanupWarning = ""
+                temporaryDocument?.let { uri ->
+                    val deleted = runCatching { DocumentsContract.deleteDocument(context.contentResolver, uri) }.getOrDefault(false)
+                    if (!deleted) cleanupWarning = " (تحذير: تعذر حذف الملف المؤقت الجزئي من موقع الحفظ؛ احذفه يدويًا إن ظهر باسم .part)"
+                }
+                val message = (e.message ?: "فشل تنزيل النسخة الاحتياطية") + cleanupWarning
+                launch(Dispatchers.Main) { onError(message) }
+            }
+        }
+    }
+
     /** Permanently deletes one of the router's own local backup files. */
     fun deleteRouterBackup(fileName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
@@ -2644,6 +2841,9 @@ class MikroTikRepository(
                 return@launch
             }
             try {
+                if (!fileName.endsWith(".backup", ignoreCase = true) || !fileName.matches(Regex("[A-Za-z0-9._ -]+"))) {
+                    throw IOException("اسم ملف النسخة غير صالح")
+                }
                 val id = api.executeStrict("/file/print").firstOrNull { it["name"] == fileName }?.get(".id")
                     ?: throw java.io.IOException("الملف '$fileName' غير موجود على الراوتر")
                 api.executeStrict("/file/remove", mapOf("numbers" to id))
@@ -2668,6 +2868,11 @@ class MikroTikRepository(
                 return@launch
             }
             try {
+                if (!fileName.endsWith(".backup", ignoreCase = true) || !fileName.matches(Regex("[A-Za-z0-9._ -]+"))) {
+                    throw IOException("اسم ملف النسخة غير صالح")
+                }
+                val exists = api.executeStrict("/file/print").any { it["name"] == fileName }
+                if (!exists) throw IOException("الملف '$fileName' غير موجود على الراوتر")
                 api.executeStrict("/system/backup/load", mapOf("name" to fileName))
                 insertActivityLog("استعادة نسخة احتياطية", "تم إرسال أمر استعادة النسخة الاحتياطية '$fileName' — الراوتر سيعيد تشغيل نفسه بالإعدادات المستعادة", host)
                 disconnect()
