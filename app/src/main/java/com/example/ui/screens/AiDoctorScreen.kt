@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,8 +44,8 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("ai_doctor_settings", android.content.Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
-    val connection by viewModel.currentConnection.collectAsState()
-    val isConnected by viewModel.isConnected.collectAsState()
+    val connection by viewModel.currentConnection.collectAsStateWithLifecycle()
+    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     var serviceName by remember { mutableStateOf(prefs.getString("service_name", "") ?: "") }
     var apiKey by remember { mutableStateOf(CryptoManager.decrypt(prefs.getString("api_key_enc", ""))) }
     var apiEndpoint by remember { mutableStateOf(prefs.getString("api_endpoint", "") ?: "") }
@@ -52,6 +53,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
     var modelName by remember { mutableStateOf(prefs.getString("model_name", "") ?: "") }
     var additionalHeaders by remember { mutableStateOf(CryptoManager.decrypt(prefs.getString("additional_headers_enc", ""))) }
     var settingsMessage by remember { mutableStateOf<String?>(null) }
+    var settingsMessageIsError by remember { mutableStateOf(false) }
     var apiStatus by remember { mutableStateOf<String?>(null) }
     var connectorStatus by remember { mutableStateOf<String?>(null) }
     var routerStatus by remember { mutableStateOf<String?>(null) }
@@ -64,7 +66,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
     var showUploadConfirmation by remember { mutableStateOf(false) }
     var diagnosis by remember { mutableStateOf<String?>(null) }
     var selectedSections by remember { mutableStateOf(setOf("all")) }
-    val darkMode by viewModel.isDarkMode.collectAsState()
+    val darkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
     val background = if (darkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
     val card = if (darkMode) Color(0xFF1E293B) else Color.White
     val textColor = if (darkMode) Color(0xFFF8FAFC) else Color(0xFF0F172A)
@@ -91,6 +93,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         val parsedHeaders = runCatching { AiDoctorClient.parseHeaders(additionalHeaders) }
         if (parsedHeaders.isFailure) {
             settingsMessage = parsedHeaders.exceptionOrNull()?.message ?: "صيغة الترويسات غير صالحة"
+            settingsMessageIsError = true
             return false
         }
         val urlValidations = listOf(
@@ -103,6 +106,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                 val validation = runCatching(validate)
                 if (validation.isFailure) {
                     settingsMessage = "$label: ${validation.exceptionOrNull()?.message ?: "الرابط غير صالح"}"
+                    settingsMessageIsError = true
                     return false
                 }
             }
@@ -111,10 +115,12 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         val encryptedHeaders = CryptoManager.encrypt(additionalHeaders.trim()).orEmpty()
         if (apiKey.isNotBlank() && !encryptedKey.startsWith("enc:v1:")) {
             settingsMessage = "تعذر تشفير API Key عبر Android Keystore؛ لم يتم حفظ المفتاح."
+            settingsMessageIsError = true
             return false
         }
         if (additionalHeaders.isNotBlank() && !encryptedHeaders.startsWith("enc:v1:")) {
             settingsMessage = "تعذر تشفير Additional Headers؛ لم يتم حفظ الإعدادات الحساسة."
+            settingsMessageIsError = true
             return false
         }
         prefs.edit()
@@ -126,6 +132,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
             .putString("additional_headers_enc", encryptedHeaders)
             .apply()
         settingsMessage = "تم حفظ الإعدادات؛ API Key والترويسات الإضافية محفوظة مشفّرة على الجهاز."
+        settingsMessageIsError = false
         return true
     }
 
@@ -176,6 +183,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         if (!saveSettings()) return
         if (apiEndpoint.isBlank() || modelName.isBlank()) {
             settingsMessage = "أدخل API Endpoint URL وModel Name المقدمين من خدمتك قبل التحليل. لا يفرض التطبيق اسم نموذج بعينه."
+            settingsMessageIsError = true
             showUploadConfirmation = false
             return
         }
@@ -261,12 +269,13 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                             prefs.edit().clear().apply()
                             serviceName = ""; apiKey = ""; apiEndpoint = ""; connectorUrl = ""; modelName = ""; additionalHeaders = ""
                             settingsMessage = "تم مسح إعدادات AI Doctor من هذا الجهاز."
+                            settingsMessageIsError = false
                             apiStatus = null; connectorStatus = null; diagnosis = null; pendingSnapshot = null
                         }, modifier = Modifier.weight(1f)) {
                             Text("مسح الإعدادات", fontFamily = CairoFontFamily, color = Color(0xFFDC2626))
                         }
                     }
-                    settingsMessage?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("تعذر")) Color(0xFFDC2626) else Color(0xFF059669)) }
+                    settingsMessage?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (settingsMessageIsError) Color(0xFFDC2626) else Color(0xFF059669)) }
                     apiStatus?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("فشل") || it.startsWith("أدخل") || it.startsWith("تعذر")) Color(0xFFDC2626) else Color(0xFF059669)) }
                     connectorStatus?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("استجاب رابط الموصل HTTP") || it.startsWith("تعذر")) Color(0xFFB45309) else Color(0xFF059669)) }
                 }
@@ -321,7 +330,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                             pendingSnapshot = null
                             viewModel.collectAiDoctorData(selectedSections,
                                 onSuccess = { snapshot -> pendingSnapshot = snapshot; showUploadConfirmation = true; isCollecting = false },
-                                onError = { error -> settingsMessage = "فشل جمع بيانات الراوتر: $error"; isCollecting = false }
+                                onError = { error -> settingsMessage = "فشل جمع بيانات الراوتر: $error"; settingsMessageIsError = true; isCollecting = false }
                             )
                         },
                         enabled = isConnected && !isCollecting && !isAnalyzing && selectedSections.isNotEmpty(),

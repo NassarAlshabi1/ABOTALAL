@@ -18,7 +18,6 @@ import android.graphics.Rect as AndroidRect
 import android.graphics.RectF as AndroidRectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
-import android.util.Log
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
@@ -722,7 +721,9 @@ object CardPrintAndExportHelper {
                 pdfDocument.finishPage(page)
             }
 
-            val cacheFile = File(context.cacheDir, "preview_${config.templateName}.pdf")
+            val previewDir = File(context.cacheDir, "previews").apply { mkdirs() }
+            val safeTemplateName = config.templateName.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
+            val cacheFile = File(previewDir, "preview_$safeTemplateName.pdf")
             val fos = FileOutputStream(cacheFile)
             pdfDocument.writeTo(fos)
             fos.flush()
@@ -731,7 +732,7 @@ object CardPrintAndExportHelper {
 
             cacheFile
         } catch (e: Exception) {
-            e.printStackTrace()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
             null
         }
     }
@@ -758,7 +759,7 @@ object CardPrintAndExportHelper {
                 list.add(bmp)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
         } finally {
             try {
                 renderer?.close()
@@ -795,8 +796,8 @@ object CardPrintAndExportHelper {
 
             context.startActivity(Intent.createChooser(intent, "معاينة ملف PDF - NetCraft"))
         } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "تعذر فتح معاينة PDF: ${e.message}", Toast.LENGTH_LONG).show()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+            Toast.makeText(context, "تعذر فتح معاينة PDF.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -903,15 +904,15 @@ object CardPrintAndExportHelper {
                     pdfDocument.close()
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
-                Toast.makeText(context, "تعذر حفظ ملف PDF في التنزيلات: ${e.message}", Toast.LENGTH_LONG).show()
+                OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+                Toast.makeText(context, "تعذر حفظ ملف PDF في التنزيلات.", Toast.LENGTH_LONG).show()
             }
 
             // 2. Open native print manager
             previewDesignInSystemPrint(context, config, bgBitmap, realCards, curBatch)
         } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "فشل الطباعة: ${e.message}", Toast.LENGTH_LONG).show()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+            Toast.makeText(context, "فشل إنشاء ملف الطباعة.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -990,8 +991,8 @@ object CardPrintAndExportHelper {
                     pdfDoc.writeTo(FileOutputStream(destination.fileDescriptor))
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    callback.onWriteFailed(e.localizedMessage)
+                    OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+                    callback.onWriteFailed("تعذر إنشاء ملف الطباعة.")
                 } finally {
                     pdfDoc.close()
                     mPdfDocument = null
@@ -1099,8 +1100,8 @@ object CardPrintAndExportHelper {
                     pdfDoc.writeTo(FileOutputStream(destination.fileDescriptor))
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    callback.onWriteFailed(e.localizedMessage)
+                    OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+                    callback.onWriteFailed("تعذر إنشاء ملف الطباعة.")
                 } finally {
                     pdfDoc.close()
                     mPdfDocument = null
@@ -1172,8 +1173,8 @@ object CardPrintAndExportHelper {
             Toast.makeText(context, "تم حفظ ملف PDF بنجاح (${users.size} كرت)", Toast.LENGTH_LONG).show()
             onComplete(uri)
         } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "خطأ في حفظ PDF: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+            Toast.makeText(context, "تعذر حفظ ملف PDF.", Toast.LENGTH_LONG).show()
             onComplete(null)
         }
     }
@@ -1234,8 +1235,8 @@ object CardPrintAndExportHelper {
             Toast.makeText(context, "تم تصدير ${users.size} كرت إلى Excel بنجاح!", Toast.LENGTH_LONG).show()
             return file
         } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "خطأ أثناء التصدير: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+            Toast.makeText(context, "تعذر تصدير الملف.", Toast.LENGTH_LONG).show()
             return null
         }
     }
@@ -1676,7 +1677,12 @@ object CardPrintAndExportHelper {
             } catch (e: Exception) {
                 // Encoding failed (e.g. empty content) — draw an honest empty box
                 // instead of a fake decorative pattern.
-                Log.w("CardPrintHelper", "Barcode/QR encode failed for '${user.username}': ${e.message}")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.EXPORT_RESULT,
+                    operation = OperationTelemetry.Operation.EXPORT,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.ErrorClass.PARSE
+                )
             }
         }
 

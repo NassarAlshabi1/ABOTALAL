@@ -3,6 +3,7 @@ package com.example.util
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import com.example.util.OperationTelemetry
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -51,18 +52,22 @@ object CryptoManager {
             )
             generator.generateKey().also { cachedKey = it }
         } catch (e: Exception) {
-            // Keystore unavailable (rare ROM issue) — caller falls back to plaintext.
-            android.util.Log.e("CryptoManager", "Keystore key unavailable", e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.CRYPTO_RESULT,
+                operation = OperationTelemetry.Operation.CRYPTO_ENCRYPT,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.ErrorClass.CRYPTO
+            )
             null
         }
     }
 
-    /** Encrypts [plain]; returns null for blank input. Falls back to the original
-     *  value when the Keystore is unavailable (never throws). */
+    /** Encrypts [plain]; returns the blank value unchanged and null when secure
+     *  encryption is unavailable. Never falls back to plaintext. */
     fun encrypt(plain: String): String? {
         if (plain.isBlank()) return plain
         if (plain.startsWith(PREFIX)) return plain // already encrypted
-        val key = getOrCreateKey() ?: return plain
+        val key = getOrCreateKey() ?: return null
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, key)
@@ -71,8 +76,13 @@ object CryptoManager {
             PREFIX + Base64.encodeToString(iv, Base64.NO_WRAP) + ":" +
                 Base64.encodeToString(ct, Base64.NO_WRAP)
         } catch (e: Exception) {
-            android.util.Log.e("CryptoManager", "encrypt failed — storing as-is", e)
-            plain
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.CRYPTO_RESULT,
+                operation = OperationTelemetry.Operation.CRYPTO_ENCRYPT,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.ErrorClass.CRYPTO
+            )
+            null
         }
     }
 
@@ -91,7 +101,12 @@ object CryptoManager {
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
             String(cipher.doFinal(ct), Charsets.UTF_8)
         } catch (e: Exception) {
-            android.util.Log.e("CryptoManager", "decrypt failed", e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.CRYPTO_RESULT,
+                operation = OperationTelemetry.Operation.CRYPTO_DECRYPT,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.ErrorClass.CRYPTO
+            )
             ""
         }
     }

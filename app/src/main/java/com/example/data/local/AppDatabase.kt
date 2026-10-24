@@ -1,7 +1,7 @@
 package com.example.data.local
 
 import android.content.Context
-import android.util.Log
+import com.example.util.OperationTelemetry
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -59,7 +59,12 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
-                Log.i("AppDatabase", "Migrated database v3 → v4 (generated_batches added)")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.STORAGE_MIGRATION,
+                    operation = OperationTelemetry.Operation.DATABASE_MIGRATION,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    storageVersion = 4
+                )
             }
         }
 
@@ -85,7 +90,12 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
-                Log.i("AppDatabase", "Migrated database v4 → v5 (expired_card_archive added)")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.STORAGE_MIGRATION,
+                    operation = OperationTelemetry.Operation.DATABASE_MIGRATION,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    storageVersion = 5
+                )
             }
         }
 
@@ -160,7 +170,12 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("DROP TABLE `expired_card_archive`")
                 db.execSQL("ALTER TABLE `expired_card_archive_new` RENAME TO `expired_card_archive`")
 
-                Log.i("AppDatabase", "Migrated database v5 → v6 (price columns: REAL -> INTEGER, whole currency units)")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.STORAGE_MIGRATION,
+                    operation = OperationTelemetry.Operation.DATABASE_MIGRATION,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    storageVersion = 6
+                )
             }
         }
 

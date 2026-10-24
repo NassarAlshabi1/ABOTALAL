@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import com.example.util.OperationTelemetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -30,9 +31,14 @@ internal object AiDoctorClient {
         systemPrompt: String,
         userPrompt: String
     ): String = withContext(Dispatchers.IO) {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
+        var transport = OperationTelemetry.Transport.HTTPS
+        try {
         val model = modelName.trim()
         require(model.isNotBlank()) { "أدخل اسم النموذج الذي توفره خدمتك؛ لا يفرض التطبيق اسمًا محددًا." }
         val endpoint = validateApiEndpoint(endpointUrl, apiKey, additionalHeaders)
+        if (URI(endpoint).scheme == "http") transport = OperationTelemetry.Transport.LOCAL
         val body = JSONObject()
             .put("model", model)
             .put("temperature", 0.2)
@@ -43,7 +49,7 @@ internal object AiDoctorClient {
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         val requestBuilder = Request.Builder().url(endpoint).post(body)
         addConfiguredHeaders(requestBuilder, additionalHeaders, apiKey)
-        http.newCall(requestBuilder.build()).execute().use { response ->
+        val content = http.newCall(requestBuilder.build()).execute().use { response ->
             if (!response.isSuccessful) throw IllegalStateException("استجاب endpoint برمز HTTP ${response.code}؛ تحقق من الرابط ومفتاح API والنموذج والترويسات.")
             val raw = response.body?.string().orEmpty()
             val json = runCatching { JSONObject(raw) }.getOrElse {
@@ -53,6 +59,28 @@ internal object AiDoctorClient {
                 ?.let(::contentAsText)
                 ?.takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("استجابة الخدمة لا تحتوي choices[0].message.content كما يتوقع معيار OpenAI-compatible.")
+        }
+        OperationTelemetry.record(
+            event = OperationTelemetry.Event.AI_REQUEST_RESULT,
+            operation = OperationTelemetry.Operation.AI_COMPLETION,
+            operationId = operationId,
+            outcome = OperationTelemetry.Outcome.SUCCESS,
+            transport = transport,
+            durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+        )
+        content
+        } catch (e: Exception) {
+            val errorClass = OperationTelemetry.classify(e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.AI_REQUEST_RESULT,
+                operation = OperationTelemetry.Operation.AI_COMPLETION,
+                operationId = operationId,
+                outcome = if (e is kotlinx.coroutines.CancellationException) OperationTelemetry.Outcome.CANCELLED else if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                errorClass = errorClass,
+                transport = transport,
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
+            throw e
         }
     }
 
@@ -76,31 +104,82 @@ internal object AiDoctorClient {
             return "نجح اختبار API بإكمال طلب للنموذج المحدد."
         }
         return withContext(Dispatchers.IO) {
+            val operationId = OperationTelemetry.newOperationId()
+            val startedAt = OperationTelemetry.elapsedRealtime()
+            var transport = OperationTelemetry.Transport.HTTPS
+            try {
             val endpoint = validateApiEndpoint(endpointUrl, apiKey, additionalHeaders)
+            if (URI(endpoint).scheme == "http") transport = OperationTelemetry.Transport.LOCAL
             val requestBuilder = Request.Builder().url(endpoint).get()
             addConfiguredHeaders(requestBuilder, additionalHeaders, apiKey)
-            http.newCall(requestBuilder.build()).execute().use { response ->
+            val result = http.newCall(requestBuilder.build()).execute().use { response ->
                 when {
                     response.code in 200..299 -> "الخادم استجاب HTTP ${response.code}. هذا يثبت الوصول فقط؛ لم يُختبر نموذج أو إكمال طلب لأن Model Name فارغ."
                     response.code == 405 -> "الخادم استجاب HTTP 405. يبدو أن العنوان قابل للوصول لكنه يتطلب POST؛ أدخل اسم النموذج لاختبار إكمال API فعليًا."
                     else -> throw IllegalStateException("فشل اختبار الوصول إلى API: HTTP ${response.code}. تحقق من الرابط والترويسات ومفتاح الخدمة.")
                 }
             }
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.AI_REQUEST_RESULT,
+                operation = OperationTelemetry.Operation.AI_API_PROBE,
+                operationId = operationId,
+                outcome = OperationTelemetry.Outcome.SUCCESS,
+                transport = transport,
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
+            result
+            } catch (e: Exception) {
+                val errorClass = OperationTelemetry.classify(e)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.AI_REQUEST_RESULT,
+                    operation = OperationTelemetry.Operation.AI_API_PROBE,
+                    operationId = operationId,
+                    outcome = if (e is kotlinx.coroutines.CancellationException) OperationTelemetry.Outcome.CANCELLED else if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                    errorClass = errorClass,
+                    transport = transport,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
+                throw e
+            }
         }
     }
 
     /** Reachability test only: no universal connector protocol is assumed. */
     suspend fun testConnector(connectorUrl: String): String = withContext(Dispatchers.IO) {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
+        try {
         val endpoint = validateUrl(connectorUrl)
         // Do not send the AI provider key or custom headers to an unrelated
         // connector URL. A generic connector has no universal auth contract.
         val requestBuilder = Request.Builder().url(endpoint).get()
-        http.newCall(requestBuilder.build()).execute().use { response ->
+        val result = http.newCall(requestBuilder.build()).execute().use { response ->
             when {
                 response.code in 200..299 -> "استجاب رابط الموصل HTTP ${response.code}. هذا اختبار وصول فقط ولا يثبت دعم بروتوكول MikroTik أو أوامره؛ يلزم توثيق خدمة الموصل."
                 response.code in 300..399 -> "رابط الموصل قابل للوصول وأعاد HTTP ${response.code} بعد التحويل، لكنه لم يُتحقق من بروتوكوله."
                 else -> throw IllegalStateException("استجاب رابط الموصل HTTP ${response.code}. تحقق من الرابط والترويسات؛ لم يُرسل أي أمر إلى الراوتر.")
             }
+        }
+        OperationTelemetry.record(
+            event = OperationTelemetry.Event.AI_REQUEST_RESULT,
+            operation = OperationTelemetry.Operation.AI_API_PROBE,
+            operationId = operationId,
+            outcome = OperationTelemetry.Outcome.SUCCESS,
+            transport = if (URI(endpoint).scheme == "https") OperationTelemetry.Transport.HTTPS else OperationTelemetry.Transport.LOCAL,
+            durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+        )
+        result
+        } catch (e: Exception) {
+            val errorClass = OperationTelemetry.classify(e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.AI_REQUEST_RESULT,
+                operation = OperationTelemetry.Operation.AI_API_PROBE,
+                operationId = operationId,
+                outcome = if (e is kotlinx.coroutines.CancellationException) OperationTelemetry.Outcome.CANCELLED else if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                errorClass = errorClass,
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
+            throw e
         }
     }
 

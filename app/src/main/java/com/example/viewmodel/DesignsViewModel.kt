@@ -8,6 +8,7 @@ import com.example.data.Design
 import com.example.data.DesignDao
 import com.example.data.DesignDatabase
 import com.example.utils.defaultDesign
+import com.example.util.OperationTelemetry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,7 +63,7 @@ class DesignsViewModel(
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                recordDesignFailure(OperationTelemetry.Operation.DESIGN_LOAD, e)
             } finally {
                 _isLoading.update { false }
             }
@@ -77,7 +78,7 @@ class DesignsViewModel(
                     _draftDesign.update { null } // مسح المسودة عند اختيار تصميم جديد
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                recordDesignFailure(OperationTelemetry.Operation.DESIGN_SELECT, e)
             }
         }
     }
@@ -90,7 +91,7 @@ class DesignsViewModel(
                 _selectedDesign.update { design }
                 _draftDesign.update { null }
             } catch (e: Exception) {
-                e.printStackTrace()
+                recordDesignFailure(OperationTelemetry.Operation.DESIGN_SAVE, e)
             } finally {
                 _isLoading.update { false }
             }
@@ -107,7 +108,7 @@ class DesignsViewModel(
                     _draftDesign.update { null }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                recordDesignFailure(OperationTelemetry.Operation.DESIGN_DELETE, e)
             } finally {
                 _isLoading.update { false }
             }
@@ -125,7 +126,7 @@ class DesignsViewModel(
                 _draftDesign.update { newDesign }
                 saveDesign(newDesign)
             } catch (e: Exception) {
-                e.printStackTrace()
+                recordDesignFailure(OperationTelemetry.Operation.DESIGN_CREATE, e)
             }
         }
     }
@@ -136,5 +137,14 @@ class DesignsViewModel(
     
     fun getActiveDesign(): Design? {
         return _draftDesign.value ?: _selectedDesign.value
+    }
+
+    private fun recordDesignFailure(operation: OperationTelemetry.Operation, error: Throwable) {
+        OperationTelemetry.record(
+            event = OperationTelemetry.Event.SYNC_RESULT,
+            operation = operation,
+            outcome = OperationTelemetry.Outcome.FAILURE,
+            errorClass = OperationTelemetry.classify(error)
+        )
     }
 }

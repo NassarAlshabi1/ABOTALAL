@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,14 +50,14 @@ fun DashboardScreen(
     viewModel: MikroTikViewModel,
     navigateToTab: (Int) -> Unit
 ) {
-    val stats by viewModel.routerStats.collectAsState()
-    val conn by viewModel.currentConnection.collectAsState()
-    val logs by viewModel.activityLogs.collectAsState()
-    val hotspotUsers by viewModel.hotspotUsers.collectAsState()
-    val userManagerUsers by viewModel.userManagerUsers.collectAsState()
-    val profiles by viewModel.userManagerProfiles.collectAsState()
-    val activeHotspot by viewModel.activeHotspot.collectAsState()
-    val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val stats by viewModel.routerStats.collectAsStateWithLifecycle()
+    val conn by viewModel.currentConnection.collectAsStateWithLifecycle()
+    val logs by viewModel.activityLogs.collectAsStateWithLifecycle()
+    val hotspotUsers by viewModel.hotspotUsers.collectAsStateWithLifecycle()
+    val userManagerUsers by viewModel.userManagerUsers.collectAsStateWithLifecycle()
+    val profiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
+    val activeHotspot by viewModel.activeHotspot.collectAsStateWithLifecycle()
+    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
     val profilePrices = remember(profiles) { profiles.associate { it.name to it.price } }
     val cardsAccountValue = userManagerUsers.sumOf { profilePrices[it.profile] ?: 0 }
     val formattedCardsAccountValue = String.format(Locale.getDefault(), "%,d", cardsAccountValue)

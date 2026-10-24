@@ -75,7 +75,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -150,9 +150,9 @@ fun UserManagerCardsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val rawUsers by viewModel.userManagerUsers.collectAsState()
-    val profiles by viewModel.userManagerProfiles.collectAsState()
-    val isConnected by viewModel.isConnected.collectAsState()
+    val rawUsers by viewModel.userManagerUsers.collectAsStateWithLifecycle()
+    val profiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
+    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
 
     // Filter states (declared first — the router-side search effect below observes them)
     var selectedScope by remember { mutableStateOf("جميع الكروت من الروتر") }

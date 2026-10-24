@@ -1,6 +1,6 @@
 package com.example.data.repository
 
-import android.util.Log
+import com.example.util.OperationTelemetry
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
@@ -34,16 +34,32 @@ class MikroTikNativeApi(
     private var savedPassword: String = ""
 
     companion object {
-        private const val TAG = "MikroTikNativeApi"
-
         fun testSocket(host: String, port: Int, timeoutMs: Int = 5000): Pair<Boolean, String> {
+            val operationId = OperationTelemetry.newOperationId()
+            val startedAt = OperationTelemetry.elapsedRealtime()
             return try {
                 val s = Socket()
                 s.connect(InetSocketAddress(host, port), timeoutMs)
                 s.close()
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 Pair(true, "✅ الاتصال ناجح ومكتمل!\n\nتم الوصول إلى الراوتر ($host) على المنفذ ($port) بنجاح، ومنفذ الخدمة جاهز لاستقبال الأوامر.")
             } catch (e: Exception) {
-                Log.w(TAG, "Test socket failed to $host:$port", e)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = if (OperationTelemetry.classify(e) == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.classify(e),
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 val rawMsg = e.localizedMessage ?: ""
 
                 // Diagnose alternative common ports on same host to help the user
@@ -106,6 +122,8 @@ class MikroTikNativeApi(
     }
 
     fun connect(): Boolean {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
         synchronized(socketLock) {
             return try {
                 val s = if (useSsl) {
@@ -120,8 +138,6 @@ class MikroTikNativeApi(
                     try {
                         ssl.startHandshake()
                     } catch (h: SSLHandshakeException) {
-                        Log.e(TAG, "SSL handshake failed to $host:$port — the router's certificate " +
-                                "is self-signed or not trusted. Import it on the device or use port 8728.", h)
                         throw h
                     }
                     ssl
@@ -135,10 +151,26 @@ class MikroTikNativeApi(
                 socket = s
                 inStream = s.getInputStream()
                 outStream = s.getOutputStream()
-                Log.d(TAG, "Socket connected to $host:$port (ssl=$useSsl, tcpNoDelay=true, keepAlive=true)")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 true
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to connect socket to $host:$port", e)
+                val errorClass = OperationTelemetry.classify(e)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                    errorClass = errorClass,
+                    transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 closeInternal()
                 false
             }
@@ -149,15 +181,11 @@ class MikroTikNativeApi(
         synchronized(socketLock) {
             if (isConnected()) return true
             if (savedUsername.isBlank()) return false
-            Log.w(TAG, "Socket disconnected, attempting auto-reconnect to $host:$port...")
             closeInternal()
             if (connect()) {
-                val (ok, msg) = performLogin(savedUsername, savedPassword)
+                val (ok, _) = performLogin(savedUsername, savedPassword)
                 if (ok) {
-                    Log.i(TAG, "Auto-reconnect & re-login succeeded!")
                     return true
-                } else {
-                    Log.e(TAG, "Auto-reconnect login failed: $msg")
                 }
             }
             return false
@@ -178,6 +206,20 @@ class MikroTikNativeApi(
     }
 
     private fun performLogin(user: String, pass: String): Pair<Boolean, String> {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
+        fun finish(result: Pair<Boolean, String>, errorClass: OperationTelemetry.ErrorClass? = null): Pair<Boolean, String> {
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.AUTH_RESULT,
+                operation = OperationTelemetry.Operation.ROUTER_AUTH,
+                operationId = operationId,
+                outcome = if (result.first) OperationTelemetry.Outcome.SUCCESS else OperationTelemetry.Outcome.FAILURE,
+                errorClass = errorClass,
+                transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
+            return result
+        }
         try {
             // First attempt: Modern ROS v6.43+ and v7 direct login
             writeSentence(listOf("/login", "=name=$user", "=password=$pass"))
@@ -193,29 +235,27 @@ class MikroTikNativeApi(
                     writeSentence(listOf("/login", "=name=$user", "=response=00$challengeHash"))
                     val resp2 = readSentence()
                     if (resp2.firstOrNull() == "!done") {
-                        return Pair(true, "تم تسجيل الدخول بنجاح")
+                        return finish(Pair(true, "تم تسجيل الدخول بنجاح"))
                     }
                     val trap2 = resp2.firstOrNull { it.startsWith("=message=") }?.removePrefix("=message=")
-                    return Pair(false, trap2 ?: "اسم المستخدم أو كلمة المرور غير صحيحة")
+                    return finish(Pair(false, trap2 ?: "اسم المستخدم أو كلمة المرور غير صحيحة"), OperationTelemetry.ErrorClass.AUTHENTICATION)
                 }
-                return Pair(true, "تم تسجيل الدخول بنجاح")
+                return finish(Pair(true, "تم تسجيل الدخول بنجاح"))
             }
             if (status.startsWith("!trap") || status.startsWith("!fatal")) {
                 val trap = response.firstOrNull { it.startsWith("=message=") }?.removePrefix("=message=")
                     ?: "اسم المستخدم أو كلمة المرور غير صحيحة"
                 if (status.startsWith("!fatal")) closeInternal()
-                return Pair(false, trap)
+                return finish(Pair(false, trap), OperationTelemetry.ErrorClass.AUTHENTICATION)
             }
 
             // Anything else (empty reply, EOF, unknown sentence) is a FAILED login —
             // never report success without the router's explicit !done.
-            Log.e(TAG, "Login got unexpected reply: $response")
             closeInternal()
-            return Pair(false, "استجابة غير متوقعة من الراوتر أثناء تسجيل الدخول — تأكد أن المنفذ $port مخصص لخدمة api وليس لخدمة أخرى")
+            return finish(Pair(false, "استجابة غير متوقعة من الراوتر أثناء تسجيل الدخول — تأكد أن المنفذ $port مخصص لخدمة api وليس لخدمة أخرى"), OperationTelemetry.ErrorClass.PARSE)
         } catch (e: Exception) {
-            Log.e(TAG, "Login error", e)
             closeInternal()
-            return Pair(false, "خطأ أثناء محاولة تسجيل الدخول: ${e.localizedMessage ?: "انتهت المهلة"}")
+            return finish(Pair(false, "خطأ أثناء محاولة تسجيل الدخول: ${e.localizedMessage ?: "انتهت المهلة"}"), OperationTelemetry.classify(e))
         }
     }
 
@@ -223,6 +263,8 @@ class MikroTikNativeApi(
     private var lastCommandError: String? = null
     @Volatile
     private var lastErrorIsTrap = false
+    @Volatile
+    private var lastCommandErrorClass: OperationTelemetry.ErrorClass? = null
 
     /** Last !trap/!fatal/socket message recorded by [execute]; null when the last
      *  command succeeded or never ran. */
@@ -258,11 +300,16 @@ class MikroTikNativeApi(
     /** Body of [execute]; MUST be called while holding socketLock so that
      *  [lastCommandError] is observed atomically with the command's own reply. */
     private fun executeInternal(command: String, vararg params: String): List<Map<String, String>> {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
         lastCommandError = null
         lastErrorIsTrap = false
+        lastCommandErrorClass = null
         if (!isConnected()) {
             if (!ensureConnected()) {
                 lastCommandError = "تعذر الاتصال بالراوتر لتنفيذ: $command"
+                lastCommandErrorClass = OperationTelemetry.ErrorClass.NETWORK
+                recordCommandResult(command, operationId, startedAt)
                 return mutableListOf()
             }
         }
@@ -277,33 +324,62 @@ class MikroTikNativeApi(
         }
 
         try {
-            return writeAndCollect(command, words)
+            val result = writeAndCollect(command, words)
+            recordCommandResult(command, operationId, startedAt)
+            return result
         } catch (e: SocketTimeoutException) {
             // A one-shot retry: reconnect + re-login, resend the command once.
-            Log.w(TAG, "Socket timeout on '$command' — reconnecting and retrying once", e)
             closeInternal()
             lastCommandError = null
+            lastCommandErrorClass = null
             if (savedUsername.isNotBlank() && connect() &&
                 performLogin(savedUsername, savedPassword).first
             ) {
                 try {
-                    return writeAndCollect(command, words)
+                    val result = writeAndCollect(command, words)
+                    recordCommandResult(command, operationId, startedAt, retryCount = 1)
+                    return result
                 } catch (e2: Exception) {
-                    Log.e(TAG, "Execute retry failed for $command", e2)
                     lastCommandError = "خطأ في تنفيذ $command: ${e2.message}"
+                    lastCommandErrorClass = OperationTelemetry.classify(e2)
                     closeInternal()
+                    recordCommandResult(command, operationId, startedAt, retryCount = 1)
                     return mutableListOf()
                 }
             }
             lastCommandError = "انتهت مهلة الاتصال أثناء تنفيذ: $command (تعذرت إعادة المحاولة)"
+            lastCommandErrorClass = OperationTelemetry.ErrorClass.TIMEOUT
+            recordCommandResult(command, operationId, startedAt, retryCount = 1)
             return mutableListOf()
         } catch (e: Exception) {
-            Log.e(TAG, "Execute command error for $command", e)
             lastCommandError = "خطأ في تنفيذ $command: ${e.message}"
+            lastCommandErrorClass = OperationTelemetry.classify(e)
             // Socket error: close internal socket to trigger reconnect next time
             closeInternal()
+            recordCommandResult(command, operationId, startedAt)
             return mutableListOf()
         }
+    }
+
+    private fun recordCommandResult(command: String, operationId: String, startedAt: Long, retryCount: Int = 0) {
+        val errorClass = lastCommandErrorClass
+        if (errorClass == null && !OperationTelemetry.isMutationCommand(command)) return
+        val outcome = when (errorClass) {
+            OperationTelemetry.ErrorClass.TIMEOUT -> OperationTelemetry.Outcome.TIMEOUT
+            null -> OperationTelemetry.Outcome.SUCCESS
+            else -> OperationTelemetry.Outcome.FAILURE
+        }
+        OperationTelemetry.record(
+            event = OperationTelemetry.Event.COMMAND_RESULT,
+            operation = OperationTelemetry.Operation.ROUTER_COMMAND,
+            operationId = operationId,
+            outcome = outcome,
+            errorClass = errorClass,
+            transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+            commandFamily = OperationTelemetry.commandFamily(command),
+            durationMs = OperationTelemetry.elapsedRealtime() - startedAt,
+            retryCount = retryCount
+        )
     }
 
     /** Sends [words] and collects !re records until !done. Throws socket/I-O errors;
@@ -346,9 +422,9 @@ class MikroTikNativeApi(
             } else if (replyType == "!trap") {
                 val msg = reply.firstOrNull { it.startsWith("=message=") }
                     ?.removePrefix("=message=") ?: "رفض الراوتر الأمر"
-                Log.w(TAG, "Command trap response for $command: $reply")
                 lastCommandError = "فشل $command: $msg"
                 lastErrorIsTrap = true
+                lastCommandErrorClass = OperationTelemetry.ErrorClass.ROUTER_REJECTED
                 // Drain the !done sentence that always follows !trap — otherwise the
                 // next command reads it as its own reply and wrongly returns empty.
                 while (true) {
@@ -357,8 +433,8 @@ class MikroTikNativeApi(
                 }
                 break
             } else if (replyType == "!fatal") {
-                Log.e(TAG, "Command fatal response for $command: $reply")
                 lastCommandError = "انقطع اتصال الراوتر أثناء: $command"
+                lastCommandErrorClass = OperationTelemetry.ErrorClass.NETWORK
                 closeInternal()
                 break
             }
@@ -377,9 +453,6 @@ class MikroTikNativeApi(
             val res = execute("/system/identity/print")
             // Success requires BOTH a real reply and no trap/fatal recorded for it.
             val ok = res.isNotEmpty() && synchronized(socketLock) { lastCommandError } == null
-            if (!ok) {
-                Log.w(TAG, "ping failed: ${synchronized(socketLock) { lastCommandError }}")
-            }
             ok
         } catch (_: Exception) {
             false
@@ -395,12 +468,30 @@ class MikroTikNativeApi(
      *  connection reset right after sending means the router accepted the command and
      *  is going down. */
     private fun sendSystemCommand(command: String): Boolean {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
+        fun finish(accepted: Boolean): Boolean {
+            val errorClass = lastCommandErrorClass
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.COMMAND_RESULT,
+                operation = OperationTelemetry.Operation.ROUTER_COMMAND,
+                operationId = operationId,
+                outcome = if (accepted) OperationTelemetry.Outcome.SUCCESS else if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                errorClass = if (accepted) null else errorClass,
+                transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                commandFamily = OperationTelemetry.commandFamily(command),
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
+            return accepted
+        }
         synchronized(socketLock) {
             lastCommandError = null
+            lastCommandErrorClass = null
             if (!isConnected()) {
                 if (!ensureConnected()) {
                     lastCommandError = "تعذر الاتصال بالراوتر لإرسال: $command"
-                    return false
+                    lastCommandErrorClass = OperationTelemetry.ErrorClass.NETWORK
+                    return finish(false)
                 }
             }
             return try {
@@ -412,7 +503,7 @@ class MikroTikNativeApi(
                         val msg = reply.firstOrNull { it.startsWith("=message=") }
                             ?.removePrefix("=message=") ?: "رفض الراوتر الأمر"
                         lastCommandError = "فشل $command: $msg"
-                        Log.w(TAG, "Router refused $command: $reply")
+                        lastCommandErrorClass = OperationTelemetry.ErrorClass.ROUTER_REJECTED
                         // drain trailing !done so the socket stays usable if we survived
                         try {
                             while (true) {
@@ -420,15 +511,14 @@ class MikroTikNativeApi(
                                 if (drain.isEmpty() || drain.firstOrNull() == "!done") break
                             }
                         } catch (_: Exception) {}
-                        false
+                        finish(false)
                     }
-                    first == "!done" -> true
+                    first == "!done" -> finish(true)
                     // Empty reply / EOF after send: the router tore the connection down
                     // while executing — treat as accepted, it is going down.
                     else -> {
-                        Log.i(TAG, "$command accepted (connection closed by router)")
                         closeInternal()
-                        true
+                        finish(true)
                     }
                 }
             } catch (e: Exception) {
@@ -437,19 +527,18 @@ class MikroTikNativeApi(
                     msg.contains("end of stream") || msg.contains("broken pipe")
                 ) {
                     // Router dropped the socket while going down — command was accepted.
-                    Log.i(TAG, "$command accepted (connection reset while router going down)")
                     closeInternal()
-                    true
+                    finish(true)
                 } else if (e is SocketTimeoutException) {
                     // No reply and no close within the timeout — the command was sent and
                     // the router often reboots without answering. Report accepted.
-                    Log.w(TAG, "$command sent but timed out waiting for a reply")
-                    true
+                    lastCommandErrorClass = OperationTelemetry.ErrorClass.TIMEOUT
+                    finish(true)
                 } else {
                     lastCommandError = "خطأ في إرسال $command: ${e.message}"
-                    Log.e(TAG, "Failed sending $command", e)
+                    lastCommandErrorClass = OperationTelemetry.classify(e)
                     closeInternal()
-                    false
+                    finish(false)
                 }
             }
         }

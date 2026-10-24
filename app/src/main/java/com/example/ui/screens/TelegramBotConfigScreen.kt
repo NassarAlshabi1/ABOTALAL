@@ -69,6 +69,7 @@ fun TelegramBotConfigScreen(
     var isInstallingScript by remember { mutableStateOf(false) }
 
     var testResultDialogText by remember { mutableStateOf<String?>(null) }
+    var secretStorageWarning by remember { mutableStateOf(false) }
     var showAddBotDialog by remember { mutableStateOf(false) }
     var showScriptPreviewDialog by remember { mutableStateOf(false) }
 
@@ -78,7 +79,7 @@ fun TelegramBotConfigScreen(
         if (idx in updatedList.indices) {
             updatedList[idx] = currentBot.copy(name = botName, token = botToken, chatId = chatId)
             savedBots = updatedList
-            TelegramHelper.saveBots(context, updatedList)
+            secretStorageWarning = !TelegramHelper.saveBots(context, updatedList)
         }
     }
 
@@ -191,6 +192,14 @@ fun TelegramBotConfigScreen(
                     .padding(padding)
                     .background(Color(0xFFF4F6F9))
             ) {
+                if (secretStorageWarning) {
+                    Text(
+                        text = "تعذر تشفير توكن البوت بأمان؛ لن يُحفظ على الجهاز حتى يتوفر Android Keystore.",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        fontFamily = CairoFontFamily
+                    )
+                }
                 // Tab Selection Row
                 TabRow(
                     selectedTabIndex = selectedTab,
@@ -267,7 +276,7 @@ fun TelegramBotConfigScreen(
                                     val list = savedBots.toMutableList()
                                     list[selectedBotIndex] = list[selectedBotIndex].copy(isConnected = true)
                                     savedBots = list
-                                    TelegramHelper.saveBots(context, list)
+                                    secretStorageWarning = !TelegramHelper.saveBots(context, list)
                                 }
                             }
                         },
@@ -390,11 +399,16 @@ fun TelegramBotConfigScreen(
                                 chatId = newChatId.trim()
                             )
                             val updated = savedBots + newBot
-                            savedBots = updated
-                            selectedBotIndex = updated.lastIndex
-                            TelegramHelper.saveBots(context, updated)
-                            showAddBotDialog = false
-                            Toast.makeText(context, "تمت إضافة البوت بنجاح!", Toast.LENGTH_SHORT).show()
+                            if (TelegramHelper.saveBots(context, updated)) {
+                                savedBots = updated
+                                selectedBotIndex = updated.lastIndex
+                                secretStorageWarning = false
+                                showAddBotDialog = false
+                                Toast.makeText(context, "تمت إضافة البوت بنجاح!", Toast.LENGTH_SHORT).show()
+                            } else {
+                                secretStorageWarning = true
+                                Toast.makeText(context, "تعذر حفظ البوت لأن التشفير الآمن غير متاح", Toast.LENGTH_LONG).show()
+                            }
                         } else {
                             Toast.makeText(context, "يرجى ملء الاسم والتوكن", Toast.LENGTH_SHORT).show()
                         }

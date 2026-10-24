@@ -1,35 +1,39 @@
 package com.example
 
 import android.app.Application
-import android.util.Log
+import com.example.util.OperationTelemetry
 
 class NetCraftApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        runCatching { installAppCheck(this) }
-            .onFailure { Log.w("NetCraftApp", "Firebase App Check skipped: ${it.message}") }
+        OperationTelemetry.record(
+            event = OperationTelemetry.Event.APP_STARTED,
+            operation = OperationTelemetry.Operation.APP_STARTUP,
+            outcome = OperationTelemetry.Outcome.SUCCESS
+        )
 
-        // Global uncaught exception handler to prevent sudden crashes and ensure stability
+        runCatching { installAppCheck(this) }
+            .onFailure {
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.APP_CHECK_RESULT,
+                    operation = OperationTelemetry.Operation.APP_CHECK_INIT,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.classify(it)
+                )
+            }
+
+        // Record only a fixed error category, then preserve Android's normal crash path.
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            Log.e("NetCraftApp", "Caught global uncaught exception on thread ${thread.name}: ${throwable.message}", throwable)
-            // If it's a non-fatal coroutine or background network exception, log and recover gracefully
-            try {
-                if (thread.name.contains("DefaultDispatcher") || 
-                    thread.name.contains("OkHttp") || 
-                    thread.name.contains("IO") ||
-                    throwable is java.io.IOException ||
-                    throwable is java.net.SocketException ||
-                    throwable is NumberFormatException) {
-                    Log.w("NetCraftApp", "Suppressing fatal process death for recoverable background exception.")
-                    return@setDefaultUncaughtExceptionHandler
-                }
-            } catch (e: Exception) {
-                Log.e("NetCraftApp", "Error in global handler", e)
-            }
-            defaultHandler?.uncaughtException(thread, throwable)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.APP_CRASH,
+                operation = OperationTelemetry.Operation.APP_STARTUP,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.classify(throwable)
+            )
+            if (defaultHandler != null) defaultHandler.uncaughtException(thread, throwable)
+            else throw throwable
         }
     }
-
 }

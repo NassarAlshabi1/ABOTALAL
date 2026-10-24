@@ -3,7 +3,6 @@ package com.example.util
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.util.Log
 import com.example.data.model.TelegramBotItem
 import com.example.data.model.TelegramNotificationSettings
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +16,6 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 object TelegramHelper {
-    private const val TAG = "TelegramHelper"
     private const val PREFS_NAME = "netcraft_telegram_prefs"
     private const val KEY_BOTS_JSON = "saved_bots_json"
     private const val KEY_SETTINGS_JSON = "notification_settings_json"
@@ -32,88 +30,89 @@ object TelegramHelper {
      * Returns Pair<Boolean, botUsername or ErrorMessage>
      */
     suspend fun testBot(token: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
         val cleanToken = token.trim()
-        if (cleanToken.isBlank()) return@withContext Pair(false, "الرجاء إدخال توكن البوت (Bot Token)")
-        
+        if (cleanToken.isBlank()) {
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_PROBE, startedAt, false, OperationTelemetry.ErrorClass.VALIDATION)
+            return@withContext Pair(false, "الرجاء إدخال توكن البوت (Bot Token)")
+        }
         try {
             val url = "https://api.telegram.org/bot$cleanToken/getMe"
             val request = Request.Builder().url(url).get().build()
-            httpClient.newCall(request).execute().use { response ->
+            val result = httpClient.newCall(request).execute().use { response ->
                 val bodyStr = response.body?.string() ?: ""
                 val json = JSONObject(bodyStr)
                 if (json.optBoolean("ok")) {
-                    val result = json.getJSONObject("result")
-                    val username = result.optString("username", "bot")
-                    val firstName = result.optString("first_name", "Telegram Bot")
+                    val bot = json.getJSONObject("result")
+                    val username = bot.optString("username", "bot")
+                    val firstName = bot.optString("first_name", "Telegram Bot")
                     Pair(true, "متصل بنجاح! اسم البوت: @$username ($firstName)")
                 } else {
-                    val desc = json.optString("description", "التوكن غير صحيح")
-                    Pair(false, "فشل الاتصال بالبوت: $desc")
+                    Pair(false, "فشل الاتصال بالبوت: ${json.optString("description", "التوكن غير صحيح")}")
                 }
             }
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_PROBE, startedAt, result.first, if (result.first) null else OperationTelemetry.ErrorClass.AUTHENTICATION)
+            result
         } catch (e: Exception) {
-            Log.e(TAG, "Error testing bot token", e)
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_PROBE, startedAt, false, OperationTelemetry.classify(e))
             Pair(false, "تعذر الاتصال بخوادم تيليجرام: ${e.localizedMessage ?: "خطأ في الشبكة"}")
         }
     }
 
-    /**
-     * Fetch recent Chat ID automatically using getUpdates
-     */
+    /** Fetch recent Chat ID automatically using getUpdates. */
     suspend fun fetchChatId(token: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
         val cleanToken = token.trim()
-        if (cleanToken.isBlank()) return@withContext Pair(false, "الرجاء إدخال التوكن أولاً")
-
+        if (cleanToken.isBlank()) {
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_PROBE, startedAt, false, OperationTelemetry.ErrorClass.VALIDATION)
+            return@withContext Pair(false, "الرجاء إدخال التوكن أولاً")
+        }
         try {
             val url = "https://api.telegram.org/bot$cleanToken/getUpdates?limit=10"
             val request = Request.Builder().url(url).get().build()
-            httpClient.newCall(request).execute().use { response ->
-                val bodyStr = response.body?.string() ?: ""
-                val json = JSONObject(bodyStr)
-                if (json.optBoolean("ok")) {
-                    val resultArray = json.optJSONArray("result") ?: JSONArray()
-                    if (resultArray.length() == 0) {
-                        return@withContext Pair(false, "لم يتم العثور على رسائل واردة!\n\nيرجى فتح البوت في تيليجرام والضغط على /start أو إرسال أي رسالة، ثم الضغط مجدداً على زر جلب الآي دي.")
-                    }
-
-                    // Look from latest to earliest for message or my_chat_member
-                    for (i in resultArray.length() - 1 downTo 0) {
-                        val update = resultArray.getJSONObject(i)
+            val result = httpClient.newCall(request).execute().use { response ->
+                val json = JSONObject(response.body?.string() ?: "")
+                if (!json.optBoolean("ok")) {
+                    Pair(false, json.optString("description", "خطأ في التوكن"))
+                } else {
+                    val updates = json.optJSONArray("result") ?: JSONArray()
+                    var chatId: String? = null
+                    for (i in updates.length() - 1 downTo 0) {
+                        val update = updates.getJSONObject(i)
                         val message = update.optJSONObject("message")
                             ?: update.optJSONObject("my_chat_member")
                             ?: update.optJSONObject("channel_post")
-
                         val chat = message?.optJSONObject("chat")
-                        if (chat != null) {
-                            val chatId = chat.optLong("id", 0L)
-                            val title = chat.optString("title", chat.optString("first_name", "مستخدم"))
-                            if (chatId != 0L) {
-                                return@withContext Pair(true, "$chatId")
-                            }
+                        val id = chat?.optLong("id", 0L) ?: 0L
+                        if (id != 0L) {
+                            chatId = id.toString()
+                            break
                         }
                     }
-                    Pair(false, "لم يتم استخراج الآيدي. أرسل رسالة للبوت ثم حاول ثانية.")
-                } else {
-                    val desc = json.optString("description", "خطأ في التوكن")
-                    Pair(false, desc)
+                    if (chatId != null) Pair(true, chatId)
+                    else Pair(false, "لم يتم العثور على Chat ID. أرسل رسالة للبوت ثم حاول ثانية.")
                 }
             }
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_PROBE, startedAt, result.first, if (result.first) null else OperationTelemetry.ErrorClass.UNKNOWN)
+            result
         } catch (e: Exception) {
-            Log.e(TAG, "Error fetching chat id", e)
-            Pair(false, "خطأ أثناء جلب الـ ID: ${e.localizedMessage}")
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_PROBE, startedAt, false, OperationTelemetry.classify(e))
+            Pair(false, "خطأ أثناء جلب الـ ID: ${e.localizedMessage ?: "خطأ في الشبكة"}")
         }
     }
 
-    /**
-     * Send test or notification message to the Telegram chat
-     */
+    /** Send test or notification message to the Telegram chat. */
     suspend fun sendMessage(token: String, chatId: String, text: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
         val cleanToken = token.trim()
         val cleanChatId = chatId.trim()
         if (cleanToken.isBlank() || cleanChatId.isBlank()) {
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_SEND, startedAt, false, OperationTelemetry.ErrorClass.VALIDATION)
             return@withContext Pair(false, "الرجاء التأكد من تعبئة التوكن ومعرف الشات (Chat ID)")
         }
-
         try {
             val url = "https://api.telegram.org/bot$cleanToken/sendMessage"
             val jsonPayload = JSONObject().apply {
@@ -123,21 +122,35 @@ object TelegramHelper {
             }
             val body = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
             val request = Request.Builder().url(url).post(body).build()
-
-            httpClient.newCall(request).execute().use { response ->
-                val bodyStr = response.body?.string() ?: ""
-                val json = JSONObject(bodyStr)
-                if (json.optBoolean("ok")) {
-                    Pair(true, "تم إرسال الرسالة إلى تليجرام بنجاح! 🚀")
-                } else {
-                    val desc = json.optString("description", "فشل الإرسال")
-                    Pair(false, "فشل الإرسال: $desc")
-                }
+            val result = httpClient.newCall(request).execute().use { response ->
+                val json = JSONObject(response.body?.string() ?: "")
+                if (json.optBoolean("ok")) Pair(true, "تم إرسال الرسالة إلى تليجرام بنجاح! 🚀")
+                else Pair(false, "فشل الإرسال: ${json.optString("description", "فشل الإرسال")}")
             }
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_SEND, startedAt, result.first, if (result.first) null else OperationTelemetry.ErrorClass.UNKNOWN)
+            result
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending telegram message", e)
-            Pair(false, "خطأ في الاتصال بتيليجرام: ${e.localizedMessage}")
+            recordTelegramResult(operationId, OperationTelemetry.Operation.TELEGRAM_SEND, startedAt, false, OperationTelemetry.classify(e))
+            Pair(false, "خطأ في الاتصال بتيليجرام: ${e.localizedMessage ?: "خطأ في الشبكة"}")
         }
+    }
+
+    private fun recordTelegramResult(
+        operationId: String,
+        operation: OperationTelemetry.Operation,
+        startedAt: Long,
+        success: Boolean,
+        errorClass: OperationTelemetry.ErrorClass?
+    ) {
+        OperationTelemetry.record(
+            event = OperationTelemetry.Event.TELEGRAM_REQUEST_RESULT,
+            operation = operation,
+            operationId = operationId,
+            outcome = if (success) OperationTelemetry.Outcome.SUCCESS else OperationTelemetry.Outcome.FAILURE,
+            errorClass = errorClass,
+            transport = OperationTelemetry.Transport.HTTPS,
+            durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+        )
     }
 
     /**
@@ -180,7 +193,6 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
         try {
             context.startActivity(intent)
         } catch (e: Exception) {
-            Log.w(TAG, "Cannot open telegram intent", e)
         }
     }
 
@@ -206,20 +218,29 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
                 )
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing saved bots", e)
             return defaultInitialBots()
         }
         return if (list.isEmpty()) defaultInitialBots() else list
     }
 
-    fun saveBots(context: Context, bots: List<TelegramBotItem>) {
+    fun saveBots(context: Context, bots: List<TelegramBotItem>): Boolean {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val array = JSONArray()
         bots.forEach { bot ->
+            val encryptedToken = CryptoManager.encrypt(bot.token)
+            if (encryptedToken == null) {
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CRYPTO_RESULT,
+                    operation = OperationTelemetry.Operation.CRYPTO_ENCRYPT,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.ErrorClass.CRYPTO
+                )
+                return false
+            }
             val obj = JSONObject().apply {
                 put("id", bot.id)
                 put("name", bot.name)
-                put("token", CryptoManager.encrypt(bot.token) ?: "")
+                put("token", encryptedToken)
                 put("chatId", bot.chatId)
                 put("isDefault", bot.isDefault)
                 put("isConnected", bot.isConnected)
@@ -228,6 +249,7 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
             array.put(obj)
         }
         prefs.edit().putString(KEY_BOTS_JSON, array.toString()).apply()
+        return true
     }
 
     fun loadSettings(context: Context): TelegramNotificationSettings {

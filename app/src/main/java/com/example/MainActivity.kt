@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,7 +50,7 @@ class MainActivity : ComponentActivity() {
             val viewModel: MikroTikViewModel = viewModel(
                 factory = MikroTikViewModel.Factory(application)
             )
-            val isDarkMode by viewModel.isDarkMode.collectAsState()
+            val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
             MyApplicationTheme(darkTheme = isDarkMode) {
                 MainAppNavigation(viewModel)
@@ -61,11 +62,11 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppNavigation(viewModel: MikroTikViewModel) {
-    val isConnected by viewModel.isConnected.collectAsState()
-    val isDarkMode by viewModel.isDarkMode.collectAsState()
-    val conn by viewModel.currentConnection.collectAsState()
-    val userManagerProfiles by viewModel.userManagerProfiles.collectAsState()
-    val hotspotProfiles by viewModel.hotspotProfiles.collectAsState()
+    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
+    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+    val conn by viewModel.currentConnection.collectAsStateWithLifecycle()
+    val userManagerProfiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
+    val hotspotProfiles by viewModel.hotspotProfiles.collectAsStateWithLifecycle()
 
     var showSplash by remember { mutableStateOf(true) }
     // 0 = الرئيسية, 1 = الخدمات, 2 = التقارير, 3 = الملف

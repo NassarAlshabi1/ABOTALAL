@@ -18,6 +18,7 @@ import com.example.data.model.UserManagerSession
 import com.example.data.model.UserManagerUser
 import com.example.data.repository.MikroTikRepository
 import com.example.util.CryptoManager
+import com.example.util.OperationTelemetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -97,9 +98,7 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             onSuccess = {
                 _isConnecting.value = false
                 // Save/update connection timestamp in DB
-                viewModelScope.launch {
-                    routerDao.insertConnection(connection.copy(lastConnected = System.currentTimeMillis()))
-                }
+                persistEncryptedConnection(connection)
                 onSuccess()
             },
             onError = { errorMsg ->
@@ -128,9 +127,7 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             onSuccess = {
                 _isConnecting.value = false
                 // Persist to local contacts list in SQLite
-                viewModelScope.launch {
-                    routerDao.insertConnection(conn.copy(lastConnected = System.currentTimeMillis()))
-                }
+                persistEncryptedConnection(conn)
                 onSuccess()
             },
             onError = { error ->
@@ -383,9 +380,27 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     /* Save Router Connection without connecting — password stored encrypted */
     fun saveRouterConnection(connection: RouterConnection) {
+        persistEncryptedConnection(connection)
+    }
+
+    private fun persistEncryptedConnection(connection: RouterConnection) {
         viewModelScope.launch {
+            val encryptedPassword = CryptoManager.encrypt(connection.password)
+            if (encryptedPassword == null) {
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CRYPTO_RESULT,
+                    operation = OperationTelemetry.Operation.CRYPTO_ENCRYPT,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.ErrorClass.CRYPTO
+                )
+                _connectionError.value = "تعذر حفظ الراوتر: لم يتوفر التشفير الآمن على هذا الجهاز؛ لم تُحفظ كلمة المرور."
+                return@launch
+            }
             routerDao.insertConnection(
-                connection.copy(password = CryptoManager.encrypt(connection.password) ?: connection.password)
+                connection.copy(
+                    password = encryptedPassword,
+                    lastConnected = System.currentTimeMillis()
+                )
             )
         }
     }

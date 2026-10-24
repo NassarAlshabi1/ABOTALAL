@@ -93,6 +93,7 @@ import com.example.utils.A4
 import com.example.utils.cardSize
 import com.example.viewmodel.DesignsViewModel
 import com.example.util.CardPrintAndExportHelper
+import com.example.util.OperationTelemetry
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
@@ -2152,7 +2153,9 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
         pdfDocument.finishPage(page)
 
         // حفظ الملف
-        val pdfFile = File(context.cacheDir, "Card_Design_${design.name.replace(" ", "_")}.pdf")
+        val previewDir = File(context.cacheDir, "designs").apply { mkdirs() }
+        val safeDesignName = design.name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
+        val pdfFile = File(previewDir, "Card_Design_$safeDesignName.pdf")
         val out = FileOutputStream(pdfFile)
         pdfDocument.writeTo(out)
         out.close()
@@ -2167,8 +2170,8 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
         }
         context.startActivity(Intent.createChooser(intent, "معاينة وطباعة ملف PDF"))
     } catch (e: Exception) {
-        e.printStackTrace()
-        Toast.makeText(context, "فشل فتح PDF: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+        OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+        Toast.makeText(context, "تعذر فتح ملف PDF.", Toast.LENGTH_LONG).show()
     }
 }
 

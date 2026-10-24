@@ -3,12 +3,12 @@ package com.example.data.repository
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
-import android.util.Log
 import com.example.data.local.ActivityLog
 import com.example.data.local.ActivityLogDao
 import com.example.data.local.RouterConnection
 import com.example.data.local.*
 import com.example.data.model.*
+import com.example.util.OperationTelemetry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -102,18 +102,44 @@ class MikroTikRepository(
                 else listOf("/user-manager", "/tool/user-manager")
 
     private fun detectRouterOsVersion(api: MikroTikNativeApi, connection: RouterConnection) {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
         try {
             val res = api.execute("/system/resource/print").firstOrNull()
             val ver = res?.get("version") ?: ""
             val major = ver.split('.').firstOrNull()?.trim()?.toIntOrNull() ?: 0
             if (major > 0) {
                 rosMajor = major
-                Log.i("NetCraft", "Detected RouterOS $ver on ${connection.host} → major=$major, umBase=$umBase")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.VERSION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_VERSION_DETECT,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt,
+                    routerOsMajor = major
+                )
             } else {
-                Log.w("NetCraft", "Could not parse RouterOS version '$ver' — keeping probe fallback")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.VERSION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_VERSION_DETECT,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.ErrorClass.PARSE,
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
             }
         } catch (e: Exception) {
-            Log.w("NetCraft", "Version detection failed: ${e.message}")
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.VERSION_RESULT,
+                operation = OperationTelemetry.Operation.ROUTER_VERSION_DETECT,
+                operationId = operationId,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.classify(e),
+                transport = OperationTelemetry.Transport.NATIVE_API,
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
         }
     }
 
@@ -151,8 +177,16 @@ class MikroTikRepository(
     // (the same credentials would fail on every transport).
     fun connectToRouter(connection: RouterConnection, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
+            val operationId = OperationTelemetry.newOperationId()
             _operationStatus.value = "جاري الاتصال بـ ${connection.host}..."
             if (connection.host.isBlank()) {
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.ErrorClass.VALIDATION
+                )
                 onError("عنوان الراوتر لا يمكن أن يكون فارغاً")
                 return@launch
             }
@@ -164,7 +198,7 @@ class MikroTikRepository(
             //    or the explicit API ports even if they collide with the web list).
             if (connection.port == 8728 || connection.port == 8729 ||
                 connection.port !in webPorts) {
-                val result = tryNativeConnect(connection)
+                val result = tryNativeConnect(connection, operationId)
                 when (result) {
                     is NativeConnectResult.Success -> {
                         launch(Dispatchers.Main) { onSuccess() }
@@ -179,7 +213,7 @@ class MikroTikRepository(
             }
 
             // 2. REST API on the configured (web) port
-            val restResult = tryRestConnect(connection)
+            val restResult = tryRestConnect(connection, operationId)
             if (restResult.first) {
                 launch(Dispatchers.Main) { onSuccess() }
                 return@launch
@@ -189,7 +223,7 @@ class MikroTikRepository(
             // 3. Configured port was a web port and REST failed to reach it — try the
             //    default native API port 8728 as a last resort.
             if (connection.port in webPorts) {
-                val nativeAttempt = tryNativeConnect(connection, overridePort = 8728)
+                val nativeAttempt = tryNativeConnect(connection, operationId, overridePort = 8728)
                 when (nativeAttempt) {
                     is NativeConnectResult.Success -> {
                         launch(Dispatchers.Main) { onSuccess() }
@@ -215,9 +249,12 @@ class MikroTikRepository(
 
     private fun tryNativeConnect(
         connection: RouterConnection,
+        operationId: String,
         overridePort: Int? = null
     ): NativeConnectResult {
+        val startedAt = OperationTelemetry.elapsedRealtime()
         val port = overridePort ?: connection.port
+        val sslEnabled = if (overridePort != null) port == 8729 else connection.useSsl
         return try {
             val api = MikroTikNativeApi(
                 host = connection.host,
@@ -247,6 +284,15 @@ class MikroTikRepository(
                 // Fetch real initial data via native commands
                 fetchRealNativeData(api, _currentConnection.value!!)
                 startRealtimeTicker()
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    transport = if (sslEnabled) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt,
+                    routerOsMajor = rosMajor
+                )
                 NativeConnectResult.Success(api)
             } else {
                 // The router answered and rejected the credentials — same credentials
@@ -256,13 +302,40 @@ class MikroTikRepository(
                     loginMsg.contains("not allowed", ignoreCase = true) ||
                     loginMsg.contains("invalid", ignoreCase = true)
                 ) {
+                    OperationTelemetry.record(
+                        event = OperationTelemetry.Event.CONNECTION_RESULT,
+                        operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                        operationId = operationId,
+                        outcome = OperationTelemetry.Outcome.FAILURE,
+                        errorClass = OperationTelemetry.ErrorClass.AUTHENTICATION,
+                        transport = if (sslEnabled) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                        durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                    )
                     NativeConnectResult.AuthError(loginMsg.ifBlank { "خطأ في اسم المستخدم أو كلمة المرور" })
                 } else {
+                    OperationTelemetry.record(
+                        event = OperationTelemetry.Event.CONNECTION_RESULT,
+                        operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                        operationId = operationId,
+                        outcome = OperationTelemetry.Outcome.FAILURE,
+                        errorClass = OperationTelemetry.ErrorClass.UNKNOWN,
+                        transport = if (sslEnabled) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                        durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                    )
                     NativeConnectResult.Failure(loginMsg.ifBlank { "فشل تسجيل الدخول عبر المنفذ $port" })
                 }
             }
         } catch (e: Exception) {
-            Log.e("NetCraft", "Native API connection failed on port $port: ${e.message}")
+            val errorClass = OperationTelemetry.classify(e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.CONNECTION_RESULT,
+                operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                operationId = operationId,
+                outcome = if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                errorClass = errorClass,
+                transport = if (sslEnabled) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
             NativeConnectResult.Failure(
                 "تعذر الاتصال بـ ${connection.host}:$port عبر API. ${e.message ?: ""}".trim()
             )
@@ -270,7 +343,8 @@ class MikroTikRepository(
     }
 
     /** @return (success, errorMessage) — attempts the REST API on the connection port. */
-    private fun tryRestConnect(connection: RouterConnection): Pair<Boolean, String> {
+    private fun tryRestConnect(connection: RouterConnection, operationId: String): Pair<Boolean, String> {
+        val startedAt = OperationTelemetry.elapsedRealtime()
         return try {
             val protocol = if (connection.useSsl) "https" else "http"
             val url = "$protocol://${connection.host}:${connection.port}/rest/system/resource"
@@ -281,7 +355,6 @@ class MikroTikRepository(
                 .header("Authorization", credential)
                 .build()
 
-            Log.d("NetCraft", "Connecting via REST: $url")
             okHttpClient?.newCall(request)?.execute().use { response ->
                 if (response != null && response.isSuccessful) {
                     _currentConnection.value = connection
@@ -291,6 +364,15 @@ class MikroTikRepository(
 
                     fetchRealRouterData(connection)
                     startRealtimeTicker()
+                    OperationTelemetry.record(
+                        event = OperationTelemetry.Event.CONNECTION_RESULT,
+                        operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                        operationId = operationId,
+                        outcome = OperationTelemetry.Outcome.SUCCESS,
+                        transport = OperationTelemetry.Transport.REST,
+                        durationMs = OperationTelemetry.elapsedRealtime() - startedAt,
+                        routerOsMajor = rosMajor
+                    )
                     Pair(true, "")
                 } else {
                     val code = response?.code ?: 0
@@ -299,11 +381,29 @@ class MikroTikRepository(
                         404 -> "لم يتم العثور على واجهة REST API. يرجى تفعيلها في الراوتر (ROS v7) أو استخدام منفذ API 8728"
                         else -> "فشل الاتصال بالراوتر. رمز الخطأ: $code"
                     }
+                    OperationTelemetry.record(
+                        event = OperationTelemetry.Event.CONNECTION_RESULT,
+                        operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                        operationId = operationId,
+                        outcome = OperationTelemetry.Outcome.FAILURE,
+                        errorClass = if (code == 401) OperationTelemetry.ErrorClass.AUTHENTICATION else OperationTelemetry.ErrorClass.NETWORK,
+                        transport = OperationTelemetry.Transport.REST,
+                        durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                    )
                     Pair(false, msg)
                 }
             }
         } catch (ioe: IOException) {
-            Log.e("NetCraft", "REST connection error", ioe)
+            val errorClass = OperationTelemetry.classify(ioe)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.CONNECTION_RESULT,
+                operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                operationId = operationId,
+                outcome = if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                errorClass = errorClass,
+                transport = OperationTelemetry.Transport.REST,
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
             Pair(false, "تعذر الوصول إلى الآيبي ${connection.host} عبر REST. تأكد من اتصال هاتفك بشبكة الراوتر.")
         }
     }
@@ -552,7 +652,14 @@ class MikroTikRepository(
                     })
                 }
             } catch (e: Exception) {
-                Log.e("MikroTikRepository", "Error fetching native data", e)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.SYNC_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_DATA_SYNC,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.classify(e),
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    minIntervalMs = 60_000
+                )
             }
         }
     }
@@ -872,7 +979,14 @@ class MikroTikRepository(
                         }
                     
                 } catch (t: Throwable) {
-                    Log.w("MikroTikRepository", "Protected ticker tick from error: ${t.message}")
+                    OperationTelemetry.record(
+                        event = OperationTelemetry.Event.SYNC_RESULT,
+                        operation = OperationTelemetry.Operation.DASHBOARD_REFRESH,
+                        outcome = OperationTelemetry.Outcome.FAILURE,
+                        errorClass = OperationTelemetry.classify(t),
+                        transport = if (nativeApi != null) OperationTelemetry.Transport.NATIVE_API else OperationTelemetry.Transport.REST,
+                        minIntervalMs = 60_000
+                    )
                 }
                 counter++
                 delay(3000) // update stats & heartbeat every 3 seconds
@@ -943,7 +1057,14 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.w("MikroTikRepository", "Error in tickNativeDashboard: ${e.message}")
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.SYNC_RESULT,
+                operation = OperationTelemetry.Operation.DASHBOARD_REFRESH,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.classify(e),
+                transport = OperationTelemetry.Transport.NATIVE_API,
+                minIntervalMs = 60_000
+            )
         }
     }
 
@@ -1044,9 +1165,7 @@ class MikroTikRepository(
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.w("NetCraft", "REST user-manager read failed (OK on v6/pre-UM routers): ${e.message}")
-        }
+        } catch (_: Exception) { /* User Manager may be absent or release-specific; continue sync. */ }
     }
 
     private fun fetchRealRouterDashboard(connection: RouterConnection) {
@@ -1092,7 +1211,14 @@ class MikroTikRepository(
             fetchRealInterfaces(connection)
             
         } catch (e: Exception) {
-            Log.e("NetCraft", "Error tick resource", e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.SYNC_RESULT,
+                operation = OperationTelemetry.Operation.DASHBOARD_REFRESH,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.classify(e),
+                transport = OperationTelemetry.Transport.REST,
+                minIntervalMs = 60_000
+            )
         }
     }
 
@@ -1127,7 +1253,14 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.e("NetCraft", "Error fetch users", e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.SYNC_RESULT,
+                operation = OperationTelemetry.Operation.HOTSPOT_USERS_SYNC,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.classify(e),
+                transport = OperationTelemetry.Transport.REST,
+                minIntervalMs = 60_000
+            )
         }
     }
 
@@ -1160,7 +1293,14 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.e("NetCraft", "Error fetch active", e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.SYNC_RESULT,
+                operation = OperationTelemetry.Operation.HOTSPOT_ACTIVE_SYNC,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.classify(e),
+                transport = OperationTelemetry.Transport.REST,
+                minIntervalMs = 60_000
+            )
         }
     }
 
@@ -1190,7 +1330,14 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.e("NetCraft", "Error fetch profiles", e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.SYNC_RESULT,
+                operation = OperationTelemetry.Operation.HOTSPOT_PROFILES_SYNC,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.classify(e),
+                transport = OperationTelemetry.Transport.REST,
+                minIntervalMs = 60_000
+            )
         }
     }
 
@@ -1227,7 +1374,14 @@ class MikroTikRepository(
                 }
             }
         } catch (e: Exception) {
-            Log.e("NetCraft", "Error fetch interfaces", e)
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.SYNC_RESULT,
+                operation = OperationTelemetry.Operation.INTERFACES_SYNC,
+                outcome = OperationTelemetry.Outcome.FAILURE,
+                errorClass = OperationTelemetry.classify(e),
+                transport = OperationTelemetry.Transport.REST,
+                minIntervalMs = 60_000
+            )
         }
     }
 
@@ -2013,7 +2167,15 @@ class MikroTikRepository(
                         return@launch
                     }
                 } catch (e: Exception) {
-                    Log.w("MikroTikRepository", "Failed to fetch live profiles", e)
+                    OperationTelemetry.record(
+                        event = OperationTelemetry.Event.SYNC_RESULT,
+                        operation = OperationTelemetry.Operation.USER_MANAGER_PROFILES_SYNC,
+                        outcome = OperationTelemetry.Outcome.PARTIAL,
+                        errorClass = OperationTelemetry.classify(e),
+                        transport = OperationTelemetry.Transport.NATIVE_API,
+                        routerOsMajor = rosMajor,
+                        minIntervalMs = 60_000
+                    )
                 }
             }
 
@@ -2040,14 +2202,40 @@ class MikroTikRepository(
         onError: (String, List<UserManagerUser>) -> Unit
     ) {
         repositoryScope.launch {
+            val operationId = OperationTelemetry.newOperationId()
+            val startedAt = OperationTelemetry.elapsedRealtime()
             val added = mutableListOf<UserManagerUser>()
             try {
                 val api = nativeApi
                 if (api == null) {
+                    OperationTelemetry.record(
+                        event = OperationTelemetry.Event.USER_MANAGER_BATCH_RESULT,
+                        operation = OperationTelemetry.Operation.USER_MANAGER_BATCH,
+                        operationId = operationId,
+                        outcome = OperationTelemetry.Outcome.FAILURE,
+                        errorClass = OperationTelemetry.ErrorClass.NETWORK,
+                        transport = OperationTelemetry.Transport.NATIVE_API,
+                        requestedCount = users.size,
+                        affectedCount = 0,
+                        routerOsMajor = rosMajor,
+                        durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                    )
                     launch(Dispatchers.Main) { onError("غير متصل بالراوتر", emptyList()) }
                     return@launch
                 }
                 if (users.isEmpty()) {
+                    OperationTelemetry.record(
+                        event = OperationTelemetry.Event.USER_MANAGER_BATCH_RESULT,
+                        operation = OperationTelemetry.Operation.USER_MANAGER_BATCH,
+                        operationId = operationId,
+                        outcome = OperationTelemetry.Outcome.FAILURE,
+                        errorClass = OperationTelemetry.ErrorClass.VALIDATION,
+                        transport = OperationTelemetry.Transport.NATIVE_API,
+                        requestedCount = 0,
+                        affectedCount = 0,
+                        routerOsMajor = rosMajor,
+                        durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                    )
                     launch(Dispatchers.Main) { onError("لم يتم إدخال عدد صالح للكروت", emptyList()) }
                     return@launch
                 }
@@ -2094,12 +2282,42 @@ class MikroTikRepository(
                 }
                 insertActivityLog("توليد دفعة كروت", "تم توليد دفعة كروت ($batchName): نجح ${added.size} من ${users.size} كرت في اليوزر مانجر", _currentConnection.value?.host ?: "")
                 val result = added.toList()
+                val complete = result.size == users.size && firstErr == null
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.USER_MANAGER_BATCH_RESULT,
+                    operation = OperationTelemetry.Operation.USER_MANAGER_BATCH,
+                    operationId = operationId,
+                    outcome = when {
+                        complete -> OperationTelemetry.Outcome.SUCCESS
+                        result.isNotEmpty() -> OperationTelemetry.Outcome.PARTIAL
+                        else -> OperationTelemetry.Outcome.FAILURE
+                    },
+                    errorClass = if (complete) null else OperationTelemetry.ErrorClass.ROUTER_REJECTED,
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    requestedCount = users.size,
+                    affectedCount = result.size,
+                    routerOsMajor = rosMajor,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 launch(Dispatchers.Main) {
-                    if (result.size == users.size && firstErr == null) onSuccess(result)
+                    if (complete) onSuccess(result)
                     else onError("نجح ${result.size} من ${users.size}. خطأ: ${firstErr ?: "غير معروف"}", result)
                 }
             } catch (e: Exception) {
                 val result = added.toList()
+                val errorClass = OperationTelemetry.classify(e)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.USER_MANAGER_BATCH_RESULT,
+                    operation = OperationTelemetry.Operation.USER_MANAGER_BATCH,
+                    operationId = operationId,
+                    outcome = if (result.isNotEmpty()) OperationTelemetry.Outcome.PARTIAL else if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                    errorClass = errorClass,
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    requestedCount = users.size,
+                    affectedCount = result.size,
+                    routerOsMajor = rosMajor,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 launch(Dispatchers.Main) { onError(e.message ?: "خطأ في إضافة الكروت", result) }
             }
         }
@@ -2450,7 +2668,7 @@ class MikroTikRepository(
             // no-op retry for v7/REST-only setups too: if it fails, the existing
             // REST fallback still runs exactly as before.
             if (nativeApi == null) {
-                _currentConnection.value?.let { conn -> tryNativeConnect(conn) }
+                _currentConnection.value?.let { conn -> tryNativeConnect(conn, OperationTelemetry.newOperationId()) }
             }
             if (nativeApi != null) {
                 val ok = nativeApi?.reboot() ?: false
@@ -2515,7 +2733,7 @@ class MikroTikRepository(
             // reconnect the native API first instead of falling straight to the
             // REST-only fallback below.
             if (nativeApi == null) {
-                _currentConnection.value?.let { conn -> tryNativeConnect(conn) }
+                _currentConnection.value?.let { conn -> tryNativeConnect(conn, OperationTelemetry.newOperationId()) }
             }
             if (nativeApi != null) {
                 val ok = nativeApi?.shutdown() ?: false
@@ -2777,13 +2995,25 @@ class MikroTikRepository(
         onError: (String) -> Unit
     ) {
         repositoryScope.launch {
+            val operationId = OperationTelemetry.newOperationId()
+            val startedAt = OperationTelemetry.elapsedRealtime()
             val api = nativeApi
             val connection = _currentConnection.value
             if (api == null || connection == null) {
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.BACKUP_DOWNLOAD_RESULT,
+                    operation = OperationTelemetry.Operation.BACKUP_DOWNLOAD,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.ErrorClass.NETWORK,
+                    transport = OperationTelemetry.Transport.FTP,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
                 return@launch
             }
             var temporaryDocument: Uri? = null
+            var downloadedBytes = 0L
             try {
                 if (!fileName.endsWith(".backup", ignoreCase = true) || !fileName.matches(Regex("[A-Za-z0-9._ -]+"))) {
                     throw IOException("اسم ملف النسخة غير صالح")
@@ -2833,7 +3063,10 @@ class MikroTikRepository(
                         output = it,
                         expectedSize = size,
                         coroutineContext = transferContext,
-                        onProgress = { bytes -> launch(Dispatchers.Main) { onProgress(bytes) } }
+                        onProgress = { bytes ->
+                            downloadedBytes = bytes
+                            launch(Dispatchers.Main) { onProgress(bytes) }
+                        }
                     )
                 }
                 if (DocumentsContract.renameDocument(context.contentResolver, temporaryDocument, fileName) == null) {
@@ -2841,6 +3074,15 @@ class MikroTikRepository(
                 }
                 temporaryDocument = null
                 insertActivityLog("تنزيل نسخة احتياطية", "تم تنزيل ملف النسخة '$fileName' إلى موقع الحفظ الذي اختاره المستخدم ($downloaded بايت)", connection.host)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.BACKUP_DOWNLOAD_RESULT,
+                    operation = OperationTelemetry.Operation.BACKUP_DOWNLOAD,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    transport = OperationTelemetry.Transport.FTP,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt,
+                    bytesTransferred = downloaded
+                )
                 launch(Dispatchers.Main) { onSuccess(downloaded) }
             } catch (e: Exception) {
                 var cleanupWarning = ""
@@ -2848,6 +3090,22 @@ class MikroTikRepository(
                     val deleted = runCatching { DocumentsContract.deleteDocument(context.contentResolver, uri) }.getOrDefault(false)
                     if (!deleted) cleanupWarning = " (تحذير: تعذر حذف الملف المؤقت الجزئي من موقع الحفظ؛ احذفه يدويًا إن ظهر باسم .part)"
                 }
+                val errorClass = OperationTelemetry.classify(e)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.BACKUP_DOWNLOAD_RESULT,
+                    operation = OperationTelemetry.Operation.BACKUP_DOWNLOAD,
+                    operationId = operationId,
+                    outcome = when {
+                        e is kotlinx.coroutines.CancellationException -> OperationTelemetry.Outcome.CANCELLED
+                        errorClass == OperationTelemetry.ErrorClass.TIMEOUT -> OperationTelemetry.Outcome.TIMEOUT
+                        downloadedBytes > 0L -> OperationTelemetry.Outcome.PARTIAL
+                        else -> OperationTelemetry.Outcome.FAILURE
+                    },
+                    errorClass = errorClass,
+                    transport = OperationTelemetry.Transport.FTP,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt,
+                    bytesTransferred = downloadedBytes
+                )
                 val message = (e.message ?: "فشل تنزيل النسخة الاحتياطية") + cleanupWarning
                 launch(Dispatchers.Main) { onError(message) }
             }
