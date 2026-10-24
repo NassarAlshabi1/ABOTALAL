@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
@@ -26,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
@@ -42,6 +46,7 @@ import com.example.ui.components.AppExitConfirmationDialog
 import com.example.ui.components.SegmentedIpField
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.NetworkUtils
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,6 +73,17 @@ fun LoginScreen(
 
     // Connection Mode: 0 = عنوان IP, 1 = كلاود Cloud, 2 = رابط Domain, 3 = L2TP VPN عن بعد
     var connectionMode by remember { mutableIntStateOf(0) }
+    // Local access (IP/Cloud/Domain) is kept separate from remote L2TP access.
+    var lastLocalMode by remember { mutableIntStateOf(0) }
+    var vpnActive by remember { mutableStateOf(hasActiveVpn(context)) }
+    LaunchedEffect(connectionMode) {
+        if (connectionMode == 3) {
+            while (true) {
+                vpnActive = hasActiveVpn(context)
+                delay(2000)
+            }
+        }
+    }
 
     // Input States
     var routerHost by remember { mutableStateOf(detectedGateway) }
@@ -108,6 +124,10 @@ fun LoginScreen(
     // target the same host/port/credentials the user sees on screen.
     LaunchedEffect(selectedSavedRouterId) {
         val conn = savedConnections.firstOrNull { it.id == selectedSavedRouterId } ?: return@LaunchedEffect
+        // A saved router always stores a direct host/port, so selecting one must
+        // leave L2TP/Cloud/Domain modes; otherwise login would target a stale field.
+        connectionMode = 0
+        lastLocalMode = 0
         routerHost = conn.host
         routerPort = conn.port.toString()
         routerUser = conn.username
@@ -394,147 +414,72 @@ fun LoginScreen(
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                // طريقة الاتصال Header
+                                // Access layer: local network vs remote L2TP tunnel
                                 Text(
-                                    text = "طريقة الاتصال بالراوتر",
+                                    text = "نوع الوصول",
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.padding(bottom = 8.dp)
                                 )
 
-                                // Four Connection Buttons Side-by-Side (جنب جنب متناسقة)
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // 1. عنوان IP
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { connectionMode = 0 },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (connectionMode == 0) Color(0xFF0C5A60) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = if (connectionMode == 0) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
-                                            horizontalArrangement = Arrangement.Center,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Language,
-                                                contentDescription = null,
-                                                tint = if (connectionMode == 0) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = "عنوان IP",
-                                                fontSize = 10.sp,
-                                                fontWeight = if (connectionMode == 0) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (connectionMode == 0) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-
-                                    // 2. كلاود Cloud
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { connectionMode = 1 },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (connectionMode == 1) Color(0xFF0C5A60) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = if (connectionMode == 1) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
-                                            horizontalArrangement = Arrangement.Center,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Cloud,
-                                                contentDescription = null,
-                                                tint = if (connectionMode == 1) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = "كلاود",
-                                                fontSize = 10.sp,
-                                                fontWeight = if (connectionMode == 1) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (connectionMode == 1) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-
-                                    // 3. رابط دومين Domain
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { connectionMode = 2 },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (connectionMode == 2) Color(0xFF0C5A60) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = if (connectionMode == 2) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
-                                            horizontalArrangement = Arrangement.Center,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Dns,
-                                                contentDescription = null,
-                                                tint = if (connectionMode == 2) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = "رابط دومين",
-                                                fontSize = 10.sp,
-                                                fontWeight = if (connectionMode == 2) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (connectionMode == 2) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-
-                                    // 4. L2TP VPN (الدخول عن بعد)
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { connectionMode = 3 },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (connectionMode == 3) Color(0xFF0C5A60) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = if (connectionMode == 3) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
-                                            horizontalArrangement = Arrangement.Center,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.VpnKey,
-                                                contentDescription = null,
-                                                tint = if (connectionMode == 3) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = "L2TP VPN",
-                                                fontSize = 10.sp,
-                                                fontWeight = if (connectionMode == 3) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (connectionMode == 3) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
+                                    AccessModeOption(
+                                        selected = connectionMode != 3,
+                                        icon = Icons.Filled.Lan,
+                                        title = "دخول محلي",
+                                        subtitle = "IP / كلاود / دومين",
+                                        onClick = { connectionMode = lastLocalMode }
+                                    )
+                                    AccessModeOption(
+                                        selected = connectionMode == 3,
+                                        icon = Icons.Filled.VpnKey,
+                                        title = "L2TP عن بعد",
+                                        subtitle = "عبر نفق VPN في أندرويد",
+                                        onClick = { connectionMode = 3 }
+                                    )
                                 }
 
-                                Spacer(modifier = Modifier.height(14.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                if (connectionMode != 3) {
+                                    Text(
+                                        text = "عنوان الراوتر على الشبكة المحلية",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(bottom = 6.dp)
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        LocalModeChip(
+                                            selected = connectionMode == 0,
+                                            icon = Icons.Filled.Language,
+                                            label = "عنوان IP",
+                                            onClick = { connectionMode = 0; lastLocalMode = 0 }
+                                        )
+                                        LocalModeChip(
+                                            selected = connectionMode == 1,
+                                            icon = Icons.Filled.Cloud,
+                                            label = "كلاود",
+                                            onClick = { connectionMode = 1; lastLocalMode = 1 }
+                                        )
+                                        LocalModeChip(
+                                            selected = connectionMode == 2,
+                                            icon = Icons.Filled.Dns,
+                                            label = "رابط دومين",
+                                            onClick = { connectionMode = 2; lastLocalMode = 2 }
+                                        )
+                                    }
+                                } else {
+                                    VpnStatusBanner(active = vpnActive)
+                                }
 
                                 when (connectionMode) {
                                     0 -> {
@@ -786,6 +731,24 @@ fun LoginScreen(
                                                 }
                                             }
 
+                                            if (!vpnActive) {
+                                                Surface(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(top = 8.dp),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    color = Color(0xFFFFF7ED),
+                                                    border = BorderStroke(1.dp, Color(0xFFFDBA74))
+                                                ) {
+                                                    Text(
+                                                        text = "تنبيه: لا يوجد نفق VPN نشط الآن. شغّل اتصال L2TP من إعدادات أندرويد أولاً، وإلا فقد يفشل الوصول إلى عنوان الراوتر.",
+                                                        fontSize = 11.sp,
+                                                        color = Color(0xFF9A3412),
+                                                        modifier = Modifier.padding(10.dp)
+                                                    )
+                                                }
+                                            }
+
                                             Spacer(modifier = Modifier.height(8.dp))
 
                                             // Open Android's system VPN settings to add/enable the L2TP profile
@@ -820,7 +783,7 @@ fun LoginScreen(
                                             }
 
                                             Text(
-                                                text = "أضف اتصال L2TP/IPsec من إعدادات VPN في أندرويد (يستخدم النظام منفذ 1701)، اتصل به أولاً، ثم أدخل عنوان الراوتر الذي أصبح متاحاً عبر النفق واختر منفذ RouterOS API ‏8728 أو 8729 قبل تسجيل الدخول.",
+                                                text = "الدخول المحلي (IP/كلاود/دومين) منفصل تماماً عن هذا الوضع. هنا يتصل التطبيق بالراوتر عبر نفق L2TP/IPsec ينشئه نظام أندرويد (منفذ 1701)؛ أضف الاتصال من إعدادات VPN، فعّله، ثم أدخل عنوان الراوتر داخل النفق واختر منفذ RouterOS API ‏8728 أو 8729.",
                                                 fontSize = 11.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.padding(top = 6.dp, start = 4.dp)
@@ -1338,12 +1301,9 @@ fun LoginScreen(
                                         // Quick Connect Lightning
                                         IconButton(
                                             onClick = {
-                                                val (targetHost, targetPort) = if (connectionMode == 3) {
-                                                    resolveTarget()
-                                                } else {
-                                                    Pair(conn.host, conn.port)
-                                                }
-                                                viewModel.connectRouter(conn, targetHost, targetPort) {
+                                                // Saved routers store a direct host/port, so never
+                                                // route them through the L2TP/Cloud/Domain fields.
+                                                viewModel.connectRouter(conn, conn.host, conn.port) {
                                                     onLoginSuccess()
                                                 }
                                             },
@@ -1678,5 +1638,135 @@ fun LoginScreen(
         AppExitConfirmationDialog(
             onDismiss = { showExitAppDialog = false }
         )
+    }
+}
+
+@Composable
+private fun RowScope.AccessModeOption(
+    selected: Boolean,
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .weight(1f)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) Color(0xFF0C5A60)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = if (selected) null
+        else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Column {
+                Text(
+                    text = title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 9.sp,
+                    color = if (selected) Color.White.copy(alpha = 0.85f)
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.LocalModeChip(
+    selected: Boolean,
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .weight(1f)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) Color(0xFF0C5A60)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        border = if (selected) null
+        else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(3.dp))
+            Text(
+                text = label,
+                fontSize = 10.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun VpnStatusBanner(active: Boolean) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = if (active) Color(0xFFDCFCE7) else Color(0xFFFFF7ED),
+        border = BorderStroke(1.dp, if (active) Color(0xFF86EFAC) else Color(0xFFFDBA74))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(if (active) Color(0xFF16A34A) else Color(0xFFF97316))
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (active) "نفق VPN نشط — أدخل عنوان الراوتر داخل النفق"
+                else "نفق VPN غير نشط — فعّل اتصال L2TP من إعدادات أندرويد",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (active) Color(0xFF15803D) else Color(0xFF9A3412)
+            )
+        }
+    }
+}
+
+private fun hasActiveVpn(context: Context): Boolean {
+    val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        ?: return false
+    @Suppress("DEPRECATION")
+    val networks = manager.allNetworks
+    return networks.any { network ->
+        manager.getNetworkCapabilities(network)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
     }
 }
