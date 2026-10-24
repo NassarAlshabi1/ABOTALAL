@@ -16,6 +16,7 @@ import com.example.data.model.RouterLogEntry
 import com.example.data.model.UserManagerProfile
 import com.example.data.model.UserManagerSession
 import com.example.data.model.UserManagerUser
+import com.example.data.repository.AiFix
 import com.example.data.repository.MikroTikRepository
 import com.example.util.CryptoManager
 import com.example.util.OperationTelemetry
@@ -283,6 +284,10 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     fun collectAiDoctorData(selectedSections: Set<String>, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         repository.collectAiDoctorData(selectedSections, onSuccess, onError)
+    }
+
+    fun applyAiFixes(fixes: List<AiFix>, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.applyAiFixes(fixes, onSuccess, onError)
     }
 
     /* Expired-cards maintenance wizard (9 manual steps) */

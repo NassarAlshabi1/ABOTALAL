@@ -2827,6 +2827,57 @@ class MikroTikRepository(
         }
     }
 
+    /** Applies a user-approved subset of AI-suggested fixes. Always creates a
+     *  safety backup first, validates every command against [AiFixGuard]'s
+     *  allowlist, and stops at the first failure. */
+    fun applyAiFixes(fixes: List<AiFix>, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val host = _currentConnection.value?.host ?: ""
+            if (api == null) {
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
+                return@launch
+            }
+            val plan = try {
+                AiFixGuard.buildSafePlan(fixes)
+            } catch (e: IllegalArgumentException) {
+                launch(Dispatchers.Main) { onError(e.message ?: "خطة الإصلاح غير صالحة.") }
+                return@launch
+            }
+            val backupName = "netcraft-ai-${System.currentTimeMillis() / 1000}"
+            try {
+                api.executeStrict("/system/backup/save", mapOf("name" to backupName))
+            } catch (e: Exception) {
+                insertActivityLog("إصلاح AI", "أُوقف الإصلاح: تعذر إنشاء نسخة احتياطية (${e.message})", host)
+                launch(Dispatchers.Main) {
+                    onError("تعذر إنشاء نسخة احتياطية قبل الإصلاح؛ لم يُنفذ أي أمر. ${e.message.orEmpty()}".trim())
+                }
+                return@launch
+            }
+            var applied = 0
+            for (command in plan) {
+                try {
+                    api.executeStrict(command.path, command.params)
+                    applied++
+                } catch (e: Exception) {
+                    insertActivityLog(
+                        "إصلاح AI",
+                        "توقف بعد $applied من ${plan.size} أمر عند ${command.path}: ${e.message}",
+                        host
+                    )
+                    launch(Dispatchers.Main) {
+                        onError("توقف التنفيذ بعد $applied من ${plan.size} أمر (${command.path}). النسخة الاحتياطية: $backupName.backup. ${e.message.orEmpty()}".trim())
+                    }
+                    return@launch
+                }
+            }
+            insertActivityLog("إصلاح AI", "تم تطبيق $applied أمرًا بعد إنشاء النسخة الاحتياطية $backupName.backup", host)
+            launch(Dispatchers.Main) {
+                onSuccess("تم إنشاء نسخة احتياطية ($backupName.backup) وتطبيق $applied أمرًا بنجاح.")
+            }
+        }
+    }
+
     /** Read-only diagnostics. Script sources, scheduler commands, credentials,
      *  and private keys are never requested from the router. */
     fun collectAiDoctorData(selectedSections: Set<String>, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
