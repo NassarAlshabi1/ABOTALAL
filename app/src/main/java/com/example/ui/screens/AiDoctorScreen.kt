@@ -1,33 +1,43 @@
 package com.example.ui.screens
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.HealthAndSafety
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.text.style.TextAlign
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.repository.AiDoctorClient
+import com.example.data.repository.AiDoctorDefaults
 import com.example.data.repository.RouterOsV6AdviceGuard
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
@@ -42,16 +52,31 @@ private data class DiagnosticChoice(val id: String, val title: String)
 @Composable
 fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("ai_doctor_settings", android.content.Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences("ai_doctor_settings", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
     val connection by viewModel.currentConnection.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
-    var serviceName by remember { mutableStateOf(prefs.getString("service_name", "") ?: "") }
-    var apiKey by remember { mutableStateOf(CryptoManager.decrypt(prefs.getString("api_key_enc", ""))) }
-    var apiEndpoint by remember { mutableStateOf(prefs.getString("api_endpoint", "") ?: "") }
-    var connectorUrl by remember { mutableStateOf(prefs.getString("connector_url", "") ?: "") }
-    var modelName by remember { mutableStateOf(prefs.getString("model_name", "") ?: "") }
-    var additionalHeaders by remember { mutableStateOf(CryptoManager.decrypt(prefs.getString("additional_headers_enc", ""))) }
+    val darkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+
+    var serviceName by remember { mutableStateOf(prefs.getString("service_name", null) ?: AiDoctorDefaults.SERVICE_NAME) }
+    var apiKey by remember {
+        mutableStateOf(
+            if (prefs.contains("api_key_enc")) CryptoManager.decrypt(prefs.getString("api_key_enc", ""))
+            else AiDoctorDefaults.API_KEY
+        )
+    }
+    var apiEndpoint by remember { mutableStateOf(prefs.getString("api_endpoint", null) ?: AiDoctorDefaults.ENDPOINT) }
+    var connectorUrl by remember { mutableStateOf(prefs.getString("connector_url", null).orEmpty()) }
+    var modelName by remember { mutableStateOf(prefs.getString("model_name", null) ?: AiDoctorDefaults.MODEL) }
+    var additionalHeaders by remember {
+        mutableStateOf(
+            if (prefs.contains("additional_headers_enc")) CryptoManager.decrypt(prefs.getString("additional_headers_enc", ""))
+            else ""
+        )
+    }
+
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var showKey by remember { mutableStateOf(false) }
     var settingsMessage by remember { mutableStateOf<String?>(null) }
     var settingsMessageIsError by remember { mutableStateOf(false) }
     var apiStatus by remember { mutableStateOf<String?>(null) }
@@ -66,11 +91,16 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
     var showUploadConfirmation by remember { mutableStateOf(false) }
     var diagnosis by remember { mutableStateOf<String?>(null) }
     var selectedSections by remember { mutableStateOf(setOf("all")) }
-    val darkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+
     val background = if (darkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
     val card = if (darkMode) Color(0xFF1E293B) else Color.White
     val textColor = if (darkMode) Color(0xFFF8FAFC) else Color(0xFF0F172A)
     val subdued = if (darkMode) Color(0xFFCBD5E1) else Color(0xFF64748B)
+    val border = if (darkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
+    val successColor = Color(0xFF059669)
+    val errorColor = Color(0xFFDC2626)
+    val warningColor = Color(0xFFB45309)
+    val accent = Color(0xFF0C8A80)
 
     val choices = remember {
         listOf(
@@ -88,6 +118,10 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         )
     }
     BackHandler { onBack() }
+
+    val isDefaultProvider = apiEndpoint.trim() == AiDoctorDefaults.ENDPOINT && apiKey.trim() == AiDoctorDefaults.API_KEY
+    val endpointLabel = remember(apiEndpoint) { endpointHost(apiEndpoint) }
+    val settingsReady = apiEndpoint.isNotBlank() && modelName.isNotBlank()
 
     fun saveSettings(): Boolean {
         val parsedHeaders = runCatching { AiDoctorClient.parseHeaders(additionalHeaders) }
@@ -136,6 +170,22 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         return true
     }
 
+    fun restoreDefaults() {
+        prefs.edit().clear().apply()
+        serviceName = AiDoctorDefaults.SERVICE_NAME
+        apiKey = AiDoctorDefaults.API_KEY
+        apiEndpoint = AiDoctorDefaults.ENDPOINT
+        connectorUrl = ""
+        modelName = AiDoctorDefaults.MODEL
+        additionalHeaders = ""
+        settingsMessage = "تمت استعادة مزود Kiyara الافتراضي. يمكنك تعديل أي حقل ثم الحفظ."
+        settingsMessageIsError = false
+        apiStatus = null
+        connectorStatus = null
+        diagnosis = null
+        pendingSnapshot = null
+    }
+
     fun testApi() {
         if (!saveSettings()) return
         if (apiEndpoint.isBlank()) {
@@ -182,9 +232,10 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         val snapshot = pendingSnapshot ?: return
         if (!saveSettings()) return
         if (apiEndpoint.isBlank() || modelName.isBlank()) {
-            settingsMessage = "أدخل API Endpoint URL وModel Name المقدمين من خدمتك قبل التحليل. لا يفرض التطبيق اسم نموذج بعينه."
+            settingsMessage = "أدخل API Endpoint URL وModel Name المقدمين من خدمتك قبل التحليل."
             settingsMessageIsError = true
             showUploadConfirmation = false
+            selectedTab = 1
             return
         }
         showUploadConfirmation = false
@@ -236,123 +287,262 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                 )
             }
         ) { padding ->
-            Column(
-                modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                DoctorSectionCard(title = "إعدادات واجهة الذكاء الاصطناعي API", icon = Icons.Filled.HealthAndSafety, card = card, textColor = textColor) {
-                    DoctorField(serviceName, { serviceName = it }, "اسم الخدمة (اختياري)", "مثال: مزود الذكاء الاصطناعي")
-                    DoctorField(apiKey, { apiKey = it }, "API Key", "مخفي ومحفوظ مشفّرًا", secret = true)
-                    DoctorField(apiEndpoint, { apiEndpoint = it }, "API Endpoint URL الكامل", "https://provider.example/v1/chat/completions")
-                    DoctorField(connectorUrl, { connectorUrl = it }, "Connector URL (اختياري)", "رابط موصل قائم ومتوافق، إن وُجد")
-                    DoctorField(modelName, { modelName = it }, "Model Name (اختياري)", "اسم النموذج الذي يدعمه مزودك؛ لا توجد قيمة مفروضة")
-                    DoctorField(additionalHeaders, { additionalHeaders = it }, "Additional Headers (اختياري)", "سطر لكل ترويسة، بالشكل Name: Value", secret = true, minLines = 3)
-                    Text("تُحفظ API Key والترويسات الحساسة مشفّرة على الجهاز. يدعم التحليل واجهات chat-completions المتوافقة مع OpenAI؛ لا يعني إدخال URL وحده أن الموصل موجود أو متوافق.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
-                    if (apiEndpoint.trim().startsWith("http://", ignoreCase = true)) {
-                        Text("تحذير: HTTP غير مشفّر؛ قد يُكشف تقرير الراوتر وأي بيانات اعتماد على الشبكة. استخدم HTTPS أو نقطة نهاية محلية على شبكة موثوقة/VPN.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFFB45309))
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { testApi() }, enabled = !isTestingApi, modifier = Modifier.weight(1f)) {
-                            if (isTestingApi) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            else Text("اختبار API", fontFamily = CairoFontFamily)
-                        }
-                        OutlinedButton(onClick = { testConnector() }, enabled = !isTestingConnector, modifier = Modifier.weight(1f)) {
-                            if (isTestingConnector) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            else Text("اختبار الموصل", fontFamily = CairoFontFamily)
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { saveSettings() }, modifier = Modifier.weight(1f)) {
-                            Text("حفظ الإعدادات", fontFamily = CairoFontFamily)
-                        }
-                        TextButton(onClick = {
-                            prefs.edit().clear().apply()
-                            serviceName = ""; apiKey = ""; apiEndpoint = ""; connectorUrl = ""; modelName = ""; additionalHeaders = ""
-                            settingsMessage = "تم مسح إعدادات AI Doctor من هذا الجهاز."
-                            settingsMessageIsError = false
-                            apiStatus = null; connectorStatus = null; diagnosis = null; pendingSnapshot = null
-                        }, modifier = Modifier.weight(1f)) {
-                            Text("مسح الإعدادات", fontFamily = CairoFontFamily, color = Color(0xFFDC2626))
-                        }
-                    }
-                    settingsMessage?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (settingsMessageIsError) Color(0xFFDC2626) else Color(0xFF059669)) }
-                    apiStatus?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("فشل") || it.startsWith("أدخل") || it.startsWith("تعذر")) Color(0xFFDC2626) else Color(0xFF059669)) }
-                    connectorStatus?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("استجاب رابط الموصل HTTP") || it.startsWith("تعذر")) Color(0xFFB45309) else Color(0xFF059669)) }
-                }
+            Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+                ProviderSummaryCard(
+                    serviceName = serviceName,
+                    endpointHost = endpointLabel,
+                    modelName = modelName,
+                    connectionLabel = connection?.let { "${it.host}:${it.port}" },
+                    isConnected = isConnected,
+                    isDefaultProvider = isDefaultProvider,
+                    card = card,
+                    border = border,
+                    textColor = textColor,
+                    subdued = subdued,
+                    accent = accent,
+                    successColor = successColor,
+                    warningColor = warningColor
+                )
 
-                DoctorSectionCard(title = "الاتصال بالراوتر والموصل", icon = Icons.Filled.Router, card = card, textColor = textColor) {
-                    Text(
-                        if (connection != null) "الاتصال الحالي: ${connection!!.host}:${connection!!.port} — المستخدم ${connection!!.username}"
-                        else "لا يوجد راوتر محدد حاليًا. اتصل بالراوتر من شاشة تسجيل الدخول أولًا.",
-                        fontFamily = CairoFontFamily, fontSize = 12.sp, color = textColor
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = card,
+                    contentColor = accent
+                ) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        text = { Text("التشخيص", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
                     )
-                    Text("AI Doctor يعيد استخدام جلسة الراوتر المحفوظة ولا يطلب كلمة مرور مكررة. يدعم API وAPI-SSL؛ لا يعتمد على REST، لذلك يعمل مع RouterOS v6.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
-                    Text("لتعديل IP أو المنفذ أو اسم المستخدم أو كلمة المرور، حدّث اتصال الراوتر من شاشة تسجيل الدخول؛ لا تُخزَّن بيانات اعتماد منفصلة هنا.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
-                    Button(onClick = {
-                        isTestingRouter = true
-                        routerStatus = "جارٍ اختبار اتصال RouterOS..."
-                        viewModel.probeAiDoctorRouter(
-                            onSuccess = { routerStatus = "اتصال ناجح: $it"; isTestingRouter = false },
-                            onError = { routerStatus = "فشل الاتصال: $it"; isTestingRouter = false }
-                        )
-                    }, enabled = isConnected && !isTestingRouter) {
-                        if (isTestingRouter) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        else Text("اختبار اتصال الراوتر", fontFamily = CairoFontFamily)
-                    }
-                    routerStatus?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("اتصال ناجح")) Color(0xFF059669) else Color(0xFFDC2626)) }
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        text = { Text("إعدادات المزود", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+                    )
                 }
 
-                DoctorSectionCard(title = "فحص الراوتر (قراءة فقط)", icon = Icons.Filled.Security, card = card, textColor = textColor) {
-                    Text("اختر الأقسام التي تريد فحصها. تُقرأ إعدادات حقيقية للقراءة فقط، ويُختار مسار Wi-Fi الملائم لإصدار RouterOS. لا تُطلب كلمات مرور Wi-Fi أو أسماء مجتمعات SNMP أو مصادر السكربتات وأوامر الجدولة.", fontFamily = CairoFontFamily, fontSize = 12.sp, color = subdued)
-                    choices.chunked(2).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            row.forEach { choice ->
-                                val selected = choice.id in selectedSections
-                                FilterChip(
-                                    selected = selected,
-                                    onClick = {
-                                        selectedSections = when (choice.id) {
-                                            "all" -> if (selected) emptySet() else setOf("all")
-                                            else -> (selectedSections - "all").let { current -> if (selected) current - choice.id else current + choice.id }
-                                        }
-                                    },
-                                    label = { Text(choice.title, fontFamily = CairoFontFamily, fontSize = 10.sp) },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            if (row.size == 1) Spacer(Modifier.weight(1f))
-                        }
-                    }
-                    Button(
-                        onClick = {
-                            isCollecting = true
-                            diagnosis = null
-                            pendingSnapshot = null
-                            viewModel.collectAiDoctorData(selectedSections,
-                                onSuccess = { snapshot -> pendingSnapshot = snapshot; showUploadConfirmation = true; isCollecting = false },
-                                onError = { error -> settingsMessage = "فشل جمع بيانات الراوتر: $error"; settingsMessageIsError = true; isCollecting = false }
-                            )
-                        },
-                        enabled = isConnected && !isCollecting && !isAnalyzing && selectedSections.isNotEmpty(),
-                        modifier = Modifier.fillMaxWidth()
+                if (selectedTab == 0) {
+                    val scanScroll = rememberScrollState()
+                    Column(
+                        modifier = Modifier.fillMaxSize().verticalScroll(scanScroll).padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        if (isCollecting) CircularProgressIndicator(Modifier.size(17.dp), strokeWidth = 2.dp)
-                        else Text("جمع البيانات الفعلية والتحليل", fontFamily = CairoFontFamily)
-                    }
-                    pendingSnapshot?.let { Text("تم جمع بيانات حقيقية للقراءة فقط. لن تُرسل إلى خدمة AI قبل موافقتك في التأكيد التالي.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFF059669)) }
-                }
-
-                diagnosis?.let { result ->
-                    DoctorSectionCard(title = "التشخيص والاقتراحات — غير مطبقة", icon = Icons.Filled.HealthAndSafety, card = card, textColor = textColor) {
-                        Text("هذه توصيات مولدة من مزود AI وليست أوامر مؤكدة. يوجد حاجز لمسارات v7 المعروفة عند v6، لكنه ليس مدققًا كاملًا؛ راجع كل أمر يدويًا. التطبيق لا يطبق الإصلاحات.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFFB45309))
-                        Surface(color = if (darkMode) Color(0xFF0F172A) else Color(0xFFF1F5F9), shape = RoundedCornerShape(10.dp)) {
-                            SelectionContainer {
-                                Text(result, modifier = Modifier.fillMaxWidth().padding(12.dp), fontFamily = CairoFontFamily, fontSize = 12.sp, color = textColor, textAlign = TextAlign.Start)
+                        DoctorSectionCard(title = "اتصال الراوتر", icon = Icons.Filled.Router, card = card, textColor = textColor) {
+                            Text(
+                                if (connection != null) "الاتصال الحالي: ${connection!!.host}:${connection!!.port} — المستخدم ${connection!!.username}"
+                                else "لا يوجد راوتر محدد حاليًا. اتصل بالراوتر من شاشة تسجيل الدخول أولًا.",
+                                fontFamily = CairoFontFamily, fontSize = 12.sp, color = textColor
+                            )
+                            Text("يعيد AI Doctor استخدام جلسة الراوتر المحفوظة ولا يطلب كلمة مرور مكررة. يدعم API وAPI-SSL؛ لا يعتمد على REST، لذلك يعمل مع RouterOS v6.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                            Button(
+                                onClick = {
+                                    isTestingRouter = true
+                                    routerStatus = "جارٍ اختبار اتصال RouterOS..."
+                                    viewModel.probeAiDoctorRouter(
+                                        onSuccess = { routerStatus = "اتصال ناجح: $it"; isTestingRouter = false },
+                                        onError = { routerStatus = "فشل الاتصال: $it"; isTestingRouter = false }
+                                    )
+                                },
+                                enabled = isConnected && !isTestingRouter
+                            ) {
+                                if (isTestingRouter) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                else Text("اختبار اتصال الراوتر", fontFamily = CairoFontFamily)
+                            }
+                            routerStatus?.let {
+                                Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("اتصال ناجح")) successColor else errorColor)
                             }
                         }
+
+                        if (!settingsReady) {
+                            Surface(color = if (darkMode) Color(0xFF3B2F1A) else Color(0xFFFFF7E6), shape = RoundedCornerShape(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(Icons.Filled.Info, contentDescription = null, tint = warningColor)
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("المزود غير مكتمل الإعداد", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = textColor)
+                                        Text("أدخل API Endpoint وModel Name قبل التحليل.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                                    }
+                                    TextButton(onClick = { selectedTab = 1 }) {
+                                        Text("إعداد", fontFamily = CairoFontFamily)
+                                    }
+                                }
+                            }
+                        }
+
+                        DoctorSectionCard(title = "فحص الراوتر (قراءة فقط)", icon = Icons.Filled.Security, card = card, textColor = textColor) {
+                            Text("اختر الأقسام التي تريد فحصها. تُقرأ إعدادات حقيقية للقراءة فقط، ويُختار مسار Wi-Fi الملائم لإصدار RouterOS. لا تُطلب كلمات مرور Wi-Fi أو أسماء مجتمعات SNMP أو مصادر السكربتات وأوامر الجدولة.", fontFamily = CairoFontFamily, fontSize = 12.sp, color = subdued)
+                            choices.chunked(2).forEach { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    row.forEach { choice ->
+                                        val selected = choice.id in selectedSections
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick = {
+                                                selectedSections = when (choice.id) {
+                                                    "all" -> if (selected) emptySet() else setOf("all")
+                                                    else -> (selectedSections - "all").let { current -> if (selected) current - choice.id else current + choice.id }
+                                                }
+                                            },
+                                            label = { Text(choice.title, fontFamily = CairoFontFamily, fontSize = 10.sp) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (row.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                            Button(
+                                onClick = {
+                                    isCollecting = true
+                                    diagnosis = null
+                                    pendingSnapshot = null
+                                    viewModel.collectAiDoctorData(selectedSections,
+                                        onSuccess = { snapshot -> pendingSnapshot = snapshot; showUploadConfirmation = true; isCollecting = false },
+                                        onError = { error -> settingsMessage = "فشل جمع بيانات الراوتر: $error"; settingsMessageIsError = true; isCollecting = false }
+                                    )
+                                },
+                                enabled = isConnected && !isCollecting && !isAnalyzing && selectedSections.isNotEmpty(),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (isCollecting) CircularProgressIndicator(Modifier.size(17.dp), strokeWidth = 2.dp)
+                                else Text("جمع البيانات الفعلية والتحليل", fontFamily = CairoFontFamily)
+                            }
+                            pendingSnapshot?.let {
+                                Text("تم جمع بيانات حقيقية للقراءة فقط. لن تُرسل إلى خدمة AI قبل موافقتك في التأكيد التالي.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = successColor)
+                            }
+                            settingsMessage?.let {
+                                Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (settingsMessageIsError) errorColor else successColor)
+                            }
+                        }
+
+                        diagnosis?.let { result ->
+                            DoctorSectionCard(title = "التشخيص والاقتراحات — غير مطبقة", icon = Icons.Filled.HealthAndSafety, card = card, textColor = textColor) {
+                                Text("هذه توصيات مولدة من مزود AI وليست أوامر مؤكدة. يوجد حاجز لمسارات v7 المعروفة عند v6، لكنه ليس مدققًا كاملًا؛ راجع كل أمر يدويًا. التطبيق لا يطبق الإصلاحات.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = warningColor)
+                                Surface(color = if (darkMode) Color(0xFF0F172A) else Color(0xFFF1F5F9), shape = RoundedCornerShape(10.dp)) {
+                                    SelectionContainer {
+                                        Text(result, modifier = Modifier.fillMaxWidth().padding(12.dp), fontFamily = CairoFontFamily, fontSize = 12.sp, color = textColor, textAlign = TextAlign.Start)
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(24.dp))
+                    }
+                } else {
+                    val providerScroll = rememberScrollState()
+                    Column(
+                        modifier = Modifier.fillMaxSize().verticalScroll(providerScroll).padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            color = if (darkMode) Color(0xFF13343B) else Color(0xFFE6F4F2),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(Icons.Filled.Cloud, contentDescription = null, tint = accent)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        if (isDefaultProvider) "Kiyara Router — المزود الافتراضي" else "مزود مخصص",
+                                        fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = textColor
+                                    )
+                                    Text(
+                                        if (isDefaultProvider) "جاهز للاستخدام دون أي إعداد. يمكنك تغيير الحقول في أي وقت."
+                                        else "تم تعديل الإعدادات الافتراضية؛ يمكنك استعادتها متى شئت.",
+                                        fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued
+                                    )
+                                }
+                                TextButton(onClick = { restoreDefaults() }, enabled = !isTestingApi) {
+                                    Icon(Icons.Filled.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("افتراضي", fontFamily = CairoFontFamily, fontSize = 12.sp)
+                                }
+                            }
+                        }
+
+                        DoctorSectionCard(title = "بيانات المزود", icon = Icons.Filled.Tune, card = card, textColor = textColor) {
+                            DoctorField(serviceName, { serviceName = it }, "اسم الخدمة (اختياري)", "مثال: مزود الذكاء الاصطناعي")
+                            DoctorField(apiEndpoint, { apiEndpoint = it }, "API Endpoint URL الكامل", "https://provider.example/v1/chat/completions")
+                            DoctorField(
+                                value = apiKey,
+                                onValueChange = { apiKey = it },
+                                label = "API Key",
+                                placeholder = "محفوظ مشفّرًا على الجهاز",
+                                secret = !showKey,
+                                trailing = {
+                                    IconButton(onClick = { showKey = !showKey }) {
+                                        Icon(
+                                            if (showKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                            contentDescription = if (showKey) "إخفاء المفتاح" else "إظهار المفتاح"
+                                        )
+                                    }
+                                }
+                            )
+                            DoctorField(modelName, { modelName = it }, "Model Name", "معرّف النموذج لدى المزود")
+
+                            Text("نماذج Kiyara السريعة:", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                            Row(
+                                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                AiDoctorDefaults.modelPresets.forEach { preset ->
+                                    FilterChip(
+                                        selected = modelName.trim() == preset.id,
+                                        onClick = { modelName = preset.id },
+                                        label = { Text(preset.label, fontFamily = CairoFontFamily, fontSize = 10.sp) }
+                                    )
+                                }
+                            }
+
+                            DoctorField(additionalHeaders, { additionalHeaders = it }, "Additional Headers (اختياري)", "سطر لكل ترويسة، بالشكل Name: Value", secret = true, minLines = 3)
+
+                            if (apiEndpoint.trim().startsWith("http://", ignoreCase = true)) {
+                                Text("تحذير: HTTP غير مشفّر؛ قد يُكشف تقرير الراوتر وأي بيانات اعتماد على الشبكة. استخدم HTTPS أو نقطة نهاية محلية على شبكة موثوقة/VPN.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = warningColor)
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { testApi() }, enabled = !isTestingApi, modifier = Modifier.weight(1f)) {
+                                    if (isTestingApi) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    else Text("اختبار API", fontFamily = CairoFontFamily)
+                                }
+                                OutlinedButton(onClick = { saveSettings() }, modifier = Modifier.weight(1f)) {
+                                    Text("حفظ الإعدادات", fontFamily = CairoFontFamily)
+                                }
+                            }
+
+                            settingsMessage?.let {
+                                Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (settingsMessageIsError) errorColor else successColor)
+                            }
+                            apiStatus?.let {
+                                Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("فشل") || it.startsWith("أدخل") || it.startsWith("تعذر")) errorColor else successColor)
+                            }
+                        }
+
+                        DoctorSectionCard(title = "الموصل (متقدم، اختياري)", icon = Icons.Filled.Router, card = card, textColor = textColor) {
+                            Text("موصل قائم ومتوافق إن وُجد. اختبار الوصول لا يثبت دعم بروتوكول MikroTik، ولا تُرسل إليه بيانات اعتماد المزود.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                            DoctorField(connectorUrl, { connectorUrl = it }, "Connector URL (اختياري)", "رابط موصل قائم ومتوافق")
+                            OutlinedButton(onClick = { testConnector() }, enabled = !isTestingConnector) {
+                                if (isTestingConnector) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                else Text("اختبار الموصل", fontFamily = CairoFontFamily)
+                            }
+                            connectorStatus?.let {
+                                Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("استجاب رابط الموصل HTTP") || it.startsWith("تعذر")) warningColor else successColor)
+                            }
+                        }
+
+                        Surface(color = if (darkMode) Color(0xFF1E293B) else Color(0xFFF1F5F9), shape = RoundedCornerShape(14.dp)) {
+                            Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("الخصوصية والتوافق", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = textColor)
+                                Text("تُحفظ API Key والترويسات الحساسة مشفّرة عبر Android Keystore. يدعم التحليل واجهات chat-completions المتوافقة مع OpenAI؛ لا يعني إدخال URL وحده أن الموصل موجود أو متوافق.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                            }
+                        }
+                        Spacer(Modifier.height(24.dp))
                     }
                 }
-                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -381,6 +571,75 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
     }
 }
 
+private fun endpointHost(url: String): String {
+    val trimmed = url.trim()
+    if (trimmed.isEmpty()) return "غير محدد"
+    val host = runCatching { java.net.URI(trimmed).host }.getOrNull()
+    return if (host.isNullOrBlank()) trimmed else host
+}
+
+@Composable
+private fun ProviderSummaryCard(
+    serviceName: String,
+    endpointHost: String,
+    modelName: String,
+    connectionLabel: String?,
+    isConnected: Boolean,
+    isDefaultProvider: Boolean,
+    card: Color,
+    border: Color,
+    textColor: Color,
+    subdued: Color,
+    accent: Color,
+    successColor: Color,
+    warningColor: Color
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = card
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Icon(Icons.Filled.Cloud, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(serviceName.ifBlank { "مزود مخصص" }, fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = textColor)
+                    Text(
+                        "$endpointHost • ${modelName.ifBlank { "بدون نموذج" }}",
+                        fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                StatusPill(
+                    text = if (isDefaultProvider) "افتراضي" else "مخصص",
+                    color = if (isDefaultProvider) accent else warningColor
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Icon(Icons.Filled.Router, contentDescription = null, tint = if (isConnected) successColor else subdued, modifier = Modifier.size(20.dp))
+                Text(
+                    if (isConnected) "الراوتر: ${connectionLabel ?: "متصل"}" else "الراوتر: غير متصل",
+                    fontFamily = CairoFontFamily, fontSize = 11.sp, color = if (isConnected) textColor else subdued, modifier = Modifier.weight(1f)
+                )
+                StatusPill(text = if (isConnected) "متصل" else "غير متصل", color = if (isConnected) successColor else warningColor)
+            }
+            Spacer(Modifier.height(1.dp).fillMaxWidth().background(border))
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(text: String, color: Color) {
+    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(50)) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+            fontFamily = CairoFontFamily,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = color
+        )
+    }
+}
+
 @Composable
 private fun DoctorField(
     value: String,
@@ -388,7 +647,8 @@ private fun DoctorField(
     label: String,
     placeholder: String,
     secret: Boolean = false,
-    minLines: Int = 1
+    minLines: Int = 1,
+    trailing: (@Composable () -> Unit)? = null
 ) {
     OutlinedTextField(
         value = value,
@@ -398,14 +658,15 @@ private fun DoctorField(
         modifier = Modifier.fillMaxWidth(),
         singleLine = minLines == 1,
         minLines = minLines,
-        visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None
+        visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+        trailingIcon = trailing
     )
 }
 
 @Composable
 private fun DoctorSectionCard(
     title: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     card: Color,
     textColor: Color,
     content: @Composable ColumnScope.() -> Unit
