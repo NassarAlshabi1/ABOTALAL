@@ -101,6 +101,9 @@ class MikroTikRepository(
         get() = if (rosMajor == 6) listOf("/tool/user-manager", "/user-manager")
                 else listOf("/user-manager", "/tool/user-manager")
 
+    @Volatile
+    private var cachedCustomer: Pair<String, String>? = null
+
     private fun detectRouterOsVersion(api: MikroTikNativeApi, connection: RouterConnection) {
         val operationId = OperationTelemetry.newOperationId()
         val startedAt = OperationTelemetry.elapsedRealtime()
@@ -980,6 +983,7 @@ class MikroTikRepository(
     // Logoff connection
     fun disconnect() {
         isTickerRunning = false
+        cachedCustomer = null
         _isConnected.value = false
         try {
             nativeApi?.close()
@@ -1689,18 +1693,34 @@ class MikroTikRepository(
     // Resolves the real user-manager customer on the router (v6: /tool/user-manager
     // customer/print). Defaults to "admin" only when the router reports none.
     private fun umResolveCustomer(api: MikroTikNativeApi): String {
+        val host = _currentConnection.value?.host ?: ""
+        cachedCustomer?.let { (cachedHost, customer) ->
+            if (cachedHost == host) return customer
+        }
         for (base in umBases) {
             try {
                 val list = api.execute("$base/customer/print")
                 val login = list.firstOrNull { it["login"] == "admin" }?.get("login")
                     ?: list.firstOrNull()?.get("login") ?: list.firstOrNull()?.get("name")
-                if (login != null) return login
+                if (login != null) {
+                    cachedCustomer = host to login
+                    return login
+                }
             } catch (_: Exception) {}
         }
+        cachedCustomer = host to "admin"
         return "admin"
     }
 
     private enum class UmFlavor { V7, V6 }
+
+    /** Detected flavor (null = probe both). Avoids a guaranteed failed v7
+     *  command for every card on RouterOS v6. */
+    private fun preferredUmFlavor(): UmFlavor? = when (rosMajor) {
+        6 -> UmFlavor.V6
+        7 -> UmFlavor.V7
+        else -> null
+    }
 
     private fun isNoSuchCommand(e: Exception?): Boolean =
         e?.message?.contains("no such command", ignoreCase = true) == true
@@ -1840,10 +1860,28 @@ class MikroTikRepository(
                 val extra = mutableMapOf<String, String>()
                 if (user.comment.isNotEmpty()) extra["comment"] = user.comment
                 if (user.active) extra["disabled"] = "no"
-                val flavor = umAddUser(api, user.username, user.password, { customer }, extra)
+                val flavor = umAddUser(
+                    api = api,
+                    username = user.username,
+                    password = user.password,
+                    customer = { customer },
+                    extra = extra,
+                    preferred = preferredUmFlavor()
+                )
                 if (user.profile.isNotEmpty()) {
-                    val uid = if (flavor == UmFlavor.V6) umResolveUserId(api, user.username) else null
-                    umAssignProfile(api, flavor, user.username, uid, user.profile) { customer }
+                    if (flavor == UmFlavor.V6) {
+                        // v6 accepts the username in numbers=; resolving .id would
+                        // cost one extra /user/print per generated card.
+                        try {
+                            umAssignProfile(api, flavor, user.username, null, user.profile) { customer }
+                        } catch (first: Exception) {
+                            val uid = umResolveUserId(api, user.username)
+                                ?: throw first
+                            umAssignProfile(api, flavor, user.username, uid, user.profile) { customer }
+                        }
+                    } else {
+                        umAssignProfile(api, flavor, user.username, null, user.profile) { customer }
+                    }
                 }
                 _userManagerUsers.update { it + user }
                 cacheDao.insertUserManagerUsers(listOf(toCachedUserManagerUser(user, _currentConnection.value?.host ?: "")))
