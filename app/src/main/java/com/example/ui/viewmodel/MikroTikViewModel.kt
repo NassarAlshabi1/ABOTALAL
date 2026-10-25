@@ -391,6 +391,15 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.syncDatabase(onProgress, onComplete, onError)
     }
 
+    /** Fast, card-only sync for the voucher generator (delta DB write). */
+    fun syncVoucherCards(
+        useUserManager: Boolean,
+        onComplete: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.syncVoucherCards(useUserManager, onComplete, onError)
+    }
+
     /* Save Router Connection without connecting — password stored encrypted */
     fun saveRouterConnection(connection: RouterConnection) {
         persistEncryptedConnection(connection)

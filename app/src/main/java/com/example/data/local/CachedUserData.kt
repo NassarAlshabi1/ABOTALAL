@@ -83,6 +83,9 @@ interface CacheDao {
     @Query("DELETE FROM cached_hotspot_users WHERE routerHost = :host")
     suspend fun clearHotspotUsers(host: String)
 
+    @Query("DELETE FROM cached_hotspot_users WHERE routerHost = :host AND id IN (:ids)")
+    suspend fun deleteHotspotUsers(host: String, ids: List<String>)
+
     @Query("SELECT * FROM cached_usermanager_users WHERE routerHost = :host")
     suspend fun getUserManagerUsers(host: String): List<CachedUserManagerUser>
 
@@ -91,6 +94,9 @@ interface CacheDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertUserManagerUsers(users: List<CachedUserManagerUser>)
+
+    @Query("DELETE FROM cached_usermanager_users WHERE routerHost = :host AND username IN (:usernames)")
+    suspend fun deleteUserManagerUsers(host: String, usernames: List<String>)
 
     @Query("SELECT * FROM cached_usermanager_profiles")
     suspend fun getAllUserManagerProfiles(): List<CachedUserManagerProfile>

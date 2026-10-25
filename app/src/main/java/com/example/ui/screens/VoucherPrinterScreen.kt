@@ -928,10 +928,13 @@ fun VoucherPrinterScreen(
                             // this, two operators (or two devices) could generate
                             // the same usernames from a stale local cache.
                             var syncError: String? = null
-                            val synced = withTimeoutOrNull(60_000L) {
+                            val synced = withTimeoutOrNull(30_000L) {
                                 suspendCancellableCoroutine { continuation ->
-                                    viewModel.syncDatabase(
-                                        onProgress = { _, _, step -> syncStatusText = step },
+                                    // Card-only sync: one router call and an
+                                    // incremental Room write, so generation starts
+                                    // quickly instead of re-syncing the whole DB.
+                                    viewModel.syncVoucherCards(
+                                        useUserManager = selectedMode == VoucherMode.USER_MANAGER,
                                         onComplete = {
                                             if (continuation.isActive) continuation.resume(true)
                                         },

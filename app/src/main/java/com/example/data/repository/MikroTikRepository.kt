@@ -421,6 +421,7 @@ class MikroTikRepository(
     // Native data retrieval via Port 8728
     private fun fetchRealNativeData(api: MikroTikNativeApi, connection: RouterConnection) {
         repositoryScope.launch {
+            hydrateCachedUsers(connection.host)
             try {
                 // 1. System Resource
                 val resList = api.execute("/system/resource/print")
@@ -461,22 +462,10 @@ class MikroTikRepository(
                 }
 
                 // 3. Hotspot Users
-                val hsList = api.execute("/ip/hotspot/user/print")
-                val hsUsers = hsList.map {
-                    HotspotUser(
-                        id = it[".id"] ?: UUID.randomUUID().toString(),
-                        name = it["name"] ?: "",
-                        password = it["password"] ?: "",
-                        profile = it["profile"] ?: "default",
-                        limitUptime = it["limit-uptime"] ?: "unlimited",
-                        comment = it["comment"] ?: "",
-                        disabled = it["disabled"] == "true",
-                        bytesOut = it["bytes-out"]?.toLongOrNull() ?: 0L,
-                        bytesIn = it["bytes-in"]?.toLongOrNull() ?: 0L
-                    )
-                }
+                val hsUsers = mapHotspotRows(api.execute("/ip/hotspot/user/print"))
                 if (hsUsers.isNotEmpty()) {
                     _hotspotUsers.value = hsUsers
+                    cacheHotspotSnapshot(connection.host, hsUsers)
                 }
 
                 // 4. Active Hotspot
@@ -553,24 +542,10 @@ class MikroTikRepository(
                         else "/tool/user-manager/user/print"
                     )
                 }
-                val umUsers = umList.map {
-                    val uname = it["name"] ?: it["username"] ?: ""
-                    val assignedProfile = it["profile"]
-                    val actualProfile = it["actual-profile"]
-                    UserManagerUser(
-                        username = uname,
-                        password = it["password"] ?: uname,
-                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
-                        active = it["disabled"] != "true",
-                        uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
-                        downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
-                        serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                        comment = it["comment"] ?: "",
-                        profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
-                    )
-                }
+                val umUsers = mapUserManagerRows(umList)
                 if (umUsers.isNotEmpty()) {
                     _userManagerUsers.value = umUsers
+                    cacheUserManagerSnapshot(connection.host, umUsers)
                 }
 
                 // 7. Interfaces
@@ -622,35 +597,6 @@ class MikroTikRepository(
                     )
                 )
 
-                if (hsUsers.isNotEmpty()) {
-                    cacheDao.insertHotspotUsers(hsUsers.map {
-                        CachedHotspotUser(
-                            id = it.id,
-                            routerHost = connection.host,
-                            name = it.name,
-                            password = it.password,
-                            profile = it.profile,
-                            limitUptime = it.limitUptime,
-                            comment = it.comment,
-                            disabled = it.disabled,
-                            bytesOut = it.bytesOut,
-                            bytesIn = it.bytesIn
-                        )
-                    })
-                }
-
-                if (umUsers.isNotEmpty()) {
-                    cacheDao.insertUserManagerUsers(umUsers.map {
-                        CachedUserManagerUser(
-                            username = it.username,
-                            routerHost = connection.host,
-                            password = it.password,
-                            profile = it.profile,
-                            active = it.active,
-                            uptimeUsed = it.uptimeUsed
-                        )
-                    })
-                }
             } catch (e: Exception) {
                 OperationTelemetry.record(
                     event = OperationTelemetry.Event.SYNC_RESULT,
@@ -660,6 +606,168 @@ class MikroTikRepository(
                     transport = OperationTelemetry.Transport.NATIVE_API,
                     minIntervalMs = 60_000
                 )
+            }
+        }
+    }
+
+    // ==========================================
+    // LOCAL CARD CACHE (delta sync)
+    // Synced/generated cards are persisted in Room. A later sync only writes
+    // rows that are new or actually changed, and removes rows deleted on the
+    // router, instead of rewriting the whole table every time.
+    // ==========================================
+
+    private fun mapUserManagerRows(rows: List<Map<String, String>>): List<UserManagerUser> = rows.map {
+        val uname = it["name"] ?: it["username"] ?: ""
+        val assignedProfile = it["profile"]
+        val actualProfile = it["actual-profile"]
+        UserManagerUser(
+            username = uname,
+            password = it["password"] ?: uname,
+            profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
+            active = it["disabled"] != "true",
+            uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
+            downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
+            serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
+            comment = it["comment"] ?: "",
+            profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
+        )
+    }
+
+    private fun mapHotspotRows(rows: List<Map<String, String>>): List<HotspotUser> = rows.map {
+        HotspotUser(
+            id = it[".id"] ?: UUID.randomUUID().toString(),
+            name = it["name"] ?: "",
+            password = it["password"] ?: "",
+            profile = it["profile"] ?: "default",
+            limitUptime = it["limit-uptime"] ?: "unlimited",
+            comment = it["comment"] ?: "",
+            disabled = it["disabled"] == "true",
+            bytesOut = it["bytes-out"]?.toLongOrNull() ?: 0L,
+            bytesIn = it["bytes-in"]?.toLongOrNull() ?: 0L
+        )
+    }
+
+    private fun toCachedUserManagerUser(user: UserManagerUser, host: String) =
+        CachedUserManagerUser(
+            username = user.username,
+            routerHost = host,
+            password = user.password,
+            profile = user.profile,
+            active = user.active,
+            uptimeUsed = user.uptimeUsed,
+            downloadLimit = user.downloadLimit
+        )
+
+    private fun toCachedHotspotUser(user: HotspotUser, host: String) =
+        CachedHotspotUser(
+            id = user.id,
+            routerHost = host,
+            name = user.name,
+            password = user.password,
+            profile = user.profile,
+            limitUptime = user.limitUptime,
+            comment = user.comment,
+            disabled = user.disabled,
+            bytesOut = user.bytesOut,
+            bytesIn = user.bytesIn
+        )
+
+    private suspend fun cacheUserManagerSnapshot(host: String, users: List<UserManagerUser>) {
+        if (users.isEmpty()) return
+        val cached = cacheDao.getUserManagerUsers(host)
+        val existing = cached.associateBy { it.username }
+        val rows = users.map { toCachedUserManagerUser(it, host) }
+        val changed = rows.filter { existing[it.username] != it }
+        if (changed.isNotEmpty()) cacheDao.insertUserManagerUsers(changed)
+        val current = rows.map { it.username }.toSet()
+        val removed = existing.keys.filter { it !in current }
+        // Room/SQLite caps bound variables, so delete in chunks.
+        removed.chunked(400).forEach { cacheDao.deleteUserManagerUsers(host, it) }
+    }
+
+    private suspend fun cacheHotspotSnapshot(host: String, users: List<HotspotUser>) {
+        if (users.isEmpty()) return
+        val cached = cacheDao.getHotspotUsers(host)
+        val existing = cached.associateBy { it.id }
+        val rows = users.map { toCachedHotspotUser(it, host) }
+        val changed = rows.filter { existing[it.id] != it }
+        if (changed.isNotEmpty()) cacheDao.insertHotspotUsers(changed)
+        val current = rows.map { it.id }.toSet()
+        val removed = existing.keys.filter { it !in current }
+        removed.chunked(400).forEach { cacheDao.deleteHotspotUsers(host, it) }
+    }
+
+    private suspend fun hydrateCachedUsers(host: String) {
+        if (_userManagerUsers.value.isEmpty()) {
+            val cached = cacheDao.getUserManagerUsers(host)
+            if (cached.isNotEmpty()) {
+                _userManagerUsers.value = cached.map {
+                    UserManagerUser(
+                        username = it.username,
+                        password = it.password,
+                        profile = it.profile,
+                        active = it.active,
+                        uptimeUsed = it.uptimeUsed,
+                        downloadLimit = it.downloadLimit
+                    )
+                }
+            }
+        }
+        if (_hotspotUsers.value.isEmpty()) {
+            val cached = cacheDao.getHotspotUsers(host)
+            if (cached.isNotEmpty()) {
+                _hotspotUsers.value = cached.map {
+                    HotspotUser(
+                        id = it.id,
+                        name = it.name,
+                        password = it.password,
+                        profile = it.profile,
+                        limitUptime = it.limitUptime,
+                        comment = it.comment,
+                        disabled = it.disabled,
+                        bytesOut = it.bytesOut,
+                        bytesIn = it.bytesIn
+                    )
+                }
+            }
+        }
+    }
+
+    /** Fast card-only sync used right before bulk voucher generation: one API
+     *  call, delta Room write, no full-database delays. */
+    fun syncVoucherCards(useUserManager: Boolean, onComplete: () -> Unit, onError: (String) -> Unit) {
+        repositoryScope.launch {
+            val api = nativeApi
+            val connection = _currentConnection.value
+            if (api == null || connection == null) {
+                launch(Dispatchers.Main) { onError("اتصل بالراوتر أولاً") }
+                return@launch
+            }
+            try {
+                if (useUserManager) {
+                    var rows = api.execute("$umBase/user/print")
+                    if (rows.isEmpty() && rosMajor == 0) {
+                        rows = api.execute(
+                            if (umBase == "/tool/user-manager") "/user-manager/user/print"
+                            else "/tool/user-manager/user/print"
+                        )
+                    }
+                    val users = mapUserManagerRows(rows)
+                    if (users.isNotEmpty()) {
+                        _userManagerUsers.value = users
+                        cacheUserManagerSnapshot(connection.host, users)
+                    }
+                } else {
+                    val users = mapHotspotRows(api.execute("/ip/hotspot/user/print"))
+                    if (users.isNotEmpty()) {
+                        _hotspotUsers.value = users
+                        cacheHotspotSnapshot(connection.host, users)
+                    }
+                }
+                launch(Dispatchers.Main) { onComplete() }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { onError(e.message ?: "تعذرت مزامنة كروت الراوتر") }
             }
         }
     }
@@ -678,7 +786,6 @@ class MikroTikRepository(
 
                 // STEP 1: Sync UserManager Profiles & Users
                 launch(Dispatchers.Main) { onProgress(0, 4, "جاري مزامنة باقات وكروت ومستخدمي اليوزرمانجر...") }
-                delay(600)
 
                 if (api != null && _isConnected.value) {
                     // Fetch Profiles — version-aware base, probe only when undetected
@@ -737,39 +844,14 @@ class MikroTikRepository(
                         )
                     }
                     if (umList.isNotEmpty()) {
-                        val umUsers = umList.map {
-                            val uname = it["name"] ?: it["username"] ?: ""
-                            val assignedProfile = it["profile"]
-                            val actualProfile = it["actual-profile"]
-                            UserManagerUser(
-                                username = uname,
-                                password = it["password"] ?: uname,
-                                profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
-                                active = it["disabled"] != "true",
-                                uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
-                                downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
-                                serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                                comment = it["comment"] ?: "",
-                                profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
-                            )
-                        }
+                        val umUsers = mapUserManagerRows(umList)
                         _userManagerUsers.value = umUsers
-                        cacheDao.insertUserManagerUsers(umUsers.map {
-                            CachedUserManagerUser(
-                                username = it.username,
-                                routerHost = host,
-                                password = it.password,
-                                profile = it.profile,
-                                active = it.active,
-                                uptimeUsed = it.uptimeUsed
-                            )
-                        })
+                        cacheUserManagerSnapshot(host, umUsers)
                     }
                 }
 
                 // STEP 2: Sync Hotspot Profiles & Users
                 launch(Dispatchers.Main) { onProgress(1, 4, "جاري مزامنة باقات وكروت ومستخدمي الهوتسبوت...") }
-                delay(600)
 
                 if (api != null && _isConnected.value) {
                     var hsProfList = api.execute("/ip/hotspot/user/profile/print")
@@ -797,36 +879,10 @@ class MikroTikRepository(
                         })
                     }
 
-                    val hsList = api.execute("/ip/hotspot/user/print")
-                    if (hsList.isNotEmpty()) {
-                        val hsUsers = hsList.map {
-                            HotspotUser(
-                                id = it[".id"] ?: UUID.randomUUID().toString(),
-                                name = it["name"] ?: "",
-                                password = it["password"] ?: "",
-                                profile = it["profile"] ?: "default",
-                                limitUptime = it["limit-uptime"] ?: "unlimited",
-                                comment = it["comment"] ?: "",
-                                disabled = it["disabled"] == "true",
-                                bytesOut = it["bytes-out"]?.toLongOrNull() ?: 0L,
-                                bytesIn = it["bytes-in"]?.toLongOrNull() ?: 0L
-                            )
-                        }
+                    val hsUsers = mapHotspotRows(api.execute("/ip/hotspot/user/print"))
+                    if (hsUsers.isNotEmpty()) {
                         _hotspotUsers.value = hsUsers
-                        cacheDao.insertHotspotUsers(hsUsers.map {
-                            CachedHotspotUser(
-                                id = it.id,
-                                routerHost = host,
-                                name = it.name,
-                                password = it.password,
-                                profile = it.profile,
-                                limitUptime = it.limitUptime,
-                                comment = it.comment,
-                                disabled = it.disabled,
-                                bytesOut = it.bytesOut,
-                                bytesIn = it.bytesIn
-                            )
-                        })
+                        cacheHotspotSnapshot(host, hsUsers)
                     }
 
                     val actList = api.execute("/ip/hotspot/active/print")
@@ -847,7 +903,6 @@ class MikroTikRepository(
 
                 // STEP 3: Sync Router System Resources & Interfaces
                 launch(Dispatchers.Main) { onProgress(2, 4, "جاري مزامنة موارد النظام والواجهات...") }
-                delay(600)
 
                 if (api != null && _isConnected.value) {
                     val ifList = api.execute("/interface/print")
@@ -910,12 +965,10 @@ class MikroTikRepository(
 
                 // STEP 4: Local Cache Finalization
                 launch(Dispatchers.Main) { onProgress(3, 4, "جاري حفظ وتثبيت كافة البيانات محلياً...") }
-                delay(500)
 
                 insertActivityLog("مزامنة قاعدة البيانات", "تمت مزامنة بيانات الراوتر والهوتسبوت واليوزرمانجر محلياً بنجاح", host)
                 launch(Dispatchers.Main) {
                     onProgress(4, 4, "اكتملت المزامنة بنجاح تام!")
-                    delay(350)
                     onComplete()
                 }
             } catch (e: Exception) {
@@ -1085,6 +1138,7 @@ class MikroTikRepository(
         val host = connection.host
         // Fetch background details
         repositoryScope.launch {
+            hydrateCachedUsers(host)
             fetchRealUsers(connection)
             fetchRealActive(connection)
             fetchRealProfiles(connection)
@@ -1408,6 +1462,7 @@ class MikroTikRepository(
                     napi.executeStrict("/ip/hotspot/user/add", params)
                     insertActivityLog("إضافة مستخدم هوتسبوت", "تم إضافة المستخدم '${user.name}' على الراوتر", _currentConnection.value?.host ?: "")
                     _hotspotUsers.update { it + user }
+                    cacheDao.insertHotspotUsers(listOf(toCachedHotspotUser(user, _currentConnection.value?.host ?: "")))
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {
                     launch(Dispatchers.Main) { onError("فشل الإضافة على الراوتر: ${e.message}") }
@@ -1791,6 +1846,7 @@ class MikroTikRepository(
                     umAssignProfile(api, flavor, user.username, uid, user.profile) { customer }
                 }
                 _userManagerUsers.update { it + user }
+                cacheDao.insertUserManagerUsers(listOf(toCachedUserManagerUser(user, _currentConnection.value?.host ?: "")))
                 insertActivityLog("يوزر مانجر", "تم إضافة مستخدم يوزر مانجر جديد '${user.username}' بالبروفايل '${user.profile}'", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
