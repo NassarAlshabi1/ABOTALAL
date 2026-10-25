@@ -178,28 +178,59 @@ fun VoucherPrinterScreen(
     val generatedVouchersList = remember { mutableStateListOf<TempVoucher>() }
     var isGeneratingAndAdding by remember { mutableStateOf(false) }
     var generationProgress by remember { mutableStateOf(0f) }
+    var syncStatusText by remember { mutableStateOf<String?>(null) }
 
     // Re-trigger visual placeholder generation for live preview.
     // NOTE: the credentials generated here are the REAL ones sent to the router
     // when the user confirms, so they come from a cryptographically secure
     // SecureRandom — not kotlin.random.
     val secureRandom = remember { java.security.SecureRandom() }
-    LaunchedEffect(selectedMode, selectedProfile, qtyToGenerate, prefixText, usernameLength, generationTypeSeq, startSeqNum, matchPasswordWithUsername, bindMacOnFirstLogin) {
-        generatedVouchersList.clear()
-        val safeQty = qtyToGenerate.coerceIn(0, MAX_VOUCHERS_PER_BATCH)
-        for (i in 0 until safeQty) {
+
+    // Usernames already present on the router (synced into local state). Both
+    // the preview and the final batch skip these names, so bulk generation can
+    // never create a duplicate User Manager card or Hotspot user.
+    // Reads the live StateFlow values (not a composition snapshot) so cards
+    // that were just synced from the router are always part of the comparison.
+    fun occupiedUsernames(): Set<String> = when (selectedMode) {
+        VoucherMode.HOTSPOT -> viewModel.hotspotUsers.value.map { it.name }
+        VoucherMode.USER_MANAGER -> viewModel.userManagerUsers.value.map { it.username }
+    }.filter { it.isNotBlank() }.toSet()
+
+    fun buildVoucherBatch(quantity: Int, occupied: Set<String>): List<TempVoucher> {
+        val allowedChars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ" // Easy readability, skip 0/O/1/I
+        val used = occupied.toMutableSet()
+        val result = ArrayList<TempVoucher>(quantity)
+        var nextSequence = startSeqNum
+        repeat(quantity) {
             val userStr = if (generationTypeSeq) {
-                "$prefixText${startSeqNum + i}"
+                var candidate: String
+                var attempts = 0
+                do {
+                    candidate = "$prefixText${nextSequence++}"
+                    attempts++
+                } while (candidate in used && attempts < 100_000)
+                candidate
             } else {
-                val allowedChars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ" // Easy readability, skip 0/O/1/I
-                val randomSeq = (1..usernameLength).map { allowedChars[secureRandom.nextInt(allowedChars.length)] }.joinToString("")
-                "$prefixText$randomSeq"
+                var candidate: String
+                var attempts = 0
+                do {
+                    val randomSeq = (1..usernameLength)
+                        .map { allowedChars[secureRandom.nextInt(allowedChars.length)] }
+                        .joinToString("")
+                    candidate = "$prefixText$randomSeq"
+                    attempts++
+                } while (candidate in used && attempts < 100)
+                // Practically unreachable; guarantees uniqueness even if the
+                // random space is exhausted.
+                if (candidate in used) candidate = "$prefixText${UUID.randomUUID().toString().take(8)}"
+                candidate
             }
+            used.add(userStr)
             val passStr = if (matchPasswordWithUsername) userStr else {
                 val randomSeq = (1..5).map { ('0' + secureRandom.nextInt(10)) }.joinToString("")
                 randomSeq
             }
-            generatedVouchersList.add(
+            result.add(
                 TempVoucher(
                     username = userStr,
                     password = passStr,
@@ -209,6 +240,13 @@ fun VoucherPrinterScreen(
                 )
             )
         }
+        return result
+    }
+
+    LaunchedEffect(selectedMode, selectedProfile, qtyToGenerate, prefixText, usernameLength, generationTypeSeq, startSeqNum, matchPasswordWithUsername, bindMacOnFirstLogin) {
+        generatedVouchersList.clear()
+        val safeQty = qtyToGenerate.coerceIn(0, MAX_VOUCHERS_PER_BATCH)
+        generatedVouchersList.addAll(buildVoucherBatch(safeQty, occupiedUsernames()))
     }
 
     LazyVerticalGrid(
@@ -866,13 +904,67 @@ fun VoucherPrinterScreen(
                     .padding(vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Text(
+                    text = "قبل التوليد تتم مزامنة كروت الراوتر ومقارنة الأسماء تلقائياً، لذلك لن يتم إنشاء كرت مكرر.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
                 // Generate and append to server button
                 Button(
                     onClick = {
                         isGeneratingAndAdding = true
                         generationProgress = 0.0f
+                        syncStatusText = "جاري مزامنة كروت الراوتر..."
                         scope.launch {
-                            val generatedUsers = generatedVouchersList.toList()
+                            if (!viewModel.isConnected.value) {
+                                isGeneratingAndAdding = false
+                                syncStatusText = null
+                                Toast.makeText(context, "اتصل بالراوتر أولاً قبل توليد الكروت.", Toast.LENGTH_LONG).show()
+                                return@launch
+                            }
+
+                            // Always pull the current RouterOS cards first. Without
+                            // this, two operators (or two devices) could generate
+                            // the same usernames from a stale local cache.
+                            var syncError: String? = null
+                            val synced = withTimeoutOrNull(60_000L) {
+                                suspendCancellableCoroutine { continuation ->
+                                    viewModel.syncDatabase(
+                                        onProgress = { _, _, step -> syncStatusText = step },
+                                        onComplete = {
+                                            if (continuation.isActive) continuation.resume(true)
+                                        },
+                                        onError = { message ->
+                                            syncError = message
+                                            if (continuation.isActive) continuation.resume(false)
+                                        }
+                                    )
+                                }
+                            } ?: false
+
+                            if (!synced) {
+                                isGeneratingAndAdding = false
+                                syncStatusText = null
+                                Toast.makeText(
+                                    context,
+                                    syncError ?: "تعذرت مزامنة كروت الراوتر. لم يتم توليد أي كرت لتفادي التكرار.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                return@launch
+                            }
+
+                            syncStatusText = "جاري توليد أسماء غير مكررة..."
+                            val freshBatch = buildVoucherBatch(
+                                qtyToGenerate.coerceIn(0, MAX_VOUCHERS_PER_BATCH),
+                                occupiedUsernames()
+                            )
+                            // Keep the on-screen cards identical to what is about
+                            // to be sent (and later printed).
+                            generatedVouchersList.clear()
+                            generatedVouchersList.addAll(freshBatch)
+                            val generatedUsers = freshBatch
+                            syncStatusText = null
                             if (generatedUsers.isEmpty()) {
                                 isGeneratingAndAdding = false
                                 return@launch
@@ -955,7 +1047,8 @@ fun VoucherPrinterScreen(
                         CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "جاري الحفظ وإرسال الحسابات للسيرفر... (%${(generationProgress * 100).toInt()})",
+                            text = syncStatusText
+                                ?: "جاري الحفظ وإرسال الحسابات للسيرفر... (%${(generationProgress * 100).toInt()})",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
