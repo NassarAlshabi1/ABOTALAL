@@ -1,9 +1,14 @@
 package com.example.data.repository
 
+import com.example.BuildConfig
+
 internal object AiDoctorDefaults {
     const val SERVICE_NAME: String = "Kiyara Router"
     const val ENDPOINT: String = "https://kiyararouter.web.id/v1/chat/completions"
-    const val API_KEY: String = "sk-kiyara-4ff382de68682691ffd9a3734988585e8d58dc4963a9d294fa96fe83cc55a66d"
+    // Never commit provider credentials. Supplied at build time through the
+    // KIYARA_API_KEY environment variable / CI secret; empty means the user
+    // must enter their own key in AI Doctor.
+    val API_KEY: String = BuildConfig.KIYARA_KEY
     const val MODEL: String = "deepseek-ai/deepseek-v4.1-flash"
 
     data class ModelPreset(val id: String, val label: String)

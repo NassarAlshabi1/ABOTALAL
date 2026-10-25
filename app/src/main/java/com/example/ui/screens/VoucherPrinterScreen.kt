@@ -61,10 +61,18 @@ import com.example.data.model.UserManagerUser
 import com.example.ui.viewmodel.MikroTikViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.IOException
 import java.util.UUID
+
+// Prevent accidental multi-thousand-card generations that would freeze the UI
+// and saturate the router. The preview is additionally capped below.
+private const val MAX_VOUCHERS_PER_BATCH = 500
+private const val MAX_PREVIEW_VOUCHERS = 120
 
 enum class VoucherMode {
     HOTSPOT,
@@ -178,7 +186,8 @@ fun VoucherPrinterScreen(
     val secureRandom = remember { java.security.SecureRandom() }
     LaunchedEffect(selectedMode, selectedProfile, qtyToGenerate, prefixText, usernameLength, generationTypeSeq, startSeqNum, matchPasswordWithUsername, bindMacOnFirstLogin) {
         generatedVouchersList.clear()
-        for (i in 0 until qtyToGenerate) {
+        val safeQty = qtyToGenerate.coerceIn(0, MAX_VOUCHERS_PER_BATCH)
+        for (i in 0 until safeQty) {
             val userStr = if (generationTypeSeq) {
                 "$prefixText${startSeqNum + i}"
             } else {
@@ -363,7 +372,13 @@ fun VoucherPrinterScreen(
                     ) {
                         OutlinedTextField(
                             value = if (qtyToGenerate == 0) "" else qtyToGenerate.toString(),
-                            onValueChange = { qtyToGenerate = it.toIntOrNull() ?: 0 },
+                            onValueChange = { raw ->
+                                qtyToGenerate = (raw.toIntOrNull() ?: 0)
+                                    .coerceIn(0, MAX_VOUCHERS_PER_BATCH)
+                            },
+                            supportingText = {
+                                Text("الحد الأقصى $MAX_VOUCHERS_PER_BATCH كرت في الدفعة")
+                            },
                             label = { Text("عدد الكروت") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             shape = RoundedCornerShape(12.dp),
@@ -857,48 +872,76 @@ fun VoucherPrinterScreen(
                         isGeneratingAndAdding = true
                         generationProgress = 0.0f
                         scope.launch {
-                            try {
-                                val generatedUsers = generatedVouchersList.toList()
-                                var index = 0
-                                for (voucher in generatedUsers) {
-                                    delay(40) // Simulate fast responsive server transmission
-                                    if (selectedMode == VoucherMode.HOTSPOT) {
-                                        viewModel.addHotspotUser(
-                                            HotspotUser(
-                                                name = voucher.username,
-                                                password = voucher.password,
-                                                profile = voucher.profile,
-                                                comment = "توليد تلقائي بالجملة"
-                                            ),
-                                            onSuccess = {},
-                                            onError = {}
-                                        )
-                                    } else {
-                                        viewModel.addUserManagerUser(
-                                            UserManagerUser(
-                                                username = voucher.username,
-                                                password = voucher.password,
-                                                profile = voucher.profile,
-                                                downloadLimit = "unlimited"
-                                            ),
-                                            onSuccess = {},
-                                            onError = {}
-                                        )
-                                    }
-                                    index++
-                                    generationProgress = index.toFloat() / generatedUsers.size
-                                }
+                            val generatedUsers = generatedVouchersList.toList()
+                            if (generatedUsers.isEmpty()) {
+                                isGeneratingAndAdding = false
+                                return@launch
+                            }
 
+                            suspend fun sendVoucher(voucher: TempVoucher): Boolean =
+                                withTimeoutOrNull(30_000L) {
+                                    suspendCancellableCoroutine { continuation ->
+                                        val onDone = { ok: Boolean ->
+                                            if (continuation.isActive) continuation.resume(ok)
+                                        }
+                                        if (selectedMode == VoucherMode.HOTSPOT) {
+                                            viewModel.addHotspotUser(
+                                                HotspotUser(
+                                                    name = voucher.username,
+                                                    password = voucher.password,
+                                                    profile = voucher.profile,
+                                                    comment = "توليد تلقائي بالجملة"
+                                                ),
+                                                onSuccess = { onDone(true) },
+                                                onError = { onDone(false) }
+                                            )
+                                        } else {
+                                            viewModel.addUserManagerUser(
+                                                UserManagerUser(
+                                                    username = voucher.username,
+                                                    password = voucher.password,
+                                                    profile = voucher.profile,
+                                                    downloadLimit = "unlimited"
+                                                ),
+                                                onSuccess = { onDone(true) },
+                                                onError = { onDone(false) }
+                                            )
+                                        }
+                                    }
+                                } ?: false
+
+                            var successCount = 0
+                            var failureCount = 0
+                            generatedUsers.forEachIndexed { index, voucher ->
+                                val ok = try {
+                                    sendVoucher(voucher)
+                                } catch (e: Exception) {
+                                    false
+                                }
+                                if (ok) successCount++ else failureCount++
+                                generationProgress = (index + 1).toFloat() / generatedUsers.size
+                            }
+
+                            isGeneratingAndAdding = false
+                            if (successCount > 0) {
                                 viewModel.writeActivityLog(
                                     "توليد كروت آلي",
-                                    "تم توليد وإضافة عدد $qtyToGenerate كارت بنجاح لبروفايل $selectedProfile بروابط آمنة"
+                                    "تمت إضافة $successCount كارت لبروفايل $selectedProfile" +
+                                        if (failureCount > 0) " وفشل $failureCount كارت." else "."
                                 )
-                                isGeneratingAndAdding = false
-                                Toast.makeText(context, "تم حفظ وتثبيت كافة الكروت داخل روتر الأمير بنجاح!", Toast.LENGTH_LONG).show()
-                            } catch (e: Exception) {
-                                isGeneratingAndAdding = false
-                                Toast.makeText(context, "فشل الإرسال: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
                             }
+                            val message = buildString {
+                                if (successCount > 0) append("تمت إضافة $successCount كرت بنجاح.")
+                                if (failureCount > 0) {
+                                    if (successCount > 0) append(" ")
+                                    append("تعذر إضافة $failureCount كرت — راجع اتصال الراوتر وأعد المحاولة.")
+                                }
+                            }
+                            Toast.makeText(
+                                context,
+                                message.ifBlank { "لم تتم إضافة أي كرت." },
+                                if (failureCount > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                            ).show()
                         }
                     },
                     enabled = !isGeneratingAndAdding && generatedVouchersList.isNotEmpty(),
@@ -1022,7 +1065,24 @@ fun VoucherPrinterScreen(
                             )
                         }
                     } else {
-                        val pages = generatedVouchersList.chunked(limitPerPage)
+                        val previewVouchers = generatedVouchersList.take(MAX_PREVIEW_VOUCHERS)
+                        if (previewVouchers.size < generatedVouchersList.size) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 10.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer
+                            ) {
+                                Text(
+                                    text = "تتم معاينة أول ${previewVouchers.size} كرت فقط من أصل ${generatedVouchersList.size} لتفادي استهلاك الذاكرة. تُطبع كل الكروت المولدة عند التأكيد.",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
+                        }
+                        val pages = previewVouchers.chunked(limitPerPage)
                         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
                             pages.forEachIndexed { p, pageVouchers ->
                                 Column(

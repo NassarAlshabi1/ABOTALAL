@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.util.NetworkUtils
 
 @Composable
 fun SegmentedIpField(
@@ -60,7 +61,10 @@ fun SegmentedIpField(
         onIpChange("$o0.$o1.$o2.$o3")
     }
 
-    fun handlePasteOrInput(text: String, currentIndex: Int) {
+    fun handlePasteOrInput(rawText: String, currentIndex: Int) {
+        // Arabic/Persian keyboards emit U+0660..U+0669 / U+06F0..U+06F9 digits,
+        // which parse as numbers but are not valid in an IP address.
+        val text = NetworkUtils.toAsciiDigits(rawText)
         // If user pasted a full IP address like "192.168.88.1"
         if (text.contains(".")) {
             val parts = text.split(".")

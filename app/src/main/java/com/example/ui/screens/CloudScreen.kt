@@ -53,6 +53,7 @@ fun CloudScreen(
     var showUploadBackupDialog by remember { mutableStateOf(false) }
     var pingResult by remember { mutableStateOf<String?>(null) }
     var isPinging by remember { mutableStateOf(false) }
+    var backupToDelete by remember { mutableStateOf<MikroTikCloudBackup?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.fetchCloudData()
@@ -497,13 +498,7 @@ fun CloudScreen(
                                 cloudBackups.forEach { backup ->
                                     CloudBackupItem(
                                         backup = backup,
-                                        onDelete = {
-                                            viewModel.removeCloudBackup(
-                                                backup.id,
-                                                onSuccess = { Toast.makeText(context, "تم حذف النسخة السحابية", Toast.LENGTH_SHORT).show() },
-                                                onError = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
-                                            )
-                                        }
+                                        onDelete = { backupToDelete = backup }
                                     )
                                 }
                             }
@@ -665,6 +660,35 @@ fun CloudScreen(
                 TextButton(onClick = { showUploadBackupDialog = false }) {
                     Text("إلغاء", fontFamily = CairoFontFamily)
                 }
+            }
+        )
+    }
+
+    backupToDelete?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { backupToDelete = null },
+            title = { Text("حذف النسخة السحابية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "هل تريد حذف النسخة \"${backup.name}\" من سيرفر مايكروتيك السحابي؟ لا يمكن التراجع.",
+                    fontFamily = CairoFontFamily
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        backupToDelete = null
+                        viewModel.removeCloudBackup(
+                            backup.id,
+                            onSuccess = { Toast.makeText(context, "تم حذف النسخة السحابية", Toast.LENGTH_SHORT).show() },
+                            onError = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("نعم، احذف", fontFamily = CairoFontFamily) }
+            },
+            dismissButton = {
+                TextButton(onClick = { backupToDelete = null }) { Text("إلغاء", fontFamily = CairoFontFamily) }
             }
         )
     }

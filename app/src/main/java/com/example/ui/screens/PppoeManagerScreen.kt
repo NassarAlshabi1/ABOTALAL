@@ -42,6 +42,7 @@ fun PppoeManagerScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) } // 0: الكل, 1: المتصلين حالياً
     var showAddDialog by remember { mutableStateOf(false) }
+    var userToDelete by remember { mutableStateOf<PppoeUser?>(null) }
 
     fun refreshUsers() {
         isLoading = true
@@ -316,16 +317,7 @@ fun PppoeManagerScreen(
                                         horizontalArrangement = Arrangement.End
                                     ) {
                                         TextButton(
-                                            onClick = {
-                                                viewModel.deletePppoeUser(
-                                                    name = user.name,
-                                                    onSuccess = {
-                                                        Toast.makeText(context, "تم حذف المستخدم ${user.name}", Toast.LENGTH_SHORT).show()
-                                                        refreshUsers()
-                                                    },
-                                                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
-                                                )
-                                            }
+                                            onClick = { userToDelete = user }
                                         ) {
                                             Icon(Icons.Filled.DeleteOutline, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
@@ -411,4 +403,36 @@ fun PppoeManagerScreen(
             }
         )
     }
+    userToDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { userToDelete = null },
+            title = { Text("حذف حساب PPPoE", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "سيتم حذف المستخدم \"${target.name}\" نهائياً من الراوتر. لا يمكن التراجع.",
+                    fontFamily = CairoFontFamily
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        userToDelete = null
+                        viewModel.deletePppoeUser(
+                            name = target.name,
+                            onSuccess = {
+                                Toast.makeText(context, "تم حذف المستخدم ${target.name}", Toast.LENGTH_SHORT).show()
+                                refreshUsers()
+                            },
+                            onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("نعم، احذف", fontFamily = CairoFontFamily) }
+            },
+            dismissButton = {
+                TextButton(onClick = { userToDelete = null }) { Text("إلغاء", fontFamily = CairoFontFamily) }
+            }
+        )
+    }
+
 }

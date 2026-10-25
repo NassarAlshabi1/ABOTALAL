@@ -15,6 +15,9 @@ interface RouterDao {
     @Query("SELECT * FROM router_connections WHERE id = :id LIMIT 1")
     suspend fun getConnectionById(id: Int): RouterConnection?
 
+    @Query("SELECT * FROM router_connections WHERE host = :host AND port = :port AND username = :username ORDER BY id LIMIT 1")
+    suspend fun findConnection(host: String, port: Int, username: String): RouterConnection?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertConnection(connection: RouterConnection): Long
 

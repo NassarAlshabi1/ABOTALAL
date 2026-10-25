@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,12 +70,12 @@ fun LoginScreen(
     val detectedGateway = remember { NetworkUtils.getRouterGatewayIp(context) }
 
     // Active Tab: 0 = بيانات الدخول, 1 = الراوترات المسجلة
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
     // Connection Mode: 0 = عنوان IP, 1 = كلاود Cloud, 2 = رابط Domain, 3 = L2TP VPN عن بعد
-    var connectionMode by remember { mutableIntStateOf(0) }
+    var connectionMode by rememberSaveable { mutableIntStateOf(0) }
     // Local access (IP/Cloud/Domain) is kept separate from remote L2TP access.
-    var lastLocalMode by remember { mutableIntStateOf(0) }
+    var lastLocalMode by rememberSaveable { mutableIntStateOf(0) }
     var vpnActive by remember { mutableStateOf(hasActiveVpn(context)) }
     LaunchedEffect(connectionMode) {
         if (connectionMode == 3) {
@@ -86,35 +87,36 @@ fun LoginScreen(
     }
 
     // Input States
-    var routerHost by remember { mutableStateOf(detectedGateway) }
-    var routerCloudDns by remember { mutableStateOf("") }
-    var routerDomain by remember { mutableStateOf("") }
-    var routerPort by remember { mutableStateOf("8728") }
-    var vpnServerLink by remember { mutableStateOf("") }
+    var routerHost by rememberSaveable { mutableStateOf(detectedGateway) }
+    var routerCloudDns by rememberSaveable { mutableStateOf("") }
+    var routerDomain by rememberSaveable { mutableStateOf("") }
+    var routerPort by rememberSaveable { mutableStateOf("8728") }
+    var vpnServerLink by rememberSaveable { mutableStateOf("") }
     // L2TP uses UDP 1701 only for establishing the VPN tunnel. The app logs
     // into RouterOS after the tunnel is active, so this field must be the
     // RouterOS API port, not the L2TP transport port.
-    var vpnPort by remember { mutableStateOf("8728") }
-    var routerUser by remember { mutableStateOf("") }
+    var vpnPort by rememberSaveable { mutableStateOf("8728") }
+    var routerUser by rememberSaveable { mutableStateOf("") }
     var routerPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
     // Login Options Checkboxes
-    var rememberPassword by remember { mutableStateOf(true) }
-    var syncOnLogin by remember { mutableStateOf(true) }
-    var backupUserManager by remember { mutableStateOf(false) }
-    var isAdvancedOpen by remember { mutableStateOf(false) }
+    var rememberPassword by rememberSaveable { mutableStateOf(true) }
+    var syncOnLogin by rememberSaveable { mutableStateOf(true) }
+    var backupUserManager by rememberSaveable { mutableStateOf(false) }
+    var isAdvancedOpen by rememberSaveable { mutableStateOf(false) }
 
     // Advanced fields
-    var routerCustomName by remember { mutableStateOf("") }
-    var radiusHost by remember { mutableStateOf("") }
-    var timeoutSeconds by remember { mutableStateOf("10") }
-    var useSsl by remember { mutableStateOf(false) }
+    var routerCustomName by rememberSaveable { mutableStateOf("") }
+    var radiusHost by rememberSaveable { mutableStateOf("") }
+    var timeoutSeconds by rememberSaveable { mutableStateOf("10") }
+    var useSsl by rememberSaveable { mutableStateOf(false) }
 
     // Selected router from saved list (default first or null)
-    var selectedSavedRouterId by remember { mutableStateOf<Int?>(null) }
+    var selectedSavedRouterId by rememberSaveable { mutableStateOf<Int?>(null) }
     LaunchedEffect(savedConnections) {
-        if (savedConnections.isNotEmpty() && selectedSavedRouterId == null) {
+        val selectedStillExists = savedConnections.any { it.id == selectedSavedRouterId }
+        if (savedConnections.isNotEmpty() && !selectedStillExists) {
             selectedSavedRouterId = savedConnections.first().id
         }
     }
@@ -130,6 +132,7 @@ fun LoginScreen(
         lastLocalMode = 0
         routerHost = conn.host
         routerPort = conn.port.toString()
+        routerCustomName = conn.name
         routerUser = conn.username
         routerPassword = conn.password
         useSsl = conn.useSsl
@@ -304,7 +307,7 @@ fun LoginScreen(
                                 .weight(1f)
                                 .clickable { selectedTab = 0 },
                             shape = RoundedCornerShape(12.dp),
-                            color = if (selectedTab == 0) Color(0xFF0C5A60) else Color.Transparent,
+                            color = if (selectedTab == 0) MaterialTheme.colorScheme.primary else Color.Transparent,
                             shadowElevation = if (selectedTab == 0) 3.dp else 0.dp
                         ) {
                             Row(
@@ -314,7 +317,7 @@ fun LoginScreen(
                             ) {
                                 Text(
                                     text = "بيانات الدخول",
-                                    color = if (selectedTab == 0) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (selectedTab == 0) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 14.sp,
                                     fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
                                 )
@@ -322,7 +325,7 @@ fun LoginScreen(
                                 Icon(
                                     imageVector = Icons.Filled.Login,
                                     contentDescription = null,
-                                    tint = if (selectedTab == 0) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint = if (selectedTab == 0) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -334,7 +337,7 @@ fun LoginScreen(
                                 .weight(1f)
                                 .clickable { selectedTab = 1 },
                             shape = RoundedCornerShape(12.dp),
-                            color = if (selectedTab == 1) Color(0xFF0C5A60) else Color.Transparent,
+                            color = if (selectedTab == 1) MaterialTheme.colorScheme.primary else Color.Transparent,
                             shadowElevation = if (selectedTab == 1) 3.dp else 0.dp
                         ) {
                             Row(
@@ -344,7 +347,7 @@ fun LoginScreen(
                             ) {
                                 Text(
                                     text = "الراوترات المسجلة",
-                                    color = if (selectedTab == 1) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (selectedTab == 1) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 14.sp,
                                     fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
                                 )
@@ -352,7 +355,7 @@ fun LoginScreen(
                                 Icon(
                                     imageVector = Icons.Filled.Wifi,
                                     contentDescription = null,
-                                    tint = if (selectedTab == 1) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint = if (selectedTab == 1) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -715,15 +718,18 @@ fun LoginScreen(
                                                     .forEach { (chipLabel, chipPort) ->
                                                     Surface(
                                                         shape = RoundedCornerShape(8.dp),
-                                                        color = if (vpnPort == chipPort) Color(0xFF0C5A60)
+                                                        color = if (vpnPort == chipPort) MaterialTheme.colorScheme.primary
                                                         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                                        modifier = Modifier.clickable { vpnPort = chipPort }
+                                                        modifier = Modifier.clickable {
+                                                            vpnPort = chipPort
+                                                            useSsl = chipPort == "8729"
+                                                        }
                                                     ) {
                                                         Text(
                                                             text = chipLabel,
                                                             fontSize = 10.sp,
                                                             fontWeight = FontWeight.Bold,
-                                                            color = if (vpnPort == chipPort) Color.White
+                                                            color = if (vpnPort == chipPort) MaterialTheme.colorScheme.onPrimary
                                                             else MaterialTheme.colorScheme.onSurfaceVariant,
                                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                                         )
@@ -895,19 +901,22 @@ fun LoginScreen(
                                         },
                                         modifier = Modifier.weight(1.2f),
                                         shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        ),
                                         enabled = !isConnecting
                                     ) {
                                         if (isConnecting) {
                                             CircularProgressIndicator(
                                                 modifier = Modifier.size(16.dp),
-                                                color = Color.White,
+                                                color = MaterialTheme.colorScheme.onPrimary,
                                                 strokeWidth = 2.dp
                                             )
                                         } else {
                                             Text(
                                                 text = "تسجيل الدخول",
-                                                color = Color.White,
+                                                color = MaterialTheme.colorScheme.onPrimary,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 maxLines = 1
@@ -1075,7 +1084,18 @@ fun LoginScreen(
                                             ) {
                                                 Checkbox(
                                                     checked = useSsl,
-                                                    onCheckedChange = { useSsl = it },
+                                                    onCheckedChange = { enabled ->
+                                                        useSsl = enabled
+                                                        // API-SSL (8729) and plain API (8728) are not
+                                                        // interchangeable; keep the port in sync.
+                                                        if (connectionMode == 3) {
+                                                            if (enabled && vpnPort == "8728") vpnPort = "8729"
+                                                            if (!enabled && vpnPort == "8729") vpnPort = "8728"
+                                                        } else {
+                                                            if (enabled && routerPort == "8728") routerPort = "8729"
+                                                            if (!enabled && routerPort == "8729") routerPort = "8728"
+                                                        }
+                                                    },
                                                     colors = CheckboxDefaults.colors(checkedColor = Color(0xFF0C5A60))
                                                 )
                                                 Text("تشفير SSL", fontSize = 12.sp)
@@ -1110,7 +1130,7 @@ fun LoginScreen(
                                 // Add button (+)
                                 Surface(
                                     shape = CircleShape,
-                                    color = Color(0xFF0C5A60),
+                                    color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier
                                         .size(36.dp)
                                         .clickable { showAddRouterDialog = true }
@@ -1119,7 +1139,7 @@ fun LoginScreen(
                                         Icon(
                                             imageVector = Icons.Filled.Add,
                                             contentDescription = "Add Router",
-                                            tint = Color.White,
+                                            tint = MaterialTheme.colorScheme.onPrimary,
                                             modifier = Modifier.size(20.dp)
                                         )
                                     }
@@ -1352,13 +1372,16 @@ fun LoginScreen(
                                     .weight(1f)
                                     .height(48.dp),
                                 shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
                                 enabled = !isConnecting
                             ) {
                                 if (isConnecting) {
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(18.dp),
-                                        color = Color.White,
+                                        color = MaterialTheme.colorScheme.onPrimary,
                                         strokeWidth = 2.dp
                                     )
                                 } else {
@@ -1368,7 +1391,7 @@ fun LoginScreen(
                                     ) {
                                         Text(
                                             text = "تسجيل الدخول",
-                                            color = Color.White,
+                                            color = MaterialTheme.colorScheme.onPrimary,
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Bold
                                         )
@@ -1376,7 +1399,7 @@ fun LoginScreen(
                                         Icon(
                                             imageVector = Icons.Filled.Login,
                                             contentDescription = null,
-                                            tint = Color.White,
+                                            tint = MaterialTheme.colorScheme.onPrimary,
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
@@ -1654,7 +1677,7 @@ private fun RowScope.AccessModeOption(
             .weight(1f)
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(14.dp),
-        color = if (selected) Color(0xFF0C5A60)
+        color = if (selected) MaterialTheme.colorScheme.primary
         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         border = if (selected) null
         else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
@@ -1666,7 +1689,7 @@ private fun RowScope.AccessModeOption(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(18.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
@@ -1675,13 +1698,13 @@ private fun RowScope.AccessModeOption(
                     text = title,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1
                 )
                 Text(
                     text = subtitle,
                     fontSize = 9.sp,
-                    color = if (selected) Color.White.copy(alpha = 0.85f)
+                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
@@ -1702,7 +1725,7 @@ private fun RowScope.LocalModeChip(
             .weight(1f)
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(10.dp),
-        color = if (selected) Color(0xFF0C5A60)
+        color = if (selected) MaterialTheme.colorScheme.primary
         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
         border = if (selected) null
         else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
@@ -1715,7 +1738,7 @@ private fun RowScope.LocalModeChip(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(14.dp)
             )
             Spacer(modifier = Modifier.width(3.dp))
@@ -1723,7 +1746,7 @@ private fun RowScope.LocalModeChip(
                 text = label,
                 fontSize = 10.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1
             )
         }

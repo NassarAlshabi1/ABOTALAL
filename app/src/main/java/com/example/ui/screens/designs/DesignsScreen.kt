@@ -127,6 +127,7 @@ fun DesignsScreen(
     var onColorSelectedCallback by remember { mutableStateOf<(String) -> Unit>({}) }
     
     var showBuiltInBgDialog by remember { mutableStateOf(false) }
+    var showDeleteDesignConfirm by remember { mutableStateOf(false) }
 
     // Launchers for image picking
     val bgImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -1010,11 +1011,7 @@ fun DesignsScreen(
                             
                             Button(
                                 onClick = {
-                                    selectedDesign?.let { design ->
-                                        deleteStoredBackgroundIfOwned(context, design.bgUrl)
-                                        viewModel.deleteDesign(design.id)
-                                        Toast.makeText(context, "تم حذف التصميم", Toast.LENGTH_SHORT).show()
-                                    }
+                                    if (selectedDesign != null) showDeleteDesignConfirm = true
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp),
@@ -1149,6 +1146,46 @@ fun DesignsScreen(
                     }
                 }
                 showBuiltInBgDialog = false
+            }
+        )
+    }
+
+    if (showDeleteDesignConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDesignConfirm = false },
+            title = {
+                Text(
+                    text = "حذف التصميم",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "هل تريد حذف التصميم \"${selectedDesign?.name.orEmpty()}\" نهائياً؟ لا يمكن التراجع عن هذه العملية.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteDesignConfirm = false
+                        selectedDesign?.let { design ->
+                            deleteStoredBackgroundIfOwned(context, design.bgUrl)
+                            viewModel.deleteDesign(design.id)
+                            Toast.makeText(context, "تم حذف التصميم", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("نعم، احذف", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDesignConfirm = false }) {
+                    Text("إلغاء")
+                }
             }
         )
     }

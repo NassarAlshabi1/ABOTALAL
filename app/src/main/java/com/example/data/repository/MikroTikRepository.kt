@@ -935,6 +935,16 @@ class MikroTikRepository(
         lastIfaceCounters.clear()
         _currentConnection.value = null
         _routerStats.value = null
+        // Drop every router-scoped snapshot so the next login can never render
+        // the previous router's users, profiles, interfaces, or cloud data.
+        _hotspotUsers.value = emptyList()
+        _activeHotspot.value = emptyList()
+        _hotspotProfiles.value = emptyList()
+        _userManagerUsers.value = emptyList()
+        _userManagerProfiles.value = emptyList()
+        _interfaces.value = emptyList()
+        _cloudInfo.value = MikroTikCloudInfo()
+        _cloudBackups.value = emptyList()
         insertActivityLog("تسجيل الخروج", "تم فصل الاتصال بالراوتر", "")
     }
 

@@ -37,6 +37,7 @@ jobs:
           STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          KIYARA_API_KEY: ${{ secrets.KIYARA_API_KEY }}
         run: ./gradlew :app:assembleRelease --stacktrace
 
       - name: Publish Release APK

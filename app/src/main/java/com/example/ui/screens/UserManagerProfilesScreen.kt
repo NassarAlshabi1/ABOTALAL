@@ -901,11 +901,17 @@ fun ProfileEditDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf("4 ايام", "5 ايام", "10 ايام", "1 اسبوع", "4 اسبوع").forEach { opt ->
+                    listOf(
+                        "4d" to "4 أيام",
+                        "5d" to "5 أيام",
+                        "10d" to "10 أيام",
+                        "1w" to "أسبوع",
+                        "4w" to "4 أسابيع"
+                    ).forEach { (duration, label) ->
                         FilterChip(
-                            selected = validity == opt,
-                            onClick = { validity = opt },
-                            label = { Text(opt, fontFamily = CairoFontFamily, fontSize = 10.sp) }
+                            selected = validity == duration,
+                            onClick = { validity = duration },
+                            label = { Text(label, fontFamily = CairoFontFamily, fontSize = 10.sp) }
                         )
                     }
                 }

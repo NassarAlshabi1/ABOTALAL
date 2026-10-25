@@ -19,6 +19,13 @@ android {
     versionName = "1.0.16"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Provider key is injected at build time (never committed). Empty means the
+    // user must enter their own key in AI Doctor.
+    val kiyaraApiKey = (System.getenv("KIYARA_API_KEY") ?: "")
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+    buildConfigField("String", "KIYARA_KEY", "\"$kiyaraApiKey\"")
   }
 
   signingConfigs {

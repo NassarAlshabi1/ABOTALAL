@@ -27,6 +27,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -523,6 +525,7 @@ private fun BotConnectionTab(
     onInstallScriptOnRouter: () -> Unit,
     onAddNewBot: () -> Unit
 ) {
+    var tokenVisible by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -620,12 +623,22 @@ private fun BotConnectionTab(
                         label = { Text("توكن البوت (API Token)", fontFamily = CairoFontFamily) },
                         placeholder = { Text("1234567890:AAHq...") },
                         leadingIcon = { Icon(Icons.Filled.Key, contentDescription = null) },
+                        visualTransformation = if (tokenVisible) VisualTransformation.None
+                        else PasswordVisualTransformation(),
                         trailingIcon = {
-                            IconButton(onClick = onTestConnection) {
-                                if (isTestingConnection) {
-                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                } else {
-                                    Icon(Icons.Filled.NetworkCheck, contentDescription = "فحص التوكن", tint = Color(0xFF0088CC))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { tokenVisible = !tokenVisible }) {
+                                    Icon(
+                                        imageVector = if (tokenVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        contentDescription = if (tokenVisible) "إخفاء التوكن" else "إظهار التوكن"
+                                    )
+                                }
+                                IconButton(onClick = onTestConnection) {
+                                    if (isTestingConnection) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(Icons.Filled.NetworkCheck, contentDescription = "فحص التوكن", tint = Color(0xFF0088CC))
+                                    }
                                 }
                             }
                         },

@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -37,12 +38,19 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
     
     val repository = MikroTikRepository(application, logDao, database.cacheDao())
 
-    // Theme Mode (Default is Light mode as requested: "وطبعاً اجعل الوضع الافتراضي اجعله الوضع الفاتح")
-    private val _isDarkMode = MutableStateFlow(false)
+    private val uiPreferences =
+        application.getSharedPreferences("netcraft_ui_preferences", Context.MODE_PRIVATE)
+
+    // Theme Mode (Default is Light mode) persisted across launches.
+    private val _isDarkMode = MutableStateFlow(
+        uiPreferences.getBoolean("dark_mode", false)
+    )
     val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
 
     fun toggleDarkMode() {
-        _isDarkMode.value = !_isDarkMode.value
+        val newValue = !_isDarkMode.value
+        _isDarkMode.value = newValue
+        uiPreferences.edit().putBoolean("dark_mode", newValue).apply()
     }
 
     // Local saved router list (observed reactively) — passwords are stored encrypted
@@ -401,8 +409,23 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
                 _connectionError.value = "تعذر حفظ الراوتر: لم يتوفر التشفير الآمن على هذا الجهاز؛ لم تُحفظ كلمة المرور."
                 return@launch
             }
+            val existing = routerDao.findConnection(
+                host = connection.host.trim(),
+                port = connection.port,
+                username = connection.username.trim()
+            )
+            // Reuse the saved row instead of appending a duplicate on every login.
+            // Keep a previously customized name when the caller only supplied the
+            // generated "راوتر <host>" label.
+            val finalName = when {
+                existing == null -> connection.name
+                connection.name.startsWith("راوتر ") -> existing.name
+                else -> connection.name
+            }
             routerDao.insertConnection(
                 connection.copy(
+                    id = existing?.id ?: connection.id,
+                    name = finalName,
                     password = encryptedPassword,
                     lastConnected = System.currentTimeMillis()
                 )

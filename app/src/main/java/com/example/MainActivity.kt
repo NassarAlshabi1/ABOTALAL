@@ -1,5 +1,6 @@
 package com.example
 
+import android.app.Activity
 import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,10 +29,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.components.AppExitConfirmationDialog
 import com.example.ui.screens.*
@@ -53,6 +57,18 @@ class MainActivity : ComponentActivity() {
             val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
             MyApplicationTheme(darkTheme = isDarkMode) {
+                val view = LocalView.current
+                if (!view.isInEditMode) {
+                    SideEffect {
+                        (view.context as? Activity)?.window?.let { window ->
+                            WindowCompat.getInsetsController(window, view).apply {
+                                // The app header is always a dark teal gradient.
+                                isAppearanceLightStatusBars = false
+                                isAppearanceLightNavigationBars = !isDarkMode
+                            }
+                        }
+                    }
+                }
                 MainAppNavigation(viewModel)
             }
         }
@@ -68,9 +84,10 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
     val userManagerProfiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
     val hotspotProfiles by viewModel.hotspotProfiles.collectAsStateWithLifecycle()
 
-    var showSplash by remember { mutableStateOf(true) }
-    // 0 = الرئيسية, 1 = الخدمات, 2 = التقارير, 3 = الملف
-    var currentTab by remember { mutableIntStateOf(0) }
+    var showSplash by rememberSaveable { mutableStateOf(true) }
+    // 0 = الرئيسية, 1 = الهوتسبوت, 2 = السجل, 3 = الشبكة, 4 = اليوزرمانجر,
+    // 5 = التصاميم, 6 = الأدوات, 7 = الكلاود
+    var currentTab by rememberSaveable { mutableIntStateOf(0) }
 
     // Dialogs for Header Actions
     var showPowerDialog by remember { mutableStateOf(false) }
@@ -336,8 +353,8 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                 .fillMaxWidth()
                                 .shadow(elevation = 10.dp, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)),
                             shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-                            color = if (isDarkMode) Color(0xFF1E293B) else Color.White,
-                            border = BorderStroke(1.dp, if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0))
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -357,7 +374,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                 ) {
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
-                                        color = if (isDarkMode) Color(0xFF0C5A60).copy(alpha = 0.6f) else Color(0xFFE0F2FE)
+                                        color = MaterialTheme.colorScheme.primaryContainer
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -367,7 +384,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                             Icon(
                                                 imageVector = Icons.Filled.Home,
                                                 contentDescription = "الرئيسية",
-                                                tint = if (isDarkMode) Color(0xFF38BDF8) else Color(0xFF0C5A60),
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                                 modifier = Modifier.size(20.dp)
                                             )
                                             Text(
@@ -375,7 +392,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                                 fontFamily = CairoFontFamily,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = if (isDarkMode) Color(0xFF38BDF8) else Color(0xFF0C5A60)
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
                                             )
                                         }
                                     }
@@ -384,7 +401,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                             .padding(top = 2.dp)
                                             .size(5.dp)
                                             .clip(CircleShape)
-                                            .background(if (isDarkMode) Color(0xFF38BDF8) else Color(0xFF0284C7))
+                                            .background(MaterialTheme.colorScheme.primary)
                                     )
                                 }
 
@@ -399,7 +416,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                     Icon(
                                         imageVector = Icons.Filled.Wifi,
                                         contentDescription = "الهوتسبوت",
-                                        tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(22.dp)
                                     )
                                     Text(
@@ -407,7 +424,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         fontFamily = CairoFontFamily,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
 
@@ -422,7 +439,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                     Icon(
                                         imageVector = Icons.Filled.Build,
                                         contentDescription = "الأدوات",
-                                        tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(22.dp)
                                     )
                                     Text(
@@ -430,7 +447,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         fontFamily = CairoFontFamily,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
 
@@ -445,7 +462,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                     Icon(
                                         imageVector = Icons.Filled.Router,
                                         contentDescription = "الشبكة",
-                                        tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(22.dp)
                                     )
                                     Text(
@@ -453,7 +470,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         fontFamily = CairoFontFamily,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }

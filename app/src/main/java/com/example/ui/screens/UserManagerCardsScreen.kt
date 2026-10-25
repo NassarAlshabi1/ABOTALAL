@@ -63,6 +63,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -168,7 +169,9 @@ fun UserManagerCardsScreen(
     var routerSearchResults by remember { mutableStateOf<List<UserManagerUser>?>(null) }
     LaunchedEffect(searchQuery, searchFieldType, isConnected) {
         val q = searchQuery.trim()
-        if (q.length < 2 || !isConnected) {
+        // Status is a local-only derived field; asking the router for it would
+        // always return no rows and block the local filter.
+        if (q.length < 2 || !isConnected || searchFieldType == "الحالة") {
             routerSearchResults = null
             return@LaunchedEffect
         }
@@ -196,6 +199,8 @@ fun UserManagerCardsScreen(
     var selectedCardForDetails by remember { mutableStateOf<UserManagerUser?>(null) }
     var cardToRenew by remember { mutableStateOf<UserManagerUser?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showCleanExpiredConfirmDialog by remember { mutableStateOf(false) }
+    var showExportCredentialsConfirmDialog by remember { mutableStateOf(false) }
     var userToDelete by remember { mutableStateOf<String?>(null) }
 
     // Rotation animation for refresh
@@ -251,6 +256,9 @@ fun UserManagerCardsScreen(
     // user never lands on an out-of-range page after narrowing the list.
     LaunchedEffect(filteredUsers.size, selectedScope, searchQuery, searchFieldType) {
         if (currentPage != 1) currentPage = 1
+        // Never keep a selection that was made under a different filter; bulk
+        // actions must only touch what the operator can currently see.
+        if (selectedUsernames.value.isNotEmpty()) selectedUsernames.value = emptySet()
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -742,6 +750,10 @@ fun UserManagerCardsScreen(
                                             animationSpec = tween(durationMillis = 600, easing = LinearEasing)
                                         )
                                     }
+                                    // Drop stale selections so a later bulk action cannot
+                                    // touch cards that are no longer visible/fresh.
+                                    selectedUsernames.value = emptySet()
+                                    viewModel.refreshAllData()
                                     Toast.makeText(context, "جاري تحديث الكروت من السيرفر...", Toast.LENGTH_SHORT).show()
                                 }
                                 .testTag("cards_refresh_button")
@@ -801,21 +813,14 @@ fun UserManagerCardsScreen(
                                 DropdownMenuItem(
                                     text = { Text("تنظيف الكروت المنتهية", fontFamily = CairoFontFamily, fontSize = 12.sp) },
                                     onClick = {
-                                        viewModel.cleanExpiredUserManagerUsers(
-                                            onSuccess = { count ->
-                                                Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
-                                            },
-                                            onError = { err ->
-                                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
-                                            }
-                                        )
+                                        showCleanExpiredConfirmDialog = true
                                         overflowMenuExpanded = false
                                     }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("تصدير ملف إكسيل (.csv)", fontFamily = CairoFontFamily, fontSize = 12.sp) },
                                     onClick = {
-                                        exportCardsCsv(context, filteredUsers)
+                                        showExportCredentialsConfirmDialog = true
                                         overflowMenuExpanded = false
                                     }
                                 )
@@ -1435,6 +1440,81 @@ fun UserManagerCardsScreen(
             }
         )
     }
+
+    // -------------------------------------------------------------
+    // Dialog 4: Clean Expired Cards Confirmation
+    // -------------------------------------------------------------
+    if (showCleanExpiredConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showCleanExpiredConfirmDialog = false },
+            title = {
+                Text(
+                    text = "تأكيد تنظيف الكروت المنتهية",
+                    fontFamily = CairoFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "سيتم حذف جميع الكروت المنتهية نهائياً من اليوزرمانجر والراوتر. لا يمكن التراجع عن هذه العملية.",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCleanExpiredConfirmDialog = false
+                        viewModel.cleanExpiredUserManagerUsers(
+                            onSuccess = { count ->
+                                Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
+                            },
+                            onError = { err ->
+                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("نعم، نظّف", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCleanExpiredConfirmDialog = false }) {
+                    Text("إلغاء", fontFamily = CairoFontFamily)
+                }
+            }
+        )
+    }
+
+    if (showExportCredentialsConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportCredentialsConfirmDialog = false },
+            title = { Text("تصدير كلمات المرور", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "سيتم إنشاء ملف CSV يحتوي أسماء المستخدمين وكلمات المرور بشكل صريح ومشاركته. أي تطبيق تستخدمه لفتح الملف سيتمكن من قراءة كلمات المرور. هل تريد المتابعة؟",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showExportCredentialsConfirmDialog = false
+                        exportCardsCsv(context, filteredUsers)
+                    }
+                ) { Text("نعم، صدّر", fontFamily = CairoFontFamily) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportCredentialsConfirmDialog = false }) {
+                    Text("إلغاء", fontFamily = CairoFontFamily)
+                }
+            }
+        )
+    }
 }
 
 /**
@@ -1918,8 +1998,11 @@ fun RenewCardDialog(
 
                         Button(
                             onClick = {
-                                onConfirmRenew(selectedProfileName, resetUptime)
+                                if (selectedProfileName.isNotBlank()) {
+                                    onConfirmRenew(selectedProfileName, resetUptime)
+                                }
                             },
+                            enabled = selectedProfileName.isNotBlank(),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.weight(1.5f)
@@ -1981,7 +2064,14 @@ private fun exportCardsCsv(context: Context, users: List<UserManagerUser>) {
 
 private fun sanitize(input: String?): String {
     if (input == null) return ""
-    var s = input.replace("\"", "\"\"")
+    var s = input
+    // Neutralize spreadsheet formula injection before CSV quoting.
+    if (s.startsWith("=") || s.startsWith("+") || s.startsWith("-") ||
+        s.startsWith("@") || s.startsWith("\t") || s.startsWith("\r")
+    ) {
+        s = "'$s"
+    }
+    s = s.replace("\"", "\"\"")
     if (s.contains(",") || s.contains("\n") || s.contains("\"")) {
         s = "\"$s\""
     }

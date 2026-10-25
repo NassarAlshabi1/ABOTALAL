@@ -309,7 +309,12 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "رجوع", tint = Color.White)
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0C5A60))
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    )
                 )
             }
         ) { padding ->
@@ -629,7 +634,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                                 else Text("اختبار الموصل", fontFamily = CairoFontFamily)
                             }
                             connectorStatus?.let {
-                                Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("استجاب رابط الموصل HTTP") || it.startsWith("تعذر")) warningColor else successColor)
+                                Text(it, fontFamily = CairoFontFamily, fontSize = 12.sp, color = if (it.startsWith("تعذر")) warningColor else successColor)
                             }
                         }
 
