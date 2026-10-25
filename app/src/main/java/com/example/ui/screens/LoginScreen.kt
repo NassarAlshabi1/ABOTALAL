@@ -1704,7 +1704,7 @@ private fun RowScope.AccessModeOption(
                 Text(
                     text = subtitle,
                     fontSize = 9.sp,
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
