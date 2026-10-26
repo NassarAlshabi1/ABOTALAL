@@ -190,7 +190,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // tracking (they were always rebuilt destructively), so only
                     // those two legacy versions keep the destructive fallback.
                     .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
-                    .fallbackToDestructiveMigrationFrom(1, 2)
+                    .fallbackToDestructiveMigrationFrom(false, 1, 2)
                     .build()
                 INSTANCE = instance
                 instance

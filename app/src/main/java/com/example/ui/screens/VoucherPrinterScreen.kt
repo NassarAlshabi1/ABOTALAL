@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.core.graphics.toColorInt
+
 import java.util.Locale
 import android.content.Context
 import android.graphics.Bitmap
@@ -401,7 +403,7 @@ fun VoucherPrinterScreen(
                         }
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Horizontal Inputs
                     Row(
@@ -593,7 +595,7 @@ fun VoucherPrinterScreen(
                         )
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // LIVE CARD PREVIEW CONTAINER - High Graphic Polish
                     Text("المعاينة والتصميم المباشر (تعديل دقة وموضع الخطوط):", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
@@ -1597,13 +1599,13 @@ class VoucherPDFPrinter(
                             }
                             when (theme) {
                                 CardDesignTheme.CLASSIC_BLUE -> {
-                                    localPaint.color = AndroidColor.parseColor("#1B2A4A")
+                                    localPaint.color = ("#1B2A4A").toColorInt()
                                 }
                                 CardDesignTheme.ROYAL_GOLD -> {
-                                    localPaint.color = AndroidColor.parseColor("#1e160a")
+                                    localPaint.color = ("#1e160a").toColorInt()
                                 }
                                 CardDesignTheme.SHINY_PURPLE -> {
-                                    localPaint.color = AndroidColor.parseColor("#4A154B")
+                                    localPaint.color = ("#4A154B").toColorInt()
                                 }
                                 CardDesignTheme.MINIMAL_WHITE -> {
                                     localPaint.color = AndroidColor.WHITE
@@ -1635,7 +1637,7 @@ class VoucherPDFPrinter(
                         val paintUserLabel = AndroidPaint().apply {
                             isAntiAlias = true
                             textAlign = AndroidPaint.Align.CENTER
-                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else AndroidColor.parseColor("#DCDCDC")
+                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else ("#DCDCDC").toColorInt()
                             textSize = 7f
                         }
                         canvas.drawText("USER:", uX, uY - 3f, paintUserLabel)
@@ -1656,7 +1658,7 @@ class VoucherPDFPrinter(
                             val paintPassLabel = AndroidPaint().apply {
                                 isAntiAlias = true
                                 textAlign = AndroidPaint.Align.CENTER
-                                color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else AndroidColor.parseColor("#DCDCDC")
+                                color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else ("#DCDCDC").toColorInt()
                                 textSize = 7f
                             }
                             canvas.drawText("PASS:", pX, pY - 3f, paintPassLabel)
@@ -1677,7 +1679,7 @@ class VoucherPDFPrinter(
                         val paintDetailsVal = AndroidPaint().apply {
                             isAntiAlias = true
                             textAlign = AndroidPaint.Align.CENTER
-                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.parseColor("#1B2A4A") else AndroidColor.WHITE
+                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) ("#1B2A4A").toColorInt() else AndroidColor.WHITE
                             textSize = sizeDetails.toFloat()
                             isFakeBoldText = true
                         }

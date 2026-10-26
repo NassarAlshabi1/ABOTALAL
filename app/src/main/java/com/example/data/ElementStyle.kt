@@ -1,5 +1,7 @@
 package com.example.data
 
+import androidx.core.graphics.toColorInt
+
 import android.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -18,7 +20,7 @@ data class ElementStyle(
     val text: String = ""
 ) {
     fun getColorInt(): Int = try {
-        Color.parseColor(color)
+        (color).toColorInt()
     } catch (_: Exception) {
         Color.BLACK
     }

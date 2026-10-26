@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.core.net.toUri
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -364,7 +366,7 @@ fun CloudScreen(
                                 onClick = {
                                     if (cloudInfo.dnsName.isNotBlank()) {
                                         val url = "http://${cloudInfo.dnsName}"
-                                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                        val browserIntent = Intent(Intent.ACTION_VIEW, (url).toUri())
                                         context.startActivity(browserIntent)
                                     } else {
                                         Toast.makeText(context, "اسم الدومين غير متوفر", Toast.LENGTH_SHORT).show()

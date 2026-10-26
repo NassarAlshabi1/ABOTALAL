@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -175,7 +179,7 @@ fun UserManagerScreen(
             UserManagerMenuItem(
                 id = 3,
                 title = "إدارة الباقات",
-                icon = Icons.Filled.Assignment,
+                icon = Icons.AutoMirrored.Filled.Assignment,
                 gradientColors = listOf(Color(0xFFD6EFE5), Color(0xFFB6E3D1)),
                 iconTint = Color(0xFF059669)
             ),
@@ -270,7 +274,7 @@ fun UserManagerScreen(
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
-                                            imageVector = Icons.Filled.ArrowForward,
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                                             contentDescription = "الرجوع",
                                             tint = Color(0xFF0C5A60),
                                             modifier = Modifier.size(18.dp)
@@ -350,7 +354,7 @@ fun UserManagerScreen(
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
-                                            imageVector = Icons.Filled.ExitToApp,
+                                            imageVector = Icons.AutoMirrored.Filled.ExitToApp,
                                             contentDescription = "تسجيل الخروج",
                                             tint = Color(0xFFEA580C),
                                             modifier = Modifier.size(18.dp)

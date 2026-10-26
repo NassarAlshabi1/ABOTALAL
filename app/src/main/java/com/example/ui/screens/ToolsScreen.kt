@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.ListAlt
+import androidx.compose.material.icons.automirrored.filled.AltRoute
+import androidx.compose.material.icons.automirrored.filled.Rule
+
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
@@ -356,7 +361,7 @@ fun ToolsScreen(
                                             ) {
                                                 Box(contentAlignment = Alignment.Center) {
                                                     Icon(
-                                                        Icons.Filled.Send,
+                                                        Icons.AutoMirrored.Filled.Send,
                                                         contentDescription = null,
                                                         tint = Color(0xFF0088CC),
                                                         modifier = Modifier.size(24.dp)
@@ -440,7 +445,7 @@ fun ToolsScreen(
                         item {
                             ToolsGrid(
                                 items = listOf(
-                                    ToolGridItem("logs", "سجلات النظام (Log)", Icons.Filled.ListAlt, Color(0xFF0284C7)),
+                                    ToolGridItem("logs", "سجلات النظام (Log)", Icons.AutoMirrored.Filled.ListAlt, Color(0xFF0284C7)),
                                     ToolGridItem("users", "المستخدمين والصلاحيات", Icons.Filled.AdminPanelSettings, Color(0xFF10B981)),
                                     ToolGridItem("reboot", "إعادة تشغيل (Reboot)", Icons.Filled.RestartAlt, Color(0xFFEF4444)),
                                     ToolGridItem("backup", "نسخ احتياطي (Backup)", Icons.Filled.CloudUpload, Color(0xFF8B5CF6))
@@ -468,7 +473,7 @@ fun ToolsScreen(
                                     ToolGridItem("dhcp_server", "خادم DHCP", Icons.Filled.Router, Color(0xFF0C5A60)),
                                     ToolGridItem("ip_addresses", "IP Addresses", Icons.Filled.PinDrop, Color(0xFF2563EB)),
                                     ToolGridItem("dhcp_leases", "DHCP (Leases)", Icons.Filled.Devices, Color(0xFF10B981)),
-                                    ToolGridItem("dhcp_relay", "المزود للخدمه DHCP", Icons.Filled.AltRoute, Color(0xFF6366F1)),
+                                    ToolGridItem("dhcp_relay", "المزود للخدمه DHCP", Icons.AutoMirrored.Filled.AltRoute, Color(0xFF6366F1)),
                                     ToolGridItem("nat", "NAT", Icons.Filled.SwapHoriz, Color(0xFFF59E0B)),
                                     ToolGridItem("dns", "خادم DNS", Icons.Filled.Language, Color(0xFF06B6D4)),
                                     ToolGridItem("address_lists", "مجموعات العناوين", Icons.Filled.Ballot, Color(0xFFEC4899)),
@@ -491,7 +496,7 @@ fun ToolsScreen(
                         item {
                             ToolsGrid(
                                 items = listOf(
-                                    ToolGridItem("nat", "قواعد NAT", Icons.Filled.Rule, Color(0xFFD97706)),
+                                    ToolGridItem("nat", "قواعد NAT", Icons.AutoMirrored.Filled.Rule, Color(0xFFD97706)),
                                     ToolGridItem("firewall_filter", "قواعد التصفية", Icons.Filled.FilterList, Color(0xFFDC2626)),
                                     ToolGridItem("blocked_sites", "المواقع المحجوبة", Icons.Filled.Block, Color(0xFFB91C1C)),
                                     ToolGridItem("mangle", "قواعد Mangle", Icons.Filled.Tune, Color(0xFF7C3AED)),

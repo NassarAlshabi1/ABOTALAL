@@ -1,5 +1,10 @@
 package com.example.ui.components
 
+import androidx.compose.material.icons.automirrored.filled.Chat
+
+import androidx.core.net.toUri
+import androidx.core.content.edit
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -43,7 +48,7 @@ fun WelcomeCreditsDialog(
     Dialog(
         onDismissRequest = {
             if (dontShowAgain) {
-                sharedPrefs.edit().putBoolean("pref_dont_show_credits", true).apply()
+                sharedPrefs.edit { putBoolean("pref_dont_show_credits", true) }
             }
             onDismiss()
         },
@@ -289,7 +294,7 @@ fun WelcomeCreditsDialog(
                     Button(
                         onClick = {
                             if (dontShowAgain) {
-                                sharedPrefs.edit().putBoolean("pref_dont_show_credits", true).apply()
+                                sharedPrefs.edit { putBoolean("pref_dont_show_credits", true) }
                             }
                             onDismiss()
                         },
@@ -358,7 +363,7 @@ private fun ContactRow(
                         .clickable {
                             try {
                                 val intent = Intent(Intent.ACTION_DIAL).apply {
-                                    data = Uri.parse("tel:$phone")
+                                    data = ("tel:$phone").toUri()
                                 }
                                 context.startActivity(intent)
                             } catch (e: Exception) {
@@ -397,7 +402,7 @@ private fun ContactRow(
                             try {
                                 val url = "https://wa.me/967$phone"
                                 val intent = Intent(Intent.ACTION_VIEW).apply {
-                                    data = Uri.parse(url)
+                                    data = (url).toUri()
                                 }
                                 context.startActivity(intent)
                             } catch (e: Exception) {
@@ -411,7 +416,7 @@ private fun ContactRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Chat,
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "واتساب",
                             tint = Color(0xFF16A34A),
                             modifier = Modifier.size(16.dp)

@@ -1,5 +1,10 @@
 package com.example.ui.components
 
+import androidx.compose.material.icons.automirrored.filled.Chat
+
+import androidx.core.net.toUri
+import androidx.core.content.edit
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -41,7 +46,7 @@ fun DeveloperWelcomeDialog(
 
     fun dialNumber(number: String) {
         try {
-            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number"))
+            val intent = Intent(Intent.ACTION_DIAL, ("tel:$number").toUri())
             context.startActivity(intent)
         } catch (e: Exception) {
             Toast.makeText(context, "تعذر فتح لوحة الاتصال: $number", Toast.LENGTH_SHORT).show()
@@ -51,7 +56,7 @@ fun DeveloperWelcomeDialog(
     fun openWhatsApp(number: String) {
         try {
             val cleanNumber = if (number.startsWith("7")) "967$number" else number
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$cleanNumber"))
+            val intent = Intent(Intent.ACTION_VIEW, ("https://wa.me/$cleanNumber").toUri())
             context.startActivity(intent)
         } catch (e: Exception) {
             Toast.makeText(context, "تعذر فتح واتساب: $number", Toast.LENGTH_SHORT).show()
@@ -61,7 +66,7 @@ fun DeveloperWelcomeDialog(
     Dialog(
         onDismissRequest = {
             if (dontShowAgain) {
-                sharedPrefs.edit().putBoolean("dont_show_developer_welcome", true).apply()
+                sharedPrefs.edit { putBoolean("dont_show_developer_welcome", true) }
             }
             onDismiss()
         },
@@ -297,7 +302,7 @@ fun DeveloperWelcomeDialog(
                     Button(
                         onClick = {
                             if (dontShowAgain) {
-                                sharedPrefs.edit().putBoolean("dont_show_developer_welcome", true).apply()
+                                sharedPrefs.edit { putBoolean("dont_show_developer_welcome", true) }
                             }
                             onDismiss()
                         },
@@ -405,7 +410,7 @@ private fun ContactRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Chat,
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "واتساب",
                             tint = Color.White,
                             modifier = Modifier.size(15.dp)

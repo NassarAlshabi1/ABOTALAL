@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.core.content.edit
+
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -169,21 +171,21 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
             settingsMessageIsError = true
             return false
         }
-        prefs.edit()
-            .putString("service_name", serviceName.trim())
-            .putString("api_key_enc", encryptedKey)
-            .putString("api_endpoint", apiEndpoint.trim())
-            .putString("connector_url", connectorUrl.trim())
-            .putString("model_name", modelName.trim())
-            .putString("additional_headers_enc", encryptedHeaders)
-            .apply()
+        prefs.edit {
+            putString("service_name", serviceName.trim())
+            putString("api_key_enc", encryptedKey)
+            putString("api_endpoint", apiEndpoint.trim())
+            putString("connector_url", connectorUrl.trim())
+            putString("model_name", modelName.trim())
+            putString("additional_headers_enc", encryptedHeaders)
+        }
         settingsMessage = "تم حفظ الإعدادات؛ API Key والترويسات الإضافية محفوظة مشفّرة على الجهاز."
         settingsMessageIsError = false
         return true
     }
 
     fun restoreDefaults() {
-        prefs.edit().clear().apply()
+        prefs.edit { clear() }
         serviceName = AiDoctorDefaults.SERVICE_NAME
         apiKey = AiDoctorDefaults.API_KEY
         apiEndpoint = AiDoctorDefaults.ENDPOINT
@@ -620,7 +622,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                                     checked = allowFixes,
                                     onCheckedChange = {
                                         allowFixes = it
-                                        prefs.edit().putBoolean("allow_fixes", it).apply()
+                                        prefs.edit { putBoolean("allow_fixes", it) }
                                     }
                                 )
                             }

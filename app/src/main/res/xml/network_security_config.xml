@@ -7,8 +7,9 @@
     manager. Router HTTPS endpoints with self-signed certs must use a properly
     imported certificate, or the plain native API ports 8728/8729.
 -->
-<network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- MikroTik REST may be HTTP-only; this broad policy is a documented product requirement. -->
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

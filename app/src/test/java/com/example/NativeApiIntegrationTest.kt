@@ -200,10 +200,14 @@ class NativeApiIntegrationTest {
     @Test
     fun `connectToRouter uses native api on a custom port and loads data`() = runBlocking {
         val server = MockMikroTikServer()
+        var repositoryForCleanup: MikroTikRepository? = null
+        var databaseForCleanup: AppDatabase? = null
         try {
             val context = ApplicationProvider.getApplicationContext<Context>()
             val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+            databaseForCleanup = db
             val repo = MikroTikRepository(context, db.activityLogDao(), db.cacheDao())
+            repositoryForCleanup = repo
 
             var success = false
             var error: String? = null
@@ -236,28 +240,46 @@ class NativeApiIntegrationTest {
             assertEquals("test_card1", repo.hotspotUsers.value.firstOrNull()?.name)
             assertEquals("default", repo.hotspotProfiles.value.firstOrNull()?.name)
         } finally {
+            repositoryForCleanup?.shutdown()
+            databaseForCleanup?.close()
             server.shutdown()
         }
     }
 
-    private fun connectRepoToMock(server: MockMikroTikServer): MikroTikRepository {
+    private class RepositoryFixture(
+        val repository: MikroTikRepository,
+        private val database: AppDatabase
+    ) {
+        fun close() {
+            repository.shutdown()
+            database.close()
+        }
+    }
+
+    private fun connectRepoToMock(server: MockMikroTikServer): RepositoryFixture {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
         val repo = MikroTikRepository(context, db.activityLogDao(), db.cacheDao())
-        var success = false
-        var error: String? = null
-        repo.connectToRouter(
-            RouterConnection(name = "test", host = "127.0.0.1", port = server.port, username = "admin", password = "1234"),
-            onSuccess = { success = true },
-            onError = { error = it }
-        )
-        val deadline = System.currentTimeMillis() + 15_000
-        while ((!success && error == null) && System.currentTimeMillis() < deadline) {
-            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-            Thread.sleep(100)
+        try {
+            var success = false
+            var error: String? = null
+            repo.connectToRouter(
+                RouterConnection(name = "test", host = "127.0.0.1", port = server.port, username = "admin", password = "1234"),
+                onSuccess = { success = true },
+                onError = { error = it }
+            )
+            val deadline = System.currentTimeMillis() + 15_000
+            while ((!success && error == null) && System.currentTimeMillis() < deadline) {
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+                Thread.sleep(100)
+            }
+            assertTrue("connectToRouter failed: $error", success)
+            return RepositoryFixture(repo, db)
+        } catch (failure: Throwable) {
+            repo.shutdown()
+            db.close()
+            throw failure
         }
-        assertTrue("connectToRouter failed: $error", success)
-        return repo
     }
 
     private fun awaitUmUsers(repo: MikroTikRepository) {
@@ -271,8 +293,11 @@ class NativeApiIntegrationTest {
     @Test
     fun `card renewal updates profile and resets uptime`() = runBlocking {
         val server = MockMikroTikServer()
+        var fixture: RepositoryFixture? = null
         try {
-            val repo = connectRepoToMock(server)
+            val connected = connectRepoToMock(server)
+            fixture = connected
+            val repo = connected.repository
             awaitUmUsers(repo)
 
             val target = repo.userManagerUsers.value.first()
@@ -297,6 +322,7 @@ class NativeApiIntegrationTest {
             assertTrue(updated?.active == true)
             assertEquals("0s", updated?.uptimeUsed)
         } finally {
+            fixture?.close()
             server.shutdown()
         }
     }
@@ -304,8 +330,11 @@ class NativeApiIntegrationTest {
     @Test
     fun `bulk toggle deactivates selected user-manager cards`() = runBlocking {
         val server = MockMikroTikServer()
+        var fixture: RepositoryFixture? = null
         try {
-            val repo = connectRepoToMock(server)
+            val connected = connectRepoToMock(server)
+            fixture = connected
+            val repo = connected.repository
             awaitUmUsers(repo)
 
             val usernames = repo.userManagerUsers.value.take(2).map { it.username }
@@ -323,6 +352,7 @@ class NativeApiIntegrationTest {
                 assertFalse(it.active)
             }
         } finally {
+            fixture?.close()
             server.shutdown()
         }
     }

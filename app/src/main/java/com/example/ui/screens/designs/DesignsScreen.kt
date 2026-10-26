@@ -1,5 +1,8 @@
 package com.example.ui.screens.designs
 
+import androidx.core.graphics.toColorInt
+import androidx.core.net.toUri
+
 import java.util.Locale
 import android.content.Context
 import android.content.Intent
@@ -462,9 +465,7 @@ fun DesignsScreen(
                                 OutlinedButton(
                                     onClick = {
                                         val design = activeDesign
-                                        if (design == null) {
-                                            Toast.makeText(context, "أنشئ أو اختر تصميماً أولاً", Toast.LENGTH_SHORT).show()
-                                        } else if (design.userManagerPackageId.isNullOrBlank() && design.hotspotPackageId.isNullOrBlank()) {
+                                        if (design.userManagerPackageId.isNullOrBlank() && design.hotspotPackageId.isNullOrBlank()) {
                                             Toast.makeText(context, "اختر باقة User Manager أو Hotspot قبل إضافة الخلفية", Toast.LENGTH_LONG).show()
                                         } else {
                                             bgImagePicker.launch("image/*")
@@ -1125,7 +1126,7 @@ fun DesignsScreen(
                     coroutineScope.launch {
                         try {
                             val storedImage = withContext(Dispatchers.IO) {
-                                copyBackgroundToAppStorage(context, Uri.parse(bgStyle), design.id)
+                                copyBackgroundToAppStorage(context, (bgStyle).toUri(), design.id)
                             }
                             if (storedImage != null) {
                                 deleteStoredBackgroundIfOwned(context, design.bgUrl)
@@ -1216,7 +1217,7 @@ private fun copyBackgroundToAppStorage(context: Context, source: Uri, designId: 
 private fun deleteStoredBackgroundIfOwned(context: Context, url: String?) {
     if (url.isNullOrBlank()) return
     try {
-        val uri = Uri.parse(url)
+        val uri = (url).toUri()
         val file = if (uri.scheme == "file") File(uri.path ?: "") else null
         val ownedDirectory = File(context.filesDir, "card_backgrounds").canonicalFile
         if (file != null && file.exists() && file.canonicalFile.parentFile == ownedDirectory) {
@@ -1403,7 +1404,7 @@ fun ColorField(
     modifier: Modifier = Modifier
 ) {
     val color = try {
-        Color(android.graphics.Color.parseColor(value))
+        Color((value).toColorInt())
     } catch (_: Exception) {
         Color.Black
     }
@@ -1764,7 +1765,7 @@ fun CardPreview(
         Canvas(modifier = Modifier.fillMaxSize()) {
             if (design.borderOn) {
                 val borderColor = try {
-                    Color(android.graphics.Color.parseColor(design.borderColor))
+                    Color((design.borderColor).toColorInt())
                 } catch (_: Exception) {
                     Color.Black
                 }
@@ -1789,7 +1790,7 @@ fun CardPreview(
                     top = with(density) { mmToPx(design.title.y).dp }
                 ),
                 fontSize = maxOf(6f, design.title.fontSize * width / (cardWidthMm * 2.83465f)).sp,
-                color = try { Color(android.graphics.Color.parseColor(design.title.color)) } catch (_: Exception) { Color.Black },
+                color = try { Color((design.title.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.title.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1807,7 +1808,7 @@ fun CardPreview(
                 textAlign = TextAlign.Left,
                 maxLines = 1,
                 softWrap = false,
-                color = try { Color(android.graphics.Color.parseColor(design.username.color)) } catch (_: Exception) { Color.Black },
+                color = try { Color((design.username.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.username.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1821,7 +1822,7 @@ fun CardPreview(
                     top = with(density) { mmToPx(design.password.y).dp }
                 ),
                 fontSize = maxOf(7f, design.password.fontSize * width / (cardWidthMm * 2.83465f)).sp,
-                color = try { Color(android.graphics.Color.parseColor(design.password.color)) } catch (_: Exception) { Color.Black },
+                color = try { Color((design.password.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.password.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1835,7 +1836,7 @@ fun CardPreview(
                     top = with(density) { mmToPx(design.price.y).dp }
                 ),
                 fontSize = maxOf(6f, design.price.fontSize * width / (cardWidthMm * 2.83465f)).sp,
-                color = try { Color(android.graphics.Color.parseColor(design.price.color)) } catch (_: Exception) { Color.Black },
+                color = try { Color((design.price.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.price.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1849,7 +1850,7 @@ fun CardPreview(
                     top = with(density) { mmToPx(design.serial.y).dp }
                 ),
                 fontSize = maxOf(5f, design.serial.fontSize * width / (cardWidthMm * 2.83465f)).sp,
-                color = try { Color(android.graphics.Color.parseColor(design.serial.color)) } catch (_: Exception) { Color.Black },
+                color = try { Color((design.serial.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.serial.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1863,7 +1864,7 @@ fun CardPreview(
                     top = with(density) { mmToPx(design.payment.y).dp }
                 ),
                 fontSize = maxOf(5f, design.payment.fontSize * width / (cardWidthMm * 2.83465f)).sp,
-                color = try { Color(android.graphics.Color.parseColor(design.payment.color)) } catch (_: Exception) { Color.Black }
+                color = try { Color((design.payment.color).toColorInt()) } catch (_: Exception) { Color.Black }
             )
         }
 
@@ -1876,7 +1877,7 @@ fun CardPreview(
                     top = with(density) { mmToPx(design.pos.y).dp }
                 ),
                 fontSize = maxOf(5f, design.pos.fontSize * width / (cardWidthMm * 2.83465f)).sp,
-                color = try { Color(android.graphics.Color.parseColor(design.pos.color)) } catch (_: Exception) { Color.Black }
+                color = try { Color((design.pos.color).toColorInt()) } catch (_: Exception) { Color.Black }
             )
         }
         
@@ -1965,7 +1966,7 @@ fun ColorPickerDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     presetColors.forEach { hex ->
-                        val col = try { Color(android.graphics.Color.parseColor(hex)) } catch (_: Exception) { Color.Black }
+                        val col = try { Color((hex).toColorInt()) } catch (_: Exception) { Color.Black }
                         Box(
                             modifier = Modifier
                                 .size(36.dp)
@@ -2129,7 +2130,7 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                 // الإطار
                 if (design.borderOn) {
                     paintBorder.strokeWidth = max(0.5f, design.borderSize * mmToPt)
-                    paintBorder.color = try { android.graphics.Color.parseColor(design.borderColor) } catch (_: Exception) { android.graphics.Color.BLACK }
+                    paintBorder.color = try { (design.borderColor).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
                     canvas.drawRect(left, top, right, bottom, paintBorder)
                 }
 
@@ -2138,7 +2139,7 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                 // العنوان
                 if (design.title.show && design.title.text.isNotEmpty()) {
                     paintText.textSize = design.title.fontSize * 0.8f
-                    paintText.color = try { android.graphics.Color.parseColor(design.title.color) } catch (_: Exception) { android.graphics.Color.BLACK }
+                    paintText.color = try { (design.title.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
                     canvas.drawText(design.title.text, left + design.title.x * mmToPt, top + design.title.y * mmToPt + paintText.textSize, paintText)
                 }
 
@@ -2146,28 +2147,28 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                 if (design.showUsername && design.username.show) {
                     paintText.textSize = design.username.fontSize * 0.8f
                     paintText.isFakeBoldText = design.username.bold
-                    paintText.color = try { android.graphics.Color.parseColor(design.username.color) } catch (_: Exception) { android.graphics.Color.BLACK }
+                    paintText.color = try { (design.username.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
                     canvas.drawText(PREVIEW_CARD_NUMBER, left + design.username.x * mmToPt, top + design.username.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // كلمة المرور
                 if (design.password.show) {
                     paintText.textSize = design.password.fontSize * 0.8f
-                    paintText.color = try { android.graphics.Color.parseColor(design.password.color) } catch (_: Exception) { android.graphics.Color.BLACK }
+                    paintText.color = try { (design.password.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
                     canvas.drawText("", left + design.password.x * mmToPt, top + design.password.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // السعر
                 if (design.price.show) {
                     paintText.textSize = design.price.fontSize * 0.8f
-                    paintText.color = try { android.graphics.Color.parseColor(design.price.color) } catch (_: Exception) { android.graphics.Color.BLACK }
+                    paintText.color = try { (design.price.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
                     canvas.drawText(design.price.text, left + design.price.x * mmToPt, top + design.price.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // الرقم التسلسلي
                 if (design.serial.show) {
                     paintText.textSize = design.serial.fontSize * 0.8f
-                    paintText.color = try { android.graphics.Color.parseColor(design.serial.color) } catch (_: Exception) { android.graphics.Color.BLACK }
+                    paintText.color = try { (design.serial.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
                     canvas.drawText(design.serial.text, left + design.serial.x * mmToPt, top + design.serial.y * mmToPt + paintText.textSize, paintText)
                 }
 
@@ -2215,7 +2216,7 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
 private fun loadStoredBackgroundBitmap(context: Context, design: Design): Bitmap? {
     if (!design.bgOn || design.bgUrl.isNullOrBlank()) return null
     return try {
-        val uri = Uri.parse(design.bgUrl)
+        val uri = (design.bgUrl).toUri()
         when (uri.scheme) {
             "file" -> BitmapFactory.decodeFile(uri.path)
             "content" -> context.contentResolver.openInputStream(uri)?.use { input ->

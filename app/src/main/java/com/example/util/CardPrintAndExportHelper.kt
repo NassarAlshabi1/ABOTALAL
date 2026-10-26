@@ -1,5 +1,10 @@
 package com.example.util
 
+import androidx.core.content.edit
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.toColorInt
+import androidx.core.net.toUri
+
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -254,14 +259,14 @@ object CardPrintAndExportHelper {
 
     fun saveTemplatesList(context: Context, list: List<String>) {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putStringSet("all_templates_set", list.toSet()).apply()
+        prefs.edit { putStringSet("all_templates_set", list.toSet()) }
     }
 
     /** Persist a saved card design as the exact template consumed by voucher printing. */
     fun saveDesignAsTemplate(context: Context, design: Design) {
         val backgroundPath = design.bgUrl?.let { raw ->
             runCatching {
-                val uri = Uri.parse(raw)
+                val uri = (raw).toUri()
                 if (uri.scheme == "file") uri.path else null
             }.getOrNull()
         }
@@ -342,11 +347,11 @@ object CardPrintAndExportHelper {
         saveTemplatesList(context, current)
         // Also clear template specific keys — exact sanitized prefix match so a
         // template named "A" never deletes the keys of "A_1"/"A 1" as well.
-        val editor = prefs.edit()
         val keyPrefix = prefKey(templateName) + "_"
         val allKeys = prefs.all.keys.filter { it.startsWith(keyPrefix) }
-        allKeys.forEach { editor.remove(it) }
-        editor.apply()
+        prefs.edit {
+            allKeys.forEach { remove(it) }
+        }
     }
 
     /** SharedPreferences key for a template name — sanitized so spaces/dots in
@@ -516,143 +521,143 @@ object CardPrintAndExportHelper {
             saveTemplatesList(context, templates)
         }
 
-        prefs.edit()
-            .putInt("${p}_columns", config.columns)
-            .putInt("${p}_rows", config.rows)
-            .putBoolean("${p}_auto_fit", config.autoFitA4)
-            .putString("${p}_orientation", config.pageOrientation)
-            .putFloat("${p}_h_margin", config.horizontalMarginMm)
-            .putFloat("${p}_v_margin", config.verticalMarginMm)
-            .putFloat("${p}_page_margin_mm", config.pageMarginMm)
-            .putFloat("${p}_card_w_mm", config.cardWidthMm)
-            .putFloat("${p}_card_h_mm", config.cardHeightMm)
-            .putString("${p}_um_pkg_id", config.userManagerPackageId)
-            .putString("${p}_hs_pkg_id", config.hotspotPackageId)
-            .putBoolean("${p}_bg_enabled", config.backgroundEnabled)
-            .putString("${p}_bg_preset", config.bgPreset)
-            .putString("${p}_custom_bg_path", config.customBgPath)
-            .putBoolean("${p}_border_enabled", config.borderEnabled)
-            .putFloat("${p}_border_size", config.borderSizeMm)
-            .putString("${p}_border_color", config.borderColorHex)
-            .putBoolean("${p}_page_note_enabled", config.pageNoteEnabled)
-            .putString("${p}_page_note_text", config.pageNoteText)
-            .putFloat("${p}_page_note_x", config.pageNoteX)
-            .putFloat("${p}_page_note_y", config.pageNoteY)
-            .putFloat("${p}_page_note_size", config.pageNoteSize)
-            .putString("${p}_page_note_color", config.pageNoteColorHex)
-            .putBoolean("${p}_page_num_enabled", config.pageNumberingEnabled)
-            .putString("${p}_page_num_text", config.pageNumberingText)
-            .putInt("${p}_digits", config.digits)
-            .putString("${p}_charset", config.charset)
-            .putFloat("${p}_move_step", config.moveStep)
-            .putBoolean("${p}_show_username", config.showUsername)
+        prefs.edit {
+            putInt("${p}_columns", config.columns)
+            putInt("${p}_rows", config.rows)
+            putBoolean("${p}_auto_fit", config.autoFitA4)
+            putString("${p}_orientation", config.pageOrientation)
+            putFloat("${p}_h_margin", config.horizontalMarginMm)
+            putFloat("${p}_v_margin", config.verticalMarginMm)
+            putFloat("${p}_page_margin_mm", config.pageMarginMm)
+            putFloat("${p}_card_w_mm", config.cardWidthMm)
+            putFloat("${p}_card_h_mm", config.cardHeightMm)
+            putString("${p}_um_pkg_id", config.userManagerPackageId)
+            putString("${p}_hs_pkg_id", config.hotspotPackageId)
+            putBoolean("${p}_bg_enabled", config.backgroundEnabled)
+            putString("${p}_bg_preset", config.bgPreset)
+            putString("${p}_custom_bg_path", config.customBgPath)
+            putBoolean("${p}_border_enabled", config.borderEnabled)
+            putFloat("${p}_border_size", config.borderSizeMm)
+            putString("${p}_border_color", config.borderColorHex)
+            putBoolean("${p}_page_note_enabled", config.pageNoteEnabled)
+            putString("${p}_page_note_text", config.pageNoteText)
+            putFloat("${p}_page_note_x", config.pageNoteX)
+            putFloat("${p}_page_note_y", config.pageNoteY)
+            putFloat("${p}_page_note_size", config.pageNoteSize)
+            putString("${p}_page_note_color", config.pageNoteColorHex)
+            putBoolean("${p}_page_num_enabled", config.pageNumberingEnabled)
+            putString("${p}_page_num_text", config.pageNumberingText)
+            putInt("${p}_digits", config.digits)
+            putString("${p}_charset", config.charset)
+            putFloat("${p}_move_step", config.moveStep)
+            putBoolean("${p}_show_username", config.showUsername)
             // Username
-            .putBoolean("${p}_user_vis", config.usernameConfig.visible)
-            .putBoolean("${p}_user_title_on", config.usernameConfig.showTitle)
-            .putString("${p}_user_title_text", config.usernameConfig.titleText)
-            .putFloat("${p}_user_x_mm", config.usernameConfig.xMm)
-            .putFloat("${p}_user_y_mm", config.usernameConfig.yMm)
-            .putFloat("${p}_user_size", config.usernameConfig.fontSize)
-            .putBoolean("${p}_user_bold", config.usernameConfig.isBold)
-            .putBoolean("${p}_user_italic", config.usernameConfig.isItalic)
-            .putString("${p}_user_color", config.usernameConfig.colorHex)
-            .putString("${p}_user_align", config.usernameConfig.alignment)
+            putBoolean("${p}_user_vis", config.usernameConfig.visible)
+            putBoolean("${p}_user_title_on", config.usernameConfig.showTitle)
+            putString("${p}_user_title_text", config.usernameConfig.titleText)
+            putFloat("${p}_user_x_mm", config.usernameConfig.xMm)
+            putFloat("${p}_user_y_mm", config.usernameConfig.yMm)
+            putFloat("${p}_user_size", config.usernameConfig.fontSize)
+            putBoolean("${p}_user_bold", config.usernameConfig.isBold)
+            putBoolean("${p}_user_italic", config.usernameConfig.isItalic)
+            putString("${p}_user_color", config.usernameConfig.colorHex)
+            putString("${p}_user_align", config.usernameConfig.alignment)
             // Title
-            .putBoolean("${p}_title_vis", config.titleConfig.visible)
-            .putString("${p}_title_text", config.titleConfig.titleText)
-            .putFloat("${p}_title_x_mm", config.titleConfig.xMm)
-            .putFloat("${p}_title_y_mm", config.titleConfig.yMm)
-            .putFloat("${p}_title_size", config.titleConfig.fontSize)
-            .putBoolean("${p}_title_bold", config.titleConfig.isBold)
-            .putBoolean("${p}_title_italic", config.titleConfig.isItalic)
-            .putString("${p}_title_color", config.titleConfig.colorHex)
-            .putString("${p}_title_align", config.titleConfig.alignment)
+            putBoolean("${p}_title_vis", config.titleConfig.visible)
+            putString("${p}_title_text", config.titleConfig.titleText)
+            putFloat("${p}_title_x_mm", config.titleConfig.xMm)
+            putFloat("${p}_title_y_mm", config.titleConfig.yMm)
+            putFloat("${p}_title_size", config.titleConfig.fontSize)
+            putBoolean("${p}_title_bold", config.titleConfig.isBold)
+            putBoolean("${p}_title_italic", config.titleConfig.isItalic)
+            putString("${p}_title_color", config.titleConfig.colorHex)
+            putString("${p}_title_align", config.titleConfig.alignment)
             // Password
-            .putBoolean("${p}_pass_vis", config.passwordConfig.visible)
-            .putBoolean("${p}_pass_title_on", config.passwordConfig.showTitle)
-            .putString("${p}_pass_title_text", config.passwordConfig.titleText)
-            .putFloat("${p}_pass_x_mm", config.passwordConfig.xMm)
-            .putFloat("${p}_pass_y_mm", config.passwordConfig.yMm)
-            .putFloat("${p}_pass_size", config.passwordConfig.fontSize)
-            .putBoolean("${p}_pass_bold", config.passwordConfig.isBold)
-            .putBoolean("${p}_pass_italic", config.passwordConfig.isItalic)
-            .putString("${p}_pass_color", config.passwordConfig.colorHex)
-            .putString("${p}_pass_align", config.passwordConfig.alignment)
+            putBoolean("${p}_pass_vis", config.passwordConfig.visible)
+            putBoolean("${p}_pass_title_on", config.passwordConfig.showTitle)
+            putString("${p}_pass_title_text", config.passwordConfig.titleText)
+            putFloat("${p}_pass_x_mm", config.passwordConfig.xMm)
+            putFloat("${p}_pass_y_mm", config.passwordConfig.yMm)
+            putFloat("${p}_pass_size", config.passwordConfig.fontSize)
+            putBoolean("${p}_pass_bold", config.passwordConfig.isBold)
+            putBoolean("${p}_pass_italic", config.passwordConfig.isItalic)
+            putString("${p}_pass_color", config.passwordConfig.colorHex)
+            putString("${p}_pass_align", config.passwordConfig.alignment)
             // Price
-            .putBoolean("${p}_price_vis", config.priceConfig.visible)
-            .putBoolean("${p}_price_title_on", config.priceConfig.showTitle)
-            .putString("${p}_price_title_text", config.priceConfig.titleText)
-            .putFloat("${p}_price_x_mm", config.priceConfig.xMm)
-            .putFloat("${p}_price_y_mm", config.priceConfig.yMm)
-            .putFloat("${p}_price_size", config.priceConfig.fontSize)
-            .putBoolean("${p}_price_bold", config.priceConfig.isBold)
-            .putBoolean("${p}_price_italic", config.priceConfig.isItalic)
-            .putString("${p}_price_color", config.priceConfig.colorHex)
-            .putString("${p}_price_align", config.priceConfig.alignment)
+            putBoolean("${p}_price_vis", config.priceConfig.visible)
+            putBoolean("${p}_price_title_on", config.priceConfig.showTitle)
+            putString("${p}_price_title_text", config.priceConfig.titleText)
+            putFloat("${p}_price_x_mm", config.priceConfig.xMm)
+            putFloat("${p}_price_y_mm", config.priceConfig.yMm)
+            putFloat("${p}_price_size", config.priceConfig.fontSize)
+            putBoolean("${p}_price_bold", config.priceConfig.isBold)
+            putBoolean("${p}_price_italic", config.priceConfig.isItalic)
+            putString("${p}_price_color", config.priceConfig.colorHex)
+            putString("${p}_price_align", config.priceConfig.alignment)
             // Profile
-            .putBoolean("${p}_prof_vis", config.profileConfig.visible)
-            .putBoolean("${p}_prof_title_on", config.profileConfig.showTitle)
-            .putString("${p}_prof_title_text", config.profileConfig.titleText)
-            .putFloat("${p}_prof_x_mm", config.profileConfig.xMm)
-            .putFloat("${p}_prof_y_mm", config.profileConfig.yMm)
-            .putFloat("${p}_prof_size", config.profileConfig.fontSize)
-            .putBoolean("${p}_prof_bold", config.profileConfig.isBold)
-            .putBoolean("${p}_prof_italic", config.profileConfig.isItalic)
-            .putString("${p}_prof_color", config.profileConfig.colorHex)
-            .putString("${p}_prof_align", config.profileConfig.alignment)
+            putBoolean("${p}_prof_vis", config.profileConfig.visible)
+            putBoolean("${p}_prof_title_on", config.profileConfig.showTitle)
+            putString("${p}_prof_title_text", config.profileConfig.titleText)
+            putFloat("${p}_prof_x_mm", config.profileConfig.xMm)
+            putFloat("${p}_prof_y_mm", config.profileConfig.yMm)
+            putFloat("${p}_prof_size", config.profileConfig.fontSize)
+            putBoolean("${p}_prof_bold", config.profileConfig.isBold)
+            putBoolean("${p}_prof_italic", config.profileConfig.isItalic)
+            putString("${p}_prof_color", config.profileConfig.colorHex)
+            putString("${p}_prof_align", config.profileConfig.alignment)
             // Payment
-            .putBoolean("${p}_payment_vis", config.paymentConfig.visible)
-            .putString("${p}_payment_text", config.paymentConfig.titleText)
-            .putFloat("${p}_payment_x_mm", config.paymentConfig.xMm)
-            .putFloat("${p}_payment_y_mm", config.paymentConfig.yMm)
-            .putFloat("${p}_payment_size", config.paymentConfig.fontSize)
-            .putBoolean("${p}_payment_bold", config.paymentConfig.isBold)
-            .putBoolean("${p}_payment_italic", config.paymentConfig.isItalic)
-            .putString("${p}_payment_color", config.paymentConfig.colorHex)
-            .putString("${p}_payment_align", config.paymentConfig.alignment)
+            putBoolean("${p}_payment_vis", config.paymentConfig.visible)
+            putString("${p}_payment_text", config.paymentConfig.titleText)
+            putFloat("${p}_payment_x_mm", config.paymentConfig.xMm)
+            putFloat("${p}_payment_y_mm", config.paymentConfig.yMm)
+            putFloat("${p}_payment_size", config.paymentConfig.fontSize)
+            putBoolean("${p}_payment_bold", config.paymentConfig.isBold)
+            putBoolean("${p}_payment_italic", config.paymentConfig.isItalic)
+            putString("${p}_payment_color", config.paymentConfig.colorHex)
+            putString("${p}_payment_align", config.paymentConfig.alignment)
             // Serial
-            .putBoolean("${p}_ser_vis", config.serialConfig.visible)
-            .putString("${p}_ser_title_text", config.serialConfig.titleText)
-            .putFloat("${p}_ser_x_mm", config.serialConfig.xMm)
-            .putFloat("${p}_ser_y_mm", config.serialConfig.yMm)
-            .putFloat("${p}_ser_size", config.serialConfig.fontSize)
-            .putBoolean("${p}_ser_bold", config.serialConfig.isBold)
-            .putBoolean("${p}_ser_italic", config.serialConfig.isItalic)
-            .putString("${p}_ser_color", config.serialConfig.colorHex)
-            .putString("${p}_ser_align", config.serialConfig.alignment)
+            putBoolean("${p}_ser_vis", config.serialConfig.visible)
+            putString("${p}_ser_title_text", config.serialConfig.titleText)
+            putFloat("${p}_ser_x_mm", config.serialConfig.xMm)
+            putFloat("${p}_ser_y_mm", config.serialConfig.yMm)
+            putFloat("${p}_ser_size", config.serialConfig.fontSize)
+            putBoolean("${p}_ser_bold", config.serialConfig.isBold)
+            putBoolean("${p}_ser_italic", config.serialConfig.isItalic)
+            putString("${p}_ser_color", config.serialConfig.colorHex)
+            putString("${p}_ser_align", config.serialConfig.alignment)
             // POS
-            .putBoolean("${p}_pos_vis", config.posConfig.visible)
-            .putString("${p}_pos_text", config.posConfig.titleText)
-            .putFloat("${p}_pos_x_mm", config.posConfig.xMm)
-            .putFloat("${p}_pos_y_mm", config.posConfig.yMm)
-            .putFloat("${p}_pos_size", config.posConfig.fontSize)
-            .putBoolean("${p}_pos_bold", config.posConfig.isBold)
-            .putBoolean("${p}_pos_italic", config.posConfig.isItalic)
-            .putString("${p}_pos_color", config.posConfig.colorHex)
-            .putString("${p}_pos_align", config.posConfig.alignment)
+            putBoolean("${p}_pos_vis", config.posConfig.visible)
+            putString("${p}_pos_text", config.posConfig.titleText)
+            putFloat("${p}_pos_x_mm", config.posConfig.xMm)
+            putFloat("${p}_pos_y_mm", config.posConfig.yMm)
+            putFloat("${p}_pos_size", config.posConfig.fontSize)
+            putBoolean("${p}_pos_bold", config.posConfig.isBold)
+            putBoolean("${p}_pos_italic", config.posConfig.isItalic)
+            putString("${p}_pos_color", config.posConfig.colorHex)
+            putString("${p}_pos_align", config.posConfig.alignment)
             // Barcode
-            .putBoolean("${p}_barcode_vis", config.barcodeConfig.visible)
-            .putFloat("${p}_barcode_x_mm", config.barcodeConfig.xMm)
-            .putFloat("${p}_barcode_y_mm", config.barcodeConfig.yMm)
-            .putFloat("${p}_barcode_w_mm", config.barcodeConfig.widthMm)
-            .putFloat("${p}_barcode_h_mm", config.barcodeConfig.heightMm)
-            .putString("${p}_barcode_type", config.barcodeConfig.barcodeType)
-            .putFloat("${p}_barcode_padding", config.barcodeConfig.paddingMm)
+            putBoolean("${p}_barcode_vis", config.barcodeConfig.visible)
+            putFloat("${p}_barcode_x_mm", config.barcodeConfig.xMm)
+            putFloat("${p}_barcode_y_mm", config.barcodeConfig.yMm)
+            putFloat("${p}_barcode_w_mm", config.barcodeConfig.widthMm)
+            putFloat("${p}_barcode_h_mm", config.barcodeConfig.heightMm)
+            putString("${p}_barcode_type", config.barcodeConfig.barcodeType)
+            putFloat("${p}_barcode_padding", config.barcodeConfig.paddingMm)
             // Logo
-            .putBoolean("${p}_logo_vis", config.logoConfig.visible)
-            .putFloat("${p}_logo_x_mm", config.logoConfig.xMm)
-            .putFloat("${p}_logo_y_mm", config.logoConfig.yMm)
-            .putFloat("${p}_logo_w_mm", config.logoConfig.widthMm)
-            .putFloat("${p}_logo_h_mm", config.logoConfig.heightMm)
-            .putString("${p}_logo_url", config.logoUrl)
-            .apply()
+            putBoolean("${p}_logo_vis", config.logoConfig.visible)
+            putFloat("${p}_logo_x_mm", config.logoConfig.xMm)
+            putFloat("${p}_logo_y_mm", config.logoConfig.yMm)
+            putFloat("${p}_logo_w_mm", config.logoConfig.widthMm)
+            putFloat("${p}_logo_h_mm", config.logoConfig.heightMm)
+            putString("${p}_logo_url", config.logoUrl)
+        }
 
         // Also sync profile link if package specified
         if (config.userManagerPackageId.isNotEmpty()) {
-            prefs.edit().putString("${config.userManagerPackageId}_template", config.templateName).apply()
+            prefs.edit { putString("${config.userManagerPackageId}_template", config.templateName) }
         }
         if (config.hotspotPackageId.isNotEmpty()) {
-            prefs.edit().putString("${config.hotspotPackageId}_template", config.templateName).apply()
+            prefs.edit { putString("${config.hotspotPackageId}_template", config.templateName) }
         }
     }
 
@@ -751,7 +756,7 @@ object CardPrintAndExportHelper {
             for (i in 0 until pages) {
                 val page = renderer.openPage(i)
                 val scale = 2
-                val bmp = Bitmap.createBitmap(page.width * scale, page.height * scale, Bitmap.Config.ARGB_8888)
+                val bmp = createBitmap(page.width * scale, page.height * scale, Bitmap.Config.ARGB_8888)
                 val canvas = android.graphics.Canvas(bmp)
                 canvas.drawColor(android.graphics.Color.WHITE)
                 page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
@@ -1401,7 +1406,7 @@ object CardPrintAndExportHelper {
                 isAntiAlias = true
                 textAlign = AndroidPaint.Align.CENTER
                 textSize = config.pageNoteSize.coerceIn(6f, 16f)
-                color = parseColorSafe(config.pageNoteColorHex, AndroidColor.parseColor("#0C5A60"))
+                color = parseColorSafe(config.pageNoteColorHex, ("#0C5A60").toColorInt())
                 isFakeBoldText = true
             }
             val noteY = pageHeight - 8f
@@ -1414,7 +1419,7 @@ object CardPrintAndExportHelper {
                 isAntiAlias = true
                 textAlign = AndroidPaint.Align.RIGHT
                 textSize = 8f
-                color = AndroidColor.parseColor("#64748B")
+                color = ("#64748B").toColorInt()
             }
             val numText = config.pageNumberingText
                 .replace("{page}", "${pageIndex + 1}")
@@ -1507,7 +1512,7 @@ object CardPrintAndExportHelper {
                     else -> AndroidPaint.Align.RIGHT
                 }
                 textSize = elem.fontSize.coerceIn(5f, 26f)
-                color = parseColorSafe(elem.colorHex, AndroidColor.parseColor("#0F172A"))
+                color = parseColorSafe(elem.colorHex, ("#0F172A").toColorInt())
                 isFakeBoldText = elem.isBold
             }
             val posX = when (elem.alignment) {
@@ -1530,7 +1535,7 @@ object CardPrintAndExportHelper {
                     else -> AndroidPaint.Align.RIGHT
                 }
                 textSize = uCfg.fontSize.coerceIn(6f, 24f)
-                color = parseColorSafe(uCfg.colorHex, AndroidColor.parseColor("#0F172A"))
+                color = parseColorSafe(uCfg.colorHex, ("#0F172A").toColorInt())
                 isFakeBoldText = uCfg.isBold
             }
             val posX = when (uCfg.alignment) {
@@ -1714,7 +1719,7 @@ object CardPrintAndExportHelper {
         val bgPaint = AndroidPaint().apply {
             isAntiAlias = true
             style = AndroidPaint.Style.FILL
-            color = AndroidColor.parseColor("#0C2340") // Deep Luxury Navy
+            color = ("#0C2340").toColorInt() // Deep Luxury Navy
         }
         canvas.drawRoundRect(cardRect, 3f, 3f, bgPaint)
 
@@ -1754,8 +1759,8 @@ object CardPrintAndExportHelper {
 
     private fun parseColorSafe(hex: String, fallback: Int): Int {
         return try {
-            if (hex.startsWith("#")) AndroidColor.parseColor(hex)
-            else AndroidColor.parseColor("#$hex")
+            if (hex.startsWith("#")) (hex).toColorInt()
+            else ("#$hex").toColorInt()
         } catch (_: Exception) {
             fallback
         }

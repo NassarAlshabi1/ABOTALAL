@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -1491,7 +1492,7 @@ class MikroTikRepository(
 
                         val bodyStr = payload.toString()
                         val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
-                        val reqBody = okhttp3.RequestBody.create(mediaType, bodyStr)
+                        val reqBody = bodyStr.toRequestBody(mediaType)
 
                         val req = Request.Builder()
                             .url("$protocol://${conn.host}:${conn.port}/rest/ip/hotspot/user")
@@ -1631,7 +1632,7 @@ class MikroTikRepository(
                         }
 
                         val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
-                        val reqBody = okhttp3.RequestBody.create(mediaType, payload.toString())
+                        val reqBody = payload.toString().toRequestBody(mediaType)
 
                         val req = Request.Builder()
                             .url("$protocol://${conn.host}:${conn.port}/rest/ip/hotspot/user/profile")
@@ -2793,7 +2794,7 @@ class MikroTikRepository(
                     try {
                         val req = Request.Builder()
                             .url("$protocol://${conn.host}:${conn.port}/rest/system/reboot")
-                            .post(okhttp3.RequestBody.create(null, ByteArray(0)))
+                            .post(ByteArray(0).toRequestBody(null))
                             .header("Authorization", credential)
                             .build()
 
@@ -2858,7 +2859,7 @@ class MikroTikRepository(
                     try {
                         val req = Request.Builder()
                             .url("$protocol://${conn.host}:${conn.port}/rest/system/shutdown")
-                            .post(okhttp3.RequestBody.create(null, ByteArray(0)))
+                            .post(ByteArray(0).toRequestBody(null))
                             .header("Authorization", credential)
                             .build()
 

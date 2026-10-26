@@ -1,5 +1,8 @@
 package com.example.util
 
+import androidx.core.net.toUri
+import androidx.core.content.edit
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -183,9 +186,9 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
     fun openBotInTelegram(context: Context, botUsername: String) {
         val cleanUser = botUsername.removePrefix("@").trim()
         val uri = if (cleanUser.isNotBlank()) {
-            Uri.parse("https://t.me/$cleanUser")
+            ("https://t.me/$cleanUser").toUri()
         } else {
-            Uri.parse("https://t.me/BotFather")
+            ("https://t.me/BotFather").toUri()
         }
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -248,7 +251,7 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
             }
             array.put(obj)
         }
-        prefs.edit().putString(KEY_BOTS_JSON, array.toString()).apply()
+        prefs.edit { putString(KEY_BOTS_JSON, array.toString()) }
         return true
     }
 
@@ -278,7 +281,7 @@ ${'$'}sendTelegram "🔔%0A<b>[NetCraft]</b>%0Aتم تشغيل راوتر الم
             put("notifyNewActiveUser", settings.notifyNewActiveUser)
             put("notifyDailySummary", settings.notifyDailySummary)
         }
-        prefs.edit().putString(KEY_SETTINGS_JSON, obj.toString()).apply()
+        prefs.edit { putString(KEY_SETTINGS_JSON, obj.toString()) }
     }
 
     private fun defaultInitialBots(): List<TelegramBotItem> {

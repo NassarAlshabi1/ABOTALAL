@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.Login
+
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -323,7 +325,7 @@ fun LoginScreen(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Icon(
-                                    imageVector = Icons.Filled.Login,
+                                    imageVector = Icons.AutoMirrored.Filled.Login,
                                     contentDescription = null,
                                     tint = if (selectedTab == 0) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp)
@@ -1397,7 +1399,7 @@ fun LoginScreen(
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Icon(
-                                            imageVector = Icons.Filled.Login,
+                                            imageVector = Icons.AutoMirrored.Filled.Login,
                                             contentDescription = null,
                                             tint = MaterialTheme.colorScheme.onPrimary,
                                             modifier = Modifier.size(16.dp)

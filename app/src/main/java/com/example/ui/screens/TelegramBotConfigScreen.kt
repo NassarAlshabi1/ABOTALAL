@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -650,7 +653,7 @@ private fun BotConnectionTab(
                         onValueChange = onChatIdChange,
                         label = { Text("معرف المحادثة أو القناة (Chat ID)", fontFamily = CairoFontFamily) },
                         placeholder = { Text("مثال: 987654321 أو @channel_name") },
-                        leadingIcon = { Icon(Icons.Filled.Chat, contentDescription = null) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
                         trailingIcon = {
                             IconButton(onClick = onFetchChatId) {
                                 if (isFetchingChatId) {
@@ -712,7 +715,7 @@ private fun BotConnectionTab(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Icon(Icons.Filled.OpenInNew, contentDescription = null, tint = Color(0xFF0088CC))
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color(0xFF0088CC))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("فتح المحادثة في تطبيق تيليجرام", fontFamily = CairoFontFamily, color = Color(0xFF0088CC), fontWeight = FontWeight.Bold)
                     }

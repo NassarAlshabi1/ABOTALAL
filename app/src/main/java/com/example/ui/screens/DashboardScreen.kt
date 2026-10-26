@@ -1,5 +1,11 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+
+import androidx.core.content.edit
+
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -280,7 +286,7 @@ fun DashboardScreen(
                     ) {
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
-                            icon = Icons.Outlined.FormatListBulleted,
+                            icon = Icons.AutoMirrored.Outlined.FormatListBulleted,
                             label = "الذاكرة",
                             value = run {
                                 val total = stats?.totalMemoryBytes ?: 0L
@@ -362,7 +368,7 @@ fun DashboardScreen(
                     StatCardItem(
                         modifier = Modifier.weight(1f),
                         title = "الكروت المتبقية",
-                        icon = Icons.Filled.Article,
+                        icon = Icons.AutoMirrored.Filled.Article,
                         iconTint = Color(0xFF0284C7),
                         iconBackground = Color(0xFFE0F2FE),
                         value = "${hotspotUsers.size}",
@@ -497,7 +503,7 @@ fun DashboardScreen(
                 ServiceCard(
                     modifier = Modifier.weight(1f),
                     title = "المصروفات",
-                    icon = Icons.Filled.ReceiptLong,
+                    icon = Icons.AutoMirrored.Filled.ReceiptLong,
                     backgroundColor = Color(0xFFFECDD3),
                     contentColor = Color(0xFFE11D48),
                     isDarkMode = isDarkMode,
@@ -893,7 +899,7 @@ fun DashboardScreen(
                         uri,
                         Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     )
-                    backupPrefs.edit().putString("folder_uri", uri.toString()).apply()
+                    backupPrefs.edit { putString("folder_uri", uri.toString()) }
                     backupFolderUriText = uri.toString()
                 } catch (e: Exception) {
                     pendingDownloadFile = null

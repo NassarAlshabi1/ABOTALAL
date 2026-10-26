@@ -31,9 +31,10 @@ object NetworkUtils {
             }
         } catch (_: Exception) { }
 
-        // Method 2: WifiManager DHCP Info Gateway
+        // Fallback for devices/OEMs that omit the default gateway from LinkProperties.
         try {
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            @Suppress("DEPRECATION")
             val dhcpInfo = wifiManager?.dhcpInfo
             val gatewayInt = dhcpInfo?.gateway ?: 0
             if (gatewayInt != 0) {

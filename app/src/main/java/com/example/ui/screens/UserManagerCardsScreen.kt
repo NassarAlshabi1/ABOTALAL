@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.LastPage
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -1295,7 +1297,7 @@ fun UserManagerCardsScreen(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Filled.LastPage,
+                                    imageVector = Icons.AutoMirrored.Filled.LastPage,
                                     contentDescription = "الصفحة الأخيرة",
                                     tint = if (safeCurrentPage < totalPages) Color(0xFF0C5A60) else Color(0xFF94A3B8),
                                     modifier = Modifier.size(18.dp)

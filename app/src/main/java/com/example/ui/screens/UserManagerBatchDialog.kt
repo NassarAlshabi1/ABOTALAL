@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.core.content.edit
+
 import java.util.Locale
 import android.content.Context
 import android.graphics.Bitmap
@@ -1700,7 +1702,7 @@ fun UserManagerBatchFullDialog(
                                             CardPrintAndExportHelper.saveDesignAsTemplate(context, design)
                                         }
                                         linkedTemplateName = tmpl
-                                        sharedPrefs.edit().putString("${selectedProfileName}_template", tmpl).apply()
+                                        sharedPrefs.edit { putString("${selectedProfileName}_template", tmpl) }
                                         showLinkTemplateDialog = false
                                         Toast.makeText(context, "تم ربط الباقة $selectedProfileName بقالب التصميم $tmpl", Toast.LENGTH_SHORT).show()
                                     },

@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -50,7 +51,7 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
     fun toggleDarkMode() {
         val newValue = !_isDarkMode.value
         _isDarkMode.value = newValue
-        uiPreferences.edit().putBoolean("dark_mode", newValue).apply()
+        uiPreferences.edit { putBoolean("dark_mode", newValue) }
     }
 
     // Local saved router list (observed reactively) — passwords are stored encrypted
