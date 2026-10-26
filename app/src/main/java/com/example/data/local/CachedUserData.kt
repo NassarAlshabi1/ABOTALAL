@@ -25,7 +25,8 @@ data class CachedUserManagerUser(
     val profile: String = "default",
     val active: Boolean = true,
     val uptimeUsed: String = "0s",
-    val downloadLimit: String = "unlimited"
+    val downloadLimit: String = "unlimited",
+    val profileExpired: Boolean = false
 )
 
 @Entity(tableName = "cached_router_stats")

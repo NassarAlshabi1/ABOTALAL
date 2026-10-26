@@ -149,6 +149,32 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 6 to 7 adds profileExpired and preserves cached users`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = newInMemoryDb(context)
+        db.execSQL(
+            """
+            CREATE TABLE `cached_usermanager_users` (
+                `username` TEXT NOT NULL, `routerHost` TEXT NOT NULL, `password` TEXT NOT NULL DEFAULT '',
+                `profile` TEXT NOT NULL DEFAULT 'default', `active` INTEGER NOT NULL DEFAULT 1,
+                `uptimeUsed` TEXT NOT NULL DEFAULT '0s', `downloadLimit` TEXT NOT NULL DEFAULT 'unlimited',
+                PRIMARY KEY(`username`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("INSERT INTO cached_usermanager_users (username, routerHost, uptimeUsed) VALUES ('123', '192.168.88.1', '1h')")
+
+        AppDatabase.MIGRATION_6_7.migrate(db)
+
+        db.query("SELECT profileExpired, uptimeUsed FROM cached_usermanager_users WHERE username = '123'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("old cache rows default to not-expired", 0, c.getInt(0))
+            assertEquals("available uptime survives", "1h", c.getString(1))
+        }
+        db.close()
+    }
+
+    @Test
     fun `migration 5 to 6 is safe to run on empty tables`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = newInMemoryDb(context)

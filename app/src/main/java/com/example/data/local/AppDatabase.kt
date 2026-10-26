@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         GeneratedBatchEntity::class,
         ExpiredCardArchiveEntry::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -179,6 +179,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v6 → v7: remember the router-computed expiry flag so hydrated
+         *  cache rows keep the same expired-card count before the next sync. */
+        internal val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `cached_usermanager_users` ADD COLUMN `profileExpired` INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -189,7 +199,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // Real migrations going forward. v1/v2 databases predate schema
                     // tracking (they were always rebuilt destructively), so only
                     // those two legacy versions keep the destructive fallback.
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .fallbackToDestructiveMigrationFrom(false, 1, 2)
                     .build()
                 INSTANCE = instance

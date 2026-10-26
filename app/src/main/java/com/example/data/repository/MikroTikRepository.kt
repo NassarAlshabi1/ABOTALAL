@@ -546,7 +546,7 @@ class MikroTikRepository(
                         else "/tool/user-manager/user/print"
                     )
                 }
-                val umUsers = mapUserManagerRows(umList)
+                val umUsers = applyRouterExpiry(api, mapUserManagerRows(umList))
                 if (umUsers.isNotEmpty()) {
                     _userManagerUsers.value = umUsers
                     cacheUserManagerSnapshot(connection.host, umUsers)
@@ -621,20 +621,24 @@ class MikroTikRepository(
     // router, instead of rewriting the whole table every time.
     // ==========================================
 
-    private fun mapUserManagerRows(rows: List<Map<String, String>>): List<UserManagerUser> = rows.map {
+    private fun mapUserManagerRows(rows: List<Map<String, String>>): List<UserManagerUser> =
+        rows.map { mapUserManagerRow(it) }
+
+    private fun mapUserManagerRow(it: Map<String, String>): UserManagerUser {
         val uname = it["name"] ?: it["username"] ?: ""
         val assignedProfile = it["profile"]
         val actualProfile = it["actual-profile"]
-        UserManagerUser(
+        val uptime = it["uptime-used"] ?: it["uptime"]
+        return UserManagerUser(
             username = uname,
             password = it["password"] ?: uname,
             profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
             active = it["disabled"] != "true",
-            uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
+            uptimeUsed = uptime ?: "0s",
             downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
             serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
             comment = it["comment"] ?: "",
-            profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
+            profileExpired = computeProfileExpired(assignedProfile, actualProfile, uptime)
         )
     }
 
@@ -660,7 +664,8 @@ class MikroTikRepository(
             profile = user.profile,
             active = user.active,
             uptimeUsed = user.uptimeUsed,
-            downloadLimit = user.downloadLimit
+            downloadLimit = user.downloadLimit,
+            profileExpired = user.profileExpired
         )
 
     private fun toCachedHotspotUser(user: HotspotUser, host: String) =
@@ -713,7 +718,8 @@ class MikroTikRepository(
                         profile = it.profile,
                         active = it.active,
                         uptimeUsed = it.uptimeUsed,
-                        downloadLimit = it.downloadLimit
+                        downloadLimit = it.downloadLimit,
+                        profileExpired = it.profileExpired
                     )
                 }
             }
@@ -848,7 +854,7 @@ class MikroTikRepository(
                         )
                     }
                     if (umList.isNotEmpty()) {
-                        val umUsers = mapUserManagerRows(umList)
+                        val umUsers = applyRouterExpiry(api, mapUserManagerRows(umList))
                         _userManagerUsers.value = umUsers
                         cacheUserManagerSnapshot(host, umUsers)
                     }
@@ -1221,16 +1227,9 @@ class MikroTikRepository(
                     }
                     if (users.isNotEmpty()) {
                         _userManagerUsers.value = users
-                        cacheDao.insertUserManagerUsers(users.map {
-                            CachedUserManagerUser(
-                                username = it.username,
-                                routerHost = connection.host,
-                                password = it.password,
-                                profile = it.profile,
-                                active = it.active,
-                                uptimeUsed = it.uptimeUsed
-                            )
-                        })
+                        cacheDao.insertUserManagerUsers(
+                            users.map { toCachedUserManagerUser(it, connection.host) }
+                        )
                     }
                 }
             }
@@ -1733,6 +1732,57 @@ class MikroTikRepository(
     private fun isExpiredActualProfile(assigned: String?, actual: String?): Boolean {
         if (assigned.isNullOrBlank()) return false
         return actual.isNullOrBlank() || actual.trim().lowercase() in setOf("none", "-", "unknown")
+    }
+
+    /** Authoritative expiry signal from RouterOS: a user-profile entry in
+     *  `used` state with no live entry for the same user. Works on v6 too and
+     *  catches validity-expired cards whose `actual-profile` is still present. */
+    private fun applyRouterExpiry(
+        api: MikroTikNativeApi,
+        users: List<UserManagerUser>
+    ): List<UserManagerUser> {
+        if (users.isEmpty()) return users
+        val expired = fetchExpiredUmUsernames(api)
+        if (expired.isEmpty()) return users
+        return users.map { user ->
+            if (user.username in expired) user.copy(profileExpired = true) else user
+        }
+    }
+
+    private fun fetchExpiredUmUsernames(api: MikroTikNativeApi): Set<String> {
+        for (base in umBases) {
+            try {
+                val rows = api.execute("$base/user-profile/print", ".proplist=user,state")
+                if (rows.isEmpty()) continue
+                val used = mutableSetOf<String>()
+                val live = mutableSetOf<String>()
+                rows.forEach { row ->
+                    val user = row["user"]?.takeIf { it.isNotBlank() } ?: return@forEach
+                    when (row["state"]?.trim()?.lowercase()) {
+                        "running", "running-active", "waiting" -> live += user
+                        "used" -> used += user
+                    }
+                }
+                return used - live
+            } catch (_: Exception) {}
+        }
+        return emptySet()
+    }
+
+    /** RouterOS v6 has no `profile` field on UM users: `actual-profile` is the
+     * profile that is currently usable, and the router clears it when the card
+     * is exhausted (the documented cleanup is `!actual-profile and
+     * uptime-used>0s`). v7 keeps reporting the assigned `profile`, so the old
+     * check must stay there to avoid flagging cards that were never activated. */
+    private fun computeProfileExpired(assigned: String?, actual: String?, uptime: String?): Boolean {
+        val actualMissing = actual.isNullOrBlank() ||
+            actual.trim().lowercase() in setOf("none", "-", "unknown")
+        if (!actualMissing) return false
+        return if (rosMajor == 6 || umBase == "/tool/user-manager") {
+            !uptime.isNullOrBlank() && uptime.trim() != "0s"
+        } else {
+            !assigned.isNullOrBlank()
+        }
     }
 
     // executeStrict() never lets a raw SocketTimeoutException reach the caller —
@@ -2739,22 +2789,7 @@ class MikroTikRepository(
                     }
                     if (rows.isNotEmpty()) break
                 }
-                val users = rows.map {
-                    val uname = it["name"] ?: it["username"] ?: ""
-                    val assignedProfile = it["profile"]
-                    val actualProfile = it["actual-profile"]
-                    UserManagerUser(
-                        username = uname,
-                        password = it["password"] ?: uname,
-                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
-                        active = it["disabled"] != "true",
-                        uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
-                        downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
-                        serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                        comment = it["comment"] ?: "",
-                        profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
-                    )
-                }
+                val users = rows.map { mapUserManagerRow(it) }
                 launch(Dispatchers.Main) { onSuccess(users) }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { onError(e.message ?: "فشل البحث على الراوتر") }
@@ -3583,30 +3618,12 @@ class MikroTikRepository(
                 if (umList.isEmpty() && rosMajor == 0) {
                     umList = api.execute(if (umBase == "/tool/user-manager") "/user-manager/user/print" else "/tool/user-manager/user/print")
                 }
-                val umUsers = umList.map {
-                    val uname = it["name"] ?: it["username"] ?: ""
-                    val assignedProfile = it["profile"]
-                    val actualProfile = it["actual-profile"]
-                    UserManagerUser(
-                        username = uname,
-                        password = it["password"] ?: uname,
-                        profile = actualProfile?.takeIf { p -> p.isNotBlank() } ?: assignedProfile ?: "default",
-                        active = it["disabled"] != "true",
-                        uptimeUsed = it["uptime-used"] ?: it["uptime"] ?: "0s",
-                        downloadLimit = it["download-limit"] ?: it["limit-bytes-total"] ?: "unlimited",
-                        serialNumber = it["comment"]?.takeIf { c -> c.startsWith("SN:") || c.all { ch -> ch.isDigit() } } ?: (it[".id"] ?: "-"),
-                        comment = it["comment"] ?: "",
-                        profileExpired = isExpiredActualProfile(assignedProfile, actualProfile)
-                    )
-                }
+                val umUsers = applyRouterExpiry(api, umList.map { mapUserManagerRow(it) })
                 _userManagerUsers.value = umUsers
                 if (umUsers.isNotEmpty()) {
-                    cacheDao.insertUserManagerUsers(umUsers.map {
-                        CachedUserManagerUser(
-                            username = it.username, routerHost = conn.host, password = it.password,
-                            profile = it.profile, active = it.active, uptimeUsed = it.uptimeUsed, downloadLimit = it.downloadLimit
-                        )
-                    })
+                    cacheDao.insertUserManagerUsers(
+                        umUsers.map { toCachedUserManagerUser(it, conn.host) }
+                    )
                 }
 
                 insertActivityLog("صيانة الكروت", "تمت إعادة بناء قاعدة بيانات User Manager المحلية من الراوتر (${umUsers.size} مستخدم، ${umProfiles.size} باقة)$rebuildNote", conn.host)
