@@ -37,6 +37,10 @@ internal class ScriptableMockServer {
     /** When true, every /login attempt is rejected with a trap (bad credentials). */
     var rejectLogin = false
 
+    /** Version reported when a test handler does not answer /system/resource/print
+     *  with a version field. Keeps the v6-only support gate satisfied. */
+    var routerVersion = "6.49.21"
+
     private val worker = thread(isDaemon = true) { serve() }
 
     private fun writeWord(out: OutputStream, word: String) {
@@ -147,6 +151,22 @@ internal fun connectRepoToMockRouter(server: ScriptableMockServer): MikroTikRepo
     val repo = MikroTikRepository(context, db.activityLogDao(), db.cacheDao())
     var success = false
     var error: String? = null
+    val originalHandler = server.handler
+    server.handler = { words ->
+        if (words.firstOrNull() == "/system/resource/print") {
+            val replies = originalHandler(words)
+            val hasVersion = replies.any { sentence ->
+                sentence.any { it.startsWith("=version=") }
+            }
+            if (hasVersion) replies
+            else listOf(
+                listOf("!re", "=version=${server.routerVersion}", "=board-name=TestBoard"),
+                listOf("!done")
+            )
+        } else {
+            originalHandler(words)
+        }
+    }
     repo.connectToRouter(
         RouterConnection(name = "t", host = "127.0.0.1", port = server.port, username = "admin", password = "1234"),
         onSuccess = { success = true },

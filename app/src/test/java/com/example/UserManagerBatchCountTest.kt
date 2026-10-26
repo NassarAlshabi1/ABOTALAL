@@ -7,7 +7,6 @@ import com.example.util.CardPrintAndExportHelper
 import com.example.util.CardTemplateConfig
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -24,31 +23,6 @@ class UserManagerBatchCountTest {
 
     private fun cards(n: Int, profile: String = "p1") =
         (1..n).map { UserManagerUser(username = "c$it", password = "pw$it", profile = profile) }
-
-    @Test
-    fun `v7 batch adds exactly N users with name attr then attaches profile`() = runBlocking {
-        val server = ScriptableMockServer()
-        try {
-            server.handler = { listOf(listOf("!done")) }
-            val repo = connectRepoToMockRouter(server)
-            var created: List<UserManagerUser>? = null
-            var error: String? = null
-            repo.batchAddUserManagerUsers(cards(1), "B1",
-                onSuccess = { created = it },
-                onError = { e, _ -> error = e })
-            pumpMainUntil { created != null || error != null }
-            assertEquals("error: $error", 1, created?.size)
-
-            val adds = server.commandsMatching("/user-manager/user/add")
-            assertEquals(1, adds.size)
-            assertTrue("v7 uses name=", adds.first().any { it == "=name=c1" })
-            assertFalse("v7 has no customer attr", adds.first().any { it.startsWith("=customer=") })
-            assertTrue(server.commandsMatching("/tool/user-manager/user/add").isEmpty())
-            val prof = server.commandsMatching("/user-manager/user-profile/add")
-            assertEquals(1, prof.size)
-            assertTrue(prof.first().any { it == "=user=c1" } && prof.first().any { it == "=profile=p1" })
-        } finally { server.shutdown() }
-    }
 
     @Test
     fun `v6 batch of 1000 adds exactly 1000 users via tool path`() = runBlocking {
@@ -70,8 +44,8 @@ class UserManagerBatchCountTest {
             pumpMainUntil(60_000) { created != null || error != null }
             assertEquals("error: $error", 1000, created?.size)
             assertEquals(1000, server.commandsMatching("/tool/user-manager/user/add").size)
-            // Flavor is detected once: only the first row probes the v7 menu.
-            assertEquals(1, server.commandsMatching("/user-manager/user/add").size)
+            // The v6 version gate skips the v7 menu entirely (no wasted probe).
+            assertEquals(0, server.commandsMatching("/user-manager/user/add").size)
             assertEquals(1000, server.commandsMatching("/tool/user-manager/user/create-and-activate-profile").size)
         } finally { server.shutdown() }
     }
@@ -81,7 +55,7 @@ class UserManagerBatchCountTest {
         val server = ScriptableMockServer()
         try {
             server.handler = { words ->
-                if (words.firstOrNull() == "/user-manager/user/add" && words.any { it == "=name=c2" })
+                if (words.firstOrNull() == "/tool/user-manager/user/add" && words.any { it == "=username=c2" })
                     listOf(listOf("!trap", "=message=already have user with this name"))
                 else listOf(listOf("!done"))
             }

@@ -57,7 +57,7 @@ private val WIZARD_STEPS = listOf(
     ),
     WizardStepUi(
         "تنظيف سجلات User Manager",
-        "في RouterOS v6: يغلق ويحذف جميع الجلسات ويمسح السجلات بعد تأكيد إضافي. في v7: يحذف الجلسات اليتيمة فقط.",
+        "يغلق ويحذف جميع جلسات User Manager ويمسح سجلات الاستخدام بعد تأكيد إضافي (سلوك RouterOS v6).",
         Color(0xFF80CBAE)
     ),
     WizardStepUi(
@@ -226,7 +226,7 @@ fun UserManagerMaintenanceWizardScreen(
                 Text(
                     when (idx) {
                         3 -> "سيتم حذف $expiredCount بطاقة أبلغ RouterOS بانتهاء صلاحيتها بعد استخدامها. البطاقات المعطّلة يدويًا لن تُحذف. لا يمكن التراجع عن الحذف. هل تريد المتابعة؟"
-                        4 -> "في RouterOS v6 سيُغلق هذا الإجراء جميع جلسات User Manager ويحذفها ويمسح سجلات الاستخدام؛ قد يقطع جلسات خدمات أخرى تستخدم User Manager/RADIUS. في v7 ستُحذف الجلسات اليتيمة فقط. هل تريد المتابعة؟"
+                        4 -> "سيُغلق هذا الإجراء جميع جلسات User Manager ويحذفها ويمسح سجلات الاستخدام؛ قد يقطع جلسات خدمات أخرى تستخدم User Manager/RADIUS. هل تريد المتابعة؟"
                         else -> "قبل reboot سيعيد المعالج تفعيل خوادم Hotspot التي عطّلها ويتحقق منها؛ إذا فشل التفعيل فلن يُعاد تشغيل الراوتر. هل تريد المتابعة؟"
                     },
                     fontFamily = CairoFontFamily, fontSize = 13.sp

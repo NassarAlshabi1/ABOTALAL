@@ -74,6 +74,25 @@ class AiDoctorClientTest {
     }
 
     @Test
+    fun `blocks v6-only and v7-only User Manager paths in both directions`() {
+        assertTrue(
+            RouterOsV6AdviceGuard.findIncompatiblePaths("6.49.17", "Use /user-manager/user/print").isNotEmpty()
+        )
+        assertTrue(
+            RouterOsV6AdviceGuard.findIncompatiblePaths("7.14.3", "Use /tool/user-manager/user/print").isNotEmpty()
+        )
+        assertTrue(
+            RouterOsV6AdviceGuard.findIncompatiblePaths("7.14.3", "Use /user-manager/user/print").isEmpty()
+        )
+        assertTrue(
+            RouterOsV6AdviceGuard.findIncompatiblePaths("6.49.17", "Use /tool/user-manager/user/print").isEmpty()
+        )
+        assertTrue(
+            RouterOsV6AdviceGuard.findIncompatiblePaths("unknown", "Use /tool/user-manager/user/print").isEmpty()
+        )
+    }
+
+    @Test
     fun `connector reachability probe sends no provider credentials`() = runBlocking {
         val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
         val executor = Executors.newSingleThreadExecutor()

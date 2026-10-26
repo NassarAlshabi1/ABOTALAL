@@ -380,45 +380,13 @@ class V6ProtocolIntegrationTest {
     }
 
     @Test
-    fun `v7 maintenance removes only orphan sessions and preserves active sessions and logs`() = runBlocking {
-        val server = ScriptableMockServer()
-        try {
-            server.handler = { words ->
-                when (words.firstOrNull()) {
-                    "/system/resource/print" -> listOf(listOf("!re", "=version=7.16.2"), listOf("!done"))
-                    "/user-manager/user/print" -> listOf(listOf("!re", "=.id=*u1", "=name=alice"), listOf("!done"))
-                    "/user-manager/session/print" -> listOf(
-                        listOf("!re", "=.id=*active", "=user=alice"),
-                        listOf("!re", "=.id=*orphan", "=user=deleted_user"),
-                        listOf("!done")
-                    )
-                    else -> listOf(listOf("!done"))
-                }
-            }
-            val repo = connectRepoToMockRouter(server)
-            var removed: Int? = null
-            var error: String? = null
-            repo.cleanStaleUserManagerSessions(onSuccess = { removed = it }, onError = { error = it })
-            pumpMainUntil { removed != null || error != null }
-
-            assertTrue("v7 session cleanup failed: $error", removed != null)
-            assertEquals(1, removed)
-            val deletes = server.commandsMatching("/user-manager/session/remove")
-            assertEquals(1, deletes.size)
-            assertTrue(deletes.single().contains("=numbers=*orphan"))
-            assertTrue(server.commandsMatching("/user-manager/session/close-session").isEmpty())
-            assertTrue(server.commandsMatching("/user-manager/log/remove").isEmpty())
-        } finally { server.shutdown() }
-    }
-
-    @Test
     fun `partial hotspot disable rolls back and reports any server left disabled`() = runBlocking {
         val server = ScriptableMockServer()
         try {
             server.handler = { words ->
                 val command = words.firstOrNull() ?: ""
                 when {
-                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=7.16.2"), listOf("!done"))
+                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=6.49.21"), listOf("!done"))
                     command == "/ip/hotspot/print" -> listOf(
                         listOf("!re", "=.id=*hs1", "=disabled=false"),
                         listOf("!re", "=.id=*hs2", "=disabled=false"),
@@ -460,7 +428,7 @@ class V6ProtocolIntegrationTest {
             server.handler = { words ->
                 val command = words.firstOrNull() ?: ""
                 when {
-                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=7.16.2"), listOf("!done"))
+                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=6.49.21"), listOf("!done"))
                     command == "/ip/hotspot/print" -> listOf(
                         listOf("!re", "=.id=*hs1", "=disabled=${isDisabled.get()}"),
                         listOf("!done")
@@ -498,7 +466,7 @@ class V6ProtocolIntegrationTest {
             server.handler = { words ->
                 val command = words.firstOrNull() ?: ""
                 when {
-                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=7.16.2"), listOf("!done"))
+                    command == "/system/resource/print" -> listOf(listOf("!re", "=version=6.49.21"), listOf("!done"))
                     command == "/ip/hotspot/print" -> listOf(listOf("!re", "=.id=*hs1", "=disabled=true"), listOf("!done"))
                     command == "/ip/hotspot/set" -> listOf(listOf("!trap", "=message=simulated enable failure"))
                     else -> listOf(listOf("!done"))

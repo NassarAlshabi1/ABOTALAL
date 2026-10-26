@@ -93,13 +93,28 @@ class MikroTikRepository(
     @Volatile
     private var rosMajor: Int = 0
 
+    // Full version string reported by /system/resource/print. Used by the
+    // support gate so an unsupported release cannot reach mutating screens.
+    @Volatile
+    private var routerVersion: String = ""
+
+    // Cached result of probing User Manager menus when /system/resource did not
+    // reveal the version. Kept per connection and cleared on disconnect.
+    @Volatile
+    private var probedUmFlavor: UmFlavor? = null
+
     /** User-manager menu base for the DETECTED RouterOS version. */
     private val umBase: String
-        get() = if (rosMajor == 6) "/tool/user-manager" else "/user-manager"
+        get() = when {
+            rosMajor == 6 -> "/tool/user-manager"
+            rosMajor >= 7 -> "/user-manager"
+            probedUmFlavor == UmFlavor.V6 -> "/tool/user-manager"
+            else -> "/user-manager"
+        }
 
     /** Ordered candidate bases for user-manager commands — detected version first. */
     private val umBases: List<String>
-        get() = if (rosMajor == 6) listOf("/tool/user-manager", "/user-manager")
+        get() = if (umBase == "/tool/user-manager") listOf("/tool/user-manager", "/user-manager")
                 else listOf("/user-manager", "/tool/user-manager")
 
     @Volatile
@@ -111,6 +126,7 @@ class MikroTikRepository(
         try {
             val res = api.execute("/system/resource/print").firstOrNull()
             val ver = res?.get("version") ?: ""
+            routerVersion = ver
             val major = ver.split('.').firstOrNull()?.trim()?.toIntOrNull() ?: 0
             if (major > 0) {
                 rosMajor = major
@@ -212,6 +228,10 @@ class MikroTikRepository(
                         launch(Dispatchers.Main) { onError(result.message) }
                         return@launch
                     }
+                    is NativeConnectResult.Unsupported -> {
+                        launch(Dispatchers.Main) { onError(result.message) }
+                        return@launch
+                    }
                     is NativeConnectResult.Failure -> lastError = result.message
                 }
             }
@@ -237,6 +257,10 @@ class MikroTikRepository(
                         launch(Dispatchers.Main) { onError(nativeAttempt.message) }
                         return@launch
                     }
+                    is NativeConnectResult.Unsupported -> {
+                        launch(Dispatchers.Main) { onError(nativeAttempt.message) }
+                        return@launch
+                    }
                     is NativeConnectResult.Failure -> lastError = nativeAttempt.message
                 }
             }
@@ -249,6 +273,7 @@ class MikroTikRepository(
         data class Success(val api: MikroTikNativeApi) : NativeConnectResult()
         data class AuthError(val message: String) : NativeConnectResult()
         data class Failure(val message: String) : NativeConnectResult()
+        data class Unsupported(val message: String) : NativeConnectResult()
     }
 
     private fun tryNativeConnect(
@@ -269,14 +294,26 @@ class MikroTikRepository(
             )
             val (loginSuccess, loginMsg) = api.login(connection.username, connection.password)
             if (loginSuccess) {
+                // Detect the version BEFORE publishing the connection so an
+                // unsupported router never appears as briefly connected.
+                rosMajor = 0
+                routerVersion = ""
+                probedUmFlavor = null
+                detectRouterOsVersion(api, connection)
+
+                if (!RouterOsSupport.isSupported(routerVersion)) {
+                    val message = RouterOsSupport.unsupportedMessage(routerVersion)
+                    insertActivityLog("تسجيل الدخول", "تم رفض الاتصال: $message", connection.host)
+                    try { api.close() } catch (_: Exception) {}
+                    rosMajor = 0
+                    probedUmFlavor = null
+                    return NativeConnectResult.Unsupported(message)
+                }
+
                 nativeApi = api
                 _currentConnection.value =
                     if (overridePort != null) connection.copy(port = port) else connection
                 _isConnected.value = true
-
-                // Detect the real RouterOS version right after login so every
-                // user-manager command goes to the right menu from the start.
-                detectRouterOsVersion(api, _currentConnection.value!!)
 
                 insertActivityLog(
                     "تسجيل الدخول",
@@ -361,8 +398,29 @@ class MikroTikRepository(
 
             okHttpClient?.newCall(request)?.execute().use { response ->
                 if (response != null && response.isSuccessful) {
+                    val restBody = response.body?.string().orEmpty()
+                    val restVersion = runCatching {
+                        org.json.JSONObject(restBody).optString("version")
+                    }.getOrDefault("")
+                    if (!RouterOsSupport.isSupported(restVersion)) {
+                        val message = RouterOsSupport.unsupportedMessage(restVersion)
+                        insertActivityLog("تسجيل الدخول", "تم رفض الاتصال عبر REST: $message", connection.host)
+                        OperationTelemetry.record(
+                            event = OperationTelemetry.Event.CONNECTION_RESULT,
+                            operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                            operationId = operationId,
+                            outcome = OperationTelemetry.Outcome.FAILURE,
+                            errorClass = OperationTelemetry.ErrorClass.VALIDATION,
+                            transport = OperationTelemetry.Transport.REST,
+                            durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                        )
+                        return@use Pair(false, message)
+                    }
                     _currentConnection.value = connection
                     _isConnected.value = true
+                    routerVersion = restVersion
+                    rosMajor = 6
+                    probedUmFlavor = UmFlavor.V6
 
                     insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر ${connection.name} (${connection.host}) عبر REST", connection.host)
 
@@ -490,7 +548,7 @@ class MikroTikRepository(
                 // 5. User Manager Profiles — use the version-detected menu base; probe the
                 // other menu only when the version is still unknown.
                 var umProfList = api.execute("$umBase/profile/print")
-                var isV6UM = umBase == "/tool/user-manager"
+                var isV6UM = detectUmFlavor(api) == UmFlavor.V6
                 if (umProfList.isEmpty() && rosMajor == 0) {
                     val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
                     umProfList = api.execute("$alt/profile/print")
@@ -800,7 +858,7 @@ class MikroTikRepository(
                 if (api != null && _isConnected.value) {
                     // Fetch Profiles — version-aware base, probe only when undetected
                     var umProfList = api.execute("$umBase/profile/print")
-                    var isV6UM = umBase == "/tool/user-manager"
+                    var isV6UM = detectUmFlavor(api) == UmFlavor.V6
                     if (umProfList.isEmpty() && rosMajor == 0) {
                         val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
                         umProfList = api.execute("$alt/profile/print")
@@ -991,6 +1049,9 @@ class MikroTikRepository(
     fun disconnect() {
         isTickerRunning = false
         cachedCustomer = null
+        rosMajor = 0
+        routerVersion = ""
+        probedUmFlavor = null
         _isConnected.value = false
         try {
             nativeApi?.close()
@@ -1714,12 +1775,32 @@ class MikroTikRepository(
 
     private enum class UmFlavor { V7, V6 }
 
-    /** Detected flavor (null = probe both). Avoids a guaranteed failed v7
-     *  command for every card on RouterOS v6. */
-    private fun preferredUmFlavor(): UmFlavor? = when (rosMajor) {
-        6 -> UmFlavor.V6
-        7 -> UmFlavor.V7
-        else -> null
+    /** Detected flavor (null = version unknown and both menus failed the probe,
+     *  so the caller should try both paths). */
+    private fun preferredUmFlavor(api: MikroTikNativeApi): UmFlavor? = when {
+        rosMajor == 6 -> UmFlavor.V6
+        rosMajor >= 7 -> UmFlavor.V7
+        else -> probeUmFlavor(api)
+    }
+
+    /** Resolves v6 vs v7 once per connection. The version string is preferred;
+     *  if it is unavailable we probe the two documented User Manager menus. */
+    private fun detectUmFlavor(api: MikroTikNativeApi): UmFlavor =
+        preferredUmFlavor(api) ?: UmFlavor.V7
+
+    private fun probeUmFlavor(api: MikroTikNativeApi): UmFlavor? {
+        probedUmFlavor?.let { return it }
+        if (runCatching { api.executeStrict("/tool/user-manager/profile/print") }.isSuccess) {
+            rosMajor = 6
+            probedUmFlavor = UmFlavor.V6
+            return UmFlavor.V6
+        }
+        if (runCatching { api.executeStrict("/user-manager/profile/print") }.isSuccess) {
+            rosMajor = 7
+            probedUmFlavor = UmFlavor.V7
+            return UmFlavor.V7
+        }
+        return null
     }
 
     private fun isNoSuchCommand(e: Exception?): Boolean =
@@ -1917,7 +1998,7 @@ class MikroTikRepository(
                     password = user.password,
                     customer = { customer },
                     extra = extra,
-                    preferred = preferredUmFlavor()
+                    preferred = preferredUmFlavor(api)
                 )
                 if (user.profile.isNotEmpty()) {
                     if (flavor == UmFlavor.V6) {
@@ -2080,7 +2161,7 @@ class MikroTikRepository(
                 return@launch
             }
             try {
-                if (umBase == "/tool/user-manager") {
+                if (detectUmFlavor(api) == UmFlavor.V6) {
                     // ROS v6 stores validity/price on the profile, while usage quotas
                     // are separate limitations linked through profile-limitation.
                     if (profile.validity.isNotBlank() && !isRouterOsDuration(profile.validity)) {
@@ -2158,7 +2239,7 @@ class MikroTikRepository(
                 }
                 // Fall back to the connection-detected base if the profile lookup above
                 // didn't find a match on either menu (e.g. renaming right after creation).
-                val isV6 = (matchedBase ?: umBase) == "/tool/user-manager"
+                val isV6 = (matchedBase ?: if (detectUmFlavor(api) == UmFlavor.V6) "/tool/user-manager" else "/user-manager") == "/tool/user-manager"
                 if (isV6) {
                     // ROS v6 stores profile validity/price on the profile and usage quotas
                     // on a separate limitation linked through profile-limitation.
@@ -2241,7 +2322,7 @@ class MikroTikRepository(
                 // On ROS v6 the profile's limitation + profile-limitation link are separate
                 // objects (see addUserManagerProfile) — remove them too so they don't pile
                 // up as orphans on the router after their owning profile is gone.
-                if (umBase == "/tool/user-manager") {
+                if (detectUmFlavor(api) == UmFlavor.V6) {
                     runCatching {
                         val link = api.execute("/tool/user-manager/profile/profile-limitation/print")
                             .firstOrNull { it["profile"] == profileName }
@@ -2274,7 +2355,7 @@ class MikroTikRepository(
             if (api != null && _isConnected.value) {
                 try {
                     var umProfList = api.execute("$umBase/profile/print")
-                    var isV6UM = umBase == "/tool/user-manager"
+                    var isV6UM = detectUmFlavor(api) == UmFlavor.V6
                     if (umProfList.isEmpty() && rosMajor == 0) {
                         val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
                         umProfList = api.execute("$alt/profile/print")
@@ -3470,7 +3551,7 @@ class MikroTikRepository(
             }
             try {
                 var removed = 0
-                if (umBase == "/tool/user-manager") {
+                if (detectUmFlavor(api) == UmFlavor.V6) {
                     // Follow the established RouterOS v6 maintenance sequence, but
                     // the UI requires a separate confirmation because this closes
                     // every User Manager session and deletes its usage log.
@@ -3561,7 +3642,8 @@ class MikroTikRepository(
             }
             var rebuildNote = ""
             var rebuildFailure: String? = null
-            if (umBase == "/tool/user-manager") {
+            val flavor = detectUmFlavor(api)
+            if (flavor == UmFlavor.V6) {
                 try {
                     api.executeStrict("/tool/user-manager/database/rebuild")
                     rebuildNote = " وتمت إعادة بناء قاعدة البيانات على الراوتر (database/rebuild)"
@@ -3583,7 +3665,7 @@ class MikroTikRepository(
             }
             try {
                 var umProfList = api.execute("$umBase/profile/print")
-                var isV6UM = umBase == "/tool/user-manager"
+                var isV6UM = detectUmFlavor(api) == UmFlavor.V6
                 if (umProfList.isEmpty() && rosMajor == 0) {
                     val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
                     umProfList = api.execute("$alt/profile/print")
@@ -3650,7 +3732,7 @@ class MikroTikRepository(
             val api = nativeApi
             var rebuildLogNote = ""
             var rebuildLogFailure: String? = null
-            if (api != null && umBase == "/tool/user-manager") {
+            if (api != null && detectUmFlavor(api) == UmFlavor.V6) {
                 try {
                     api.executeStrict("/tool/user-manager/database/rebuild-log")
                     rebuildLogNote = " وتمت إعادة بناء سجل الاستخدام على الراوتر (database/rebuild-log)"

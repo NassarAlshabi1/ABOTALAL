@@ -250,7 +250,7 @@ fun ToolsScreen(
                                     Icon(Icons.Filled.HealthAndSafety, contentDescription = null, tint = Color.White, modifier = Modifier.size(34.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text("AI Doctor", fontFamily = CairoFontFamily, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                        Text("فحص قراءة فقط وتشخيص توافق RouterOS v6/v7", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFFBAE6FD))
+                                        Text("فحص قراءة فقط وتشخيص RouterOS v6", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFFBAE6FD))
                                     }
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "فتح", tint = Color.White)
                                 }
