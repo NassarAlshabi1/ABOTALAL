@@ -3037,7 +3037,7 @@ class MikroTikRepository(
                     ?: throw IOException("تعذر قراءة بيانات الراوتر؛ لم يتم إرسال أي تحليل")
                 val version = resource["version"].orEmpty()
                 val selectedGroups = if ("all" in selectedSections) {
-                    setOf("network", "queues", "firewall", "hotspot", "performance", "scripts", "security", "wireless", "routing", "ipv6")
+                    setOf("network", "queues", "firewall", "hotspot", "performance", "scripts", "security", "wireless", "routing", "ipv6", "usermanager")
                 } else selectedSections
                 val baseSpecs = listOf(
                     AiDoctorDiagnostics.ReadSpec("network", "interfaces", "/interface/print", ".id,name,type,running,disabled,mtu,actual-mtu"),
@@ -3115,6 +3115,9 @@ class MikroTikRepository(
                 })
                 if ("wireless" in selectedGroups && AiDoctorDiagnostics.majorVersion(version) !in setOf(6, 7)) {
                     output.put("compatibility_note", "لم يُكتشف إصدار RouterOS 6 أو 7؛ لم تُجرّب مسارات Wi-Fi خاصة بإصدار لتجنب أوامر غير متوافقة.")
+                }
+                if ("usermanager" in selectedGroups && AiDoctorDiagnostics.majorVersion(version) !in setOf(6, 7)) {
+                    output.put("usermanager_compatibility_note", "لم يُكتشف إصدار RouterOS 6 أو 7؛ لم تُقرأ بيانات User Manager لتجنب استخدام مسار غير متوافق.")
                 }
                 output.put("privacy_note", "Read-only RouterOS data. Wi-Fi passphrases and SNMP community names are not requested; credential fields, script source, scheduler commands, and private keys are excluded or redacted.")
                 val snapshot = output.toString()

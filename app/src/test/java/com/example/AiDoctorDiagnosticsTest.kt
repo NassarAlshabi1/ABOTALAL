@@ -38,6 +38,44 @@ class AiDoctorDiagnosticsTest {
     }
 
     @Test
+    fun `uses tool user-manager on v6 and user-manager on v7`() {
+        val ros6 = AiDoctorDiagnostics.additionalReadSpecs("6.49.20", setOf("usermanager"))
+        val ros7 = AiDoctorDiagnostics.additionalReadSpecs("7.17.0", setOf("usermanager"))
+        val unknown = AiDoctorDiagnostics.additionalReadSpecs("unknown", setOf("usermanager"))
+
+        assertTrue(ros6.any { it.path == "/tool/user-manager/user/print" })
+        assertEquals(
+            ".id,name,actual-profile,uptime-used,disabled",
+            ros6.first { it.key == "um_users" }.properties
+        )
+        assertFalse(ros6.any { it.path.startsWith("/user-manager/") })
+        assertTrue(ros7.any { it.path == "/user-manager/user/print" })
+        assertFalse(ros7.any { it.path.startsWith("/tool/user-manager/") })
+        assertTrue(unknown.isEmpty())
+        assertTrue((ros6 + ros7).all { it.path.endsWith("/print") })
+    }
+
+    @Test
+    fun `counts expired v6 cards without flagging never used cards`() {
+        val findings = AiDoctorDiagnostics.securityFindings(
+            mapOf(
+                "um_users" to listOf(
+                    mapOf("name" to "a", "actual-profile" to "", "uptime-used" to "1h"),
+                    mapOf("name" to "b", "actual-profile" to "", "uptime-used" to "0s"),
+                    mapOf("name" to "c", "actual-profile" to "1d", "uptime-used" to "2h")
+                ),
+                "um_user_profiles" to listOf(
+                    mapOf("user" to "a", "profile" to "1d", "state" to "used")
+                )
+            )
+        )
+        val umFindings = findings.filter { it.category == "user-manager" }
+        assertEquals(2, umFindings.size)
+        assertTrue(umFindings.any { it.title.contains("كروت منتهية") && it.evidence.contains("1 ") })
+        assertTrue(umFindings.any { it.title.contains("used") })
+    }
+
+    @Test
     fun `requests only read-only common access and routing data`() {
         val specs = AiDoctorDiagnostics.additionalReadSpecs("7.17.0", setOf("security", "routing", "ipv6"))
         assertTrue(specs.any { it.path == "/ip/service/print" })
