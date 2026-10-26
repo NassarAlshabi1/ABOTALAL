@@ -196,8 +196,22 @@ internal object AiDoctorClient {
         return text
     }
 
+    /** Kiyara publishes a single OpenAI-compatible route. Older builds and
+     *  hand-typed values sometimes saved the host root or /chat/completions,
+     *  which the provider answers with HTTP 405. */
+    internal fun normalizeKnownEndpoint(value: String): String {
+        val text = value.trim()
+        val uri = runCatching { URI(text) }.getOrNull() ?: return text
+        val host = uri.host?.lowercase() ?: return text
+        if (host != "kiyararouter.web.id" && host != "www.kiyararouter.web.id") return text
+        val path = uri.path.orEmpty()
+        if (path.trimEnd('/') == "/v1/chat/completions") return text
+        val scheme = uri.scheme?.lowercase() ?: "https"
+        return URI(scheme, null, host, uri.port, "/v1/chat/completions", null, null).toString()
+    }
+
     internal fun validateApiEndpoint(endpointUrl: String, apiKey: String, additionalHeaders: String): String {
-        val endpoint = validateUrl(endpointUrl)
+        val endpoint = validateUrl(normalizeKnownEndpoint(endpointUrl))
         val uri = URI(endpoint)
         if (uri.scheme == "http") {
             val host = uri.host.orEmpty().lowercase().removePrefix("[").removeSuffix("]")

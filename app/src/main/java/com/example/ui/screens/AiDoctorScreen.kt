@@ -72,7 +72,13 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
             else AiDoctorDefaults.API_KEY
         )
     }
-    var apiEndpoint by remember { mutableStateOf(prefs.getString("api_endpoint", null) ?: AiDoctorDefaults.ENDPOINT) }
+    var apiEndpoint by remember {
+        mutableStateOf(
+            AiDoctorClient.normalizeKnownEndpoint(
+                prefs.getString("api_endpoint", null) ?: AiDoctorDefaults.ENDPOINT
+            )
+        )
+    }
     var connectorUrl by remember { mutableStateOf(prefs.getString("connector_url", null).orEmpty()) }
     var modelName by remember { mutableStateOf(prefs.getString("model_name", null) ?: AiDoctorDefaults.MODEL) }
     var additionalHeaders by remember {

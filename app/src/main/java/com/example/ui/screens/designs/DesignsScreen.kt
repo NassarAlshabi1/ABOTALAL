@@ -19,8 +19,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -70,6 +73,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -78,6 +82,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -105,6 +110,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1086,18 +1092,34 @@ fun DesignsScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     
                     activeDesign?.let { design ->
-                        Box(
+                        BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
+                            val (wMm, hMm) = cardSize(design)
+                            val fitWidth = if (wMm <= 0f || hMm <= 0f) {
+                                maxWidth.value
+                            } else {
+                                min(maxWidth.value, maxHeight.value * (wMm / hMm))
+                            }
                             CardPreview(
                                 design = design,
-                                width = 280f
+                                width = fitWidth,
+                                onUsernamePositionChange = { x, y ->
+                                    viewModel.updateDraft(
+                                        design.copy(username = design.username.copy(x = x, y = y))
+                                    )
+                                }
                             )
                         }
                     }
+                    Text(
+                        text = "اسحب داخل المعاينة لتحريك رقم الكرت",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -1722,17 +1744,22 @@ private const val PREVIEW_CARD_NUMBER = "1234567890"
 @Composable
 fun CardPreview(
     design: Design,
-    width: Float = 280f
+    width: Float = 280f,
+    onUsernamePositionChange: ((Float, Float) -> Unit)? = null
 ) {
     val density = LocalDensity.current
     val (cardWidthMm, cardHeightMm) = cardSize(design)
+    val dpPerMm = width / maxOf(10f, cardWidthMm)
     val scale = with(density) { width.dp.toPx() / maxOf(10f, cardWidthMm) }
+    val previewHeightDp = cardHeightMm * dpPerMm
+    val latestUsername by rememberUpdatedState(design.username)
+    val latestPositionChange by rememberUpdatedState(onUsernamePositionChange)
     
     Box(
         modifier = Modifier
             .size(
-                width = with(density) { width.dp },
-                height = with(density) { (cardHeightMm * scale).dp }
+                width = width.dp,
+                height = previewHeightDp.dp
             )
             .border(
                 width = 1.dp,
@@ -1747,6 +1774,28 @@ fun CardPreview(
                     Color.White
                 }
             )
+            .pointerInput(dpPerMm) {
+                if (latestPositionChange == null) return@pointerInput
+                var startPointer = Offset.Zero
+                var startMm = Offset.Zero
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        startPointer = offset
+                        startMm = Offset(latestUsername.x, latestUsername.y)
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        val x = (startMm.x + (change.position.x - startPointer.x) / scale)
+                            .coerceIn(0f, cardWidthMm)
+                        val y = (startMm.y + (change.position.y - startPointer.y) / scale)
+                            .coerceIn(0f, cardHeightMm)
+                        latestPositionChange?.invoke(
+                            (x * 10f).roundToInt() / 10f,
+                            (y * 10f).roundToInt() / 10f
+                        )
+                    }
+                )
+            }
     ) {
         // الخلفية
         if (design.bgOn && design.bgUrl != null) {
@@ -1778,16 +1827,16 @@ fun CardPreview(
             }
         }
         
-        // تحويل المليمترات إلى بكسل
-        fun mmToPx(mm: Float): Float = mm * scale
+        // mm → dp directly: the preview is `width` dp wide for `cardWidthMm` mm.
+        fun mmToDp(mm: Float): Float = mm * dpPerMm
         
         // العنوان
         if (design.title.show && design.title.text.isNotEmpty()) {
             Text(
                 text = design.title.text,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.title.x).dp },
-                    top = with(density) { mmToPx(design.title.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.title.x).dp,
+                    y = mmToDp(design.title.y).dp
                 ),
                 fontSize = maxOf(6f, design.title.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color((design.title.color).toColorInt()) } catch (_: Exception) { Color.Black },
@@ -1800,9 +1849,9 @@ fun CardPreview(
         if (design.showUsername && design.username.show) {
             Text(
                 text = PREVIEW_CARD_NUMBER,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.username.x).dp },
-                    top = with(density) { mmToPx(design.username.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.username.x).dp,
+                    y = mmToDp(design.username.y).dp
                 ),
                 fontSize = maxOf(7f, design.username.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 textAlign = TextAlign.Left,
@@ -1817,9 +1866,9 @@ fun CardPreview(
         if (design.password.show) {
             Text(
                 text = "",
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.password.x).dp },
-                    top = with(density) { mmToPx(design.password.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.password.x).dp,
+                    y = mmToDp(design.password.y).dp
                 ),
                 fontSize = maxOf(7f, design.password.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color((design.password.color).toColorInt()) } catch (_: Exception) { Color.Black },
@@ -1831,9 +1880,9 @@ fun CardPreview(
         if (design.price.show) {
             Text(
                 text = design.price.text,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.price.x).dp },
-                    top = with(density) { mmToPx(design.price.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.price.x).dp,
+                    y = mmToDp(design.price.y).dp
                 ),
                 fontSize = maxOf(6f, design.price.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color((design.price.color).toColorInt()) } catch (_: Exception) { Color.Black },
@@ -1845,9 +1894,9 @@ fun CardPreview(
         if (design.serial.show) {
             Text(
                 text = design.serial.text,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.serial.x).dp },
-                    top = with(density) { mmToPx(design.serial.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.serial.x).dp,
+                    y = mmToDp(design.serial.y).dp
                 ),
                 fontSize = maxOf(5f, design.serial.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color((design.serial.color).toColorInt()) } catch (_: Exception) { Color.Black },
@@ -1859,9 +1908,9 @@ fun CardPreview(
         if (design.payment.show && design.payment.text.isNotEmpty()) {
             Text(
                 text = design.payment.text,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.payment.x).dp },
-                    top = with(density) { mmToPx(design.payment.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.payment.x).dp,
+                    y = mmToDp(design.payment.y).dp
                 ),
                 fontSize = maxOf(5f, design.payment.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color((design.payment.color).toColorInt()) } catch (_: Exception) { Color.Black }
@@ -1872,9 +1921,9 @@ fun CardPreview(
         if (design.pos.show && design.pos.text.isNotEmpty()) {
             Text(
                 text = design.pos.text,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.pos.x).dp },
-                    top = with(density) { mmToPx(design.pos.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.pos.x).dp,
+                    y = mmToDp(design.pos.y).dp
                 ),
                 fontSize = maxOf(5f, design.pos.fontSize * width / (cardWidthMm * 2.83465f)).sp,
                 color = try { Color((design.pos.color).toColorInt()) } catch (_: Exception) { Color.Black }
@@ -1885,13 +1934,13 @@ fun CardPreview(
         if (design.barcodeOn) {
             Box(
                 modifier = Modifier
-                    .padding(
-                        start = with(density) { mmToPx(design.barcodeX).dp },
-                        top = with(density) { mmToPx(design.barcodeY).dp }
+                    .offset(
+                        x = mmToDp(design.barcodeX).dp,
+                        y = mmToDp(design.barcodeY).dp
                     )
                     .size(
-                        width = with(density) { mmToPx(design.barcodeWidth).dp },
-                        height = with(density) { mmToPx(design.barcodeHeight).dp }
+                        width = mmToDp(design.barcodeWidth).dp,
+                        height = mmToDp(design.barcodeHeight).dp
                     )
                     .border(0.5.dp, Color.DarkGray)
                     .background(Color.White),
@@ -1923,13 +1972,13 @@ fun CardPreview(
                     .build(),
                 contentDescription = "الشعار",
                 modifier = Modifier
-                    .padding(
-                        start = with(density) { mmToPx(design.logoX).dp },
-                        top = with(density) { mmToPx(design.logoY).dp }
+                    .offset(
+                        x = mmToDp(design.logoX).dp,
+                        y = mmToDp(design.logoY).dp
                     )
                     .size(
-                        width = with(density) { mmToPx(design.logoWidth).dp },
-                        height = with(density) { mmToPx(design.logoHeight).dp }
+                        width = mmToDp(design.logoWidth).dp,
+                        height = mmToDp(design.logoHeight).dp
                     ),
                 contentScale = ContentScale.Fit
             )
