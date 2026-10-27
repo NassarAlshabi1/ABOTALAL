@@ -49,6 +49,60 @@ class V6ProtocolIntegrationTest {
     }
 
     @Test
+    fun `connection test performs a real v6 login and reports the version`() = runBlocking {
+        val server = ScriptableMockServer()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        try {
+            server.handler = { words ->
+                when (words.firstOrNull()) {
+                    "/system/resource/print" -> listOf(
+                        listOf("!re", "=version=6.49.21 (stable)"),
+                        listOf("!done")
+                    )
+                    else -> listOf(listOf("!done"))
+                }
+            }
+            val repo = MikroTikRepository(context, db.activityLogDao(), db.cacheDao())
+            var ok: Boolean? = null
+            var msg = ""
+            repo.testConnection("127.0.0.1", server.port, "admin", "1234", false) { success, text ->
+                ok = success
+                msg = text
+            }
+            pumpMainUntil { ok != null }
+            assertTrue("connection test must authenticate, not just probe TCP: $msg", ok == true)
+            assertTrue("success message must name the detected version: $msg", msg.contains("6.49.21"))
+        } finally {
+            db.close()
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `connection test fails on rejected credentials`() = runBlocking {
+        val server = ScriptableMockServer()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        try {
+            server.rejectLogin = true
+            val repo = MikroTikRepository(context, db.activityLogDao(), db.cacheDao())
+            var ok: Boolean? = null
+            var msg = ""
+            repo.testConnection("127.0.0.1", server.port, "admin", "wrong", false) { success, text ->
+                ok = success
+                msg = text
+            }
+            pumpMainUntil { ok != null }
+            assertFalse("rejected credentials must fail the test: $msg", ok == true)
+            assertTrue("failure must be the auth result: $msg", msg.contains("فشل اختبار تسجيل الدخول الفعلي"))
+        } finally {
+            db.close()
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun `executeStrict throws the router trap message`() {
         val server = ScriptableMockServer()
         try {

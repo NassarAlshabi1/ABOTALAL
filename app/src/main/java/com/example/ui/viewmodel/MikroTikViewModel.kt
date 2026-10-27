@@ -113,7 +113,9 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             },
             onError = { errorMsg ->
                 _isConnecting.value = false
-                _connectionError.value = errorMsg
+                _connectionError.value = errorMsg +
+                    "\n\nالهدف: ${targetHost.trim()}:$targetPort" +
+                    (if (connection.useSsl) " (SSL)" else "")
             }
         )
     }
@@ -142,7 +144,9 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             },
             onError = { error ->
                 _isConnecting.value = false
-                _connectionError.value = error
+                _connectionError.value = error +
+                    "\n\nالهدف: ${conn.host}:${conn.port}" +
+                    (if (conn.useSsl) " (SSL)" else "")
             }
         )
     }
@@ -378,9 +382,16 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
     ) {
         repository.searchUserManagerUsers(query, field, onSuccess, onError)
     }
-    /* Test Connection */
-    fun testConnection(host: String, port: Int, onResult: (Boolean, String) -> Unit) {
-        repository.testConnection(host, port, onResult)
+    /* Test Connection — authenticates like a real login when credentials exist */
+    fun testConnection(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        useSsl: Boolean,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        repository.testConnection(host, port, username, password, useSsl, onResult)
     }
 
     /* Sync Database */

@@ -349,7 +349,9 @@ class MikroTikRepository(
                         transport = if (sslEnabled) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
                         durationMs = OperationTelemetry.elapsedRealtime() - startedAt
                     )
-                    NativeConnectResult.Failure(loginMsg.ifBlank { "فشل تسجيل الدخول عبر المنفذ $port" })
+                    val base = loginMsg.ifBlank { "فشل تسجيل الدخول عبر المنفذ $port" }
+                    val hint = connectionFailureHint(base, sslEnabled, port)
+                    NativeConnectResult.Failure(base + if (hint.isNotBlank()) "\n\n$hint" else "")
                 }
             }
         } catch (e: Exception) {
@@ -363,9 +365,9 @@ class MikroTikRepository(
                 transport = if (sslEnabled) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
                 durationMs = OperationTelemetry.elapsedRealtime() - startedAt
             )
-            NativeConnectResult.Failure(
-                "تعذر الاتصال بـ ${connection.host}:$port عبر API. ${e.message ?: ""}".trim()
-            )
+            val base = "تعذر الاتصال بـ ${connection.host}:$port عبر API. ${e.message ?: ""}".trim()
+            val hint = connectionFailureHint(base, sslEnabled, port)
+            NativeConnectResult.Failure(base + if (hint.isNotBlank()) "\n\n$hint" else "")
         }
     }
 
@@ -455,13 +457,121 @@ class MikroTikRepository(
         }
     }
 
-    // Fast socket connection test without logging in
-    fun testConnection(host: String, port: Int, onResult: (Boolean, String) -> Unit) {
+    /**
+     * Connection test that matches the real login path.
+     *
+     * A TCP socket probe alone is not proof that login will work: it ignores
+     * credentials, RouterOS version and SSL. When credentials are supplied we
+     * therefore perform a real RouterOS API login with the same SSL setting and
+     * verify the detected version, so "test succeeded" means "login will work".
+     */
+    fun testConnection(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        useSsl: Boolean,
+        onResult: (Boolean, String) -> Unit
+    ) {
         repositoryScope.launch {
-            val res = MikroTikNativeApi.testSocket(host, port)
-            launch(Dispatchers.Main) {
-                onResult(res.first, res.second)
+            val socketResult = MikroTikNativeApi.testSocket(host, port)
+            if (!socketResult.first) {
+                launch(Dispatchers.Main) { onResult(false, socketResult.second) }
+                return@launch
             }
+            if (username.isBlank()) {
+                launch(Dispatchers.Main) {
+                    onResult(
+                        true,
+                        socketResult.second +
+                            "\n\nملاحظة: هذا اختبار وصول للمنفذ فقط. أدخل اسم المستخدم وكلمة المرور ليختبر التطبيق تسجيل الدخول الفعلي وإصدار RouterOS."
+                    )
+                }
+                return@launch
+            }
+            val api = MikroTikNativeApi(
+                host = host,
+                port = port,
+                connectTimeoutMs = 12000,
+                commandTimeoutMs = 25000,
+                useSsl = useSsl
+            )
+            try {
+                val (loginOk, loginMsg) = api.login(username, password)
+                if (!loginOk) {
+                    val hint = connectionFailureHint(loginMsg, useSsl, port)
+                    launch(Dispatchers.Main) {
+                        onResult(
+                            false,
+                            "فشل اختبار تسجيل الدخول الفعلي:\n$loginMsg" +
+                                if (hint.isNotBlank()) "\n\n$hint" else ""
+                        )
+                    }
+                    return@launch
+                }
+                val version = try {
+                    api.execute("/system/resource/print").firstOrNull()?.get("version").orEmpty()
+                } catch (_: Exception) {
+                    ""
+                }
+                if (!RouterOsSupport.isSupported(version)) {
+                    launch(Dispatchers.Main) {
+                        onResult(false, RouterOsSupport.unsupportedMessage(version))
+                    }
+                } else {
+                    launch(Dispatchers.Main) {
+                        onResult(
+                            true,
+                            "✅ تم اختبار تسجيل الدخول الفعلي بنجاح.\n\n" +
+                                "الراوتر: $host:$port\n" +
+                                "الإصدار: ${version.trim()}\n" +
+                                "التشفير: ${if (useSsl) "SSL" else "بدون SSL"}\n\n" +
+                                "يمكنك الآن الضغط على «تسجيل الدخول»."
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                val hint = connectionFailureHint(e.localizedMessage.orEmpty(), useSsl, port)
+                launch(Dispatchers.Main) {
+                    onResult(
+                        false,
+                        "تعذر اختبار تسجيل الدخول: ${e.localizedMessage ?: "خطأ غير معروف"}" +
+                            if (hint.isNotBlank()) "\n\n$hint" else ""
+                    )
+                }
+            } finally {
+                try { api.close() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    /**
+     * Actionable hint for the most common transport mistakes on custom API
+     * ports: testing plain TCP while login uses SSL (or the opposite), or a
+     * TCP port that is not a RouterOS API service at all.
+     */
+    private fun connectionFailureHint(message: String, useSsl: Boolean, port: Int): String {
+        val lower = message.lowercase(Locale.ROOT)
+        return when {
+            lower.contains("ssl") || lower.contains("handshake") ||
+                lower.contains("certificat") || lower.contains("pkix") ||
+                lower.contains("trust anchor") -> {
+                if (useSsl) {
+                    "💡 فشل اتصال SSL. إذا كان المنفذ $port غير مشفر، أطفئ خيار «تشفير SSL» ثم أعد الاختبار."
+                } else {
+                    "💡 قد يتطلب المنفذ $port اتصال SSL. فعّل خيار «تشفير SSL» ثم أعد الاختبار."
+                }
+            }
+            lower.contains("unexpected") || lower.contains("استجابة غير متوقعة") -> {
+                "💡 المنفذ $port يقبل اتصال TCP لكنه لا يستجيب كخدمة RouterOS API. " +
+                    "تأكد أنه المنفذ المحوَّل إلى API 8728 (أو 8729 مع SSL) وليس منفذ خدمة أخرى."
+            }
+            lower.contains("timed out") || lower.contains("timeout") ||
+                lower.contains("eof") || lower.contains("reset") -> {
+                "💡 قبل المنفذ $port اتصال TCP لكنه لم يرد كخدمة RouterOS API خلال المهلة. " +
+                    "تأكد من صحة المنفذ المحوَّل إلى API، وجرّب تبديل خيار «تشفير SSL»."
+            }
+            else -> ""
         }
     }
 

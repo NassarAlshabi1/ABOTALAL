@@ -116,6 +116,9 @@ fun LoginScreen(
 
     // Selected router from saved list (default first or null)
     var selectedSavedRouterId by rememberSaveable { mutableStateOf<Int?>(null) }
+    // Auto-selecting a saved router must NOT overwrite a manually entered
+    // L2TP/Cloud/Domain form. Only an explicit card tap syncs the form.
+    var syncFormFromSavedRouter by remember { mutableStateOf(false) }
     LaunchedEffect(savedConnections) {
         val selectedStillExists = savedConnections.any { it.id == selectedSavedRouterId }
         if (savedConnections.isNotEmpty() && !selectedStillExists) {
@@ -126,7 +129,9 @@ fun LoginScreen(
     // Keep the manual form in sync with the selected saved router so the bottom
     // "تسجيل الدخول" button, the card "تسجيل" button and "اختبار الاتصال" all
     // target the same host/port/credentials the user sees on screen.
-    LaunchedEffect(selectedSavedRouterId) {
+    LaunchedEffect(selectedSavedRouterId, syncFormFromSavedRouter) {
+        if (!syncFormFromSavedRouter) return@LaunchedEffect
+        syncFormFromSavedRouter = false
         val conn = savedConnections.firstOrNull { it.id == selectedSavedRouterId } ?: return@LaunchedEffect
         // A saved router always stores a direct host/port, so selecting one must
         // leave L2TP/Cloud/Domain modes; otherwise login would target a stale field.
@@ -143,6 +148,13 @@ fun LoginScreen(
     // Dialogs & Feedback
     var showAccountIdDialog by remember { mutableStateOf(false) }
     var testResultDialog by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    // Login errors used to be rendered only at the top of the form's LazyColumn.
+    // In L2TP mode the user is usually scrolled far below it, so a failed login
+    // looked like "nothing happened". Surface the same message in a dialog.
+    var loginErrorDialog by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(connectionError) {
+        if (!connectionError.isNullOrBlank()) loginErrorDialog = connectionError
+    }
     var isTestingConnection by remember { mutableStateOf(false) }
     var showAddRouterDialog by remember { mutableStateOf(false) }
     var deleteConfirmRouter by remember { mutableStateOf<RouterConnection?>(null) }
@@ -802,6 +814,22 @@ fun LoginScreen(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.padding(top = 6.dp, start = 4.dp)
                                             )
+
+                                            Surface(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(top = 8.dp),
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = Color(0xFFFFFBEB),
+                                                border = BorderStroke(1.dp, Color(0xFFFCD34D))
+                                            ) {
+                                                Text(
+                                                    text = "مهم: اسم المستخدم وكلمة المرور في الأسفل هما حساب RouterOS (مثل admin)، وليسا حساب خدمة VPN. اختبار الاتصال يتحقق الآن من تسجيل الدخول الفعلي وإصدار RouterOS.",
+                                                    fontSize = 11.sp,
+                                                    color = Color(0xFF92400E),
+                                                    modifier = Modifier.padding(10.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -876,7 +904,13 @@ fun LoginScreen(
                                         onClick = {
                                             isTestingConnection = true
                                             val (cleanHostStr, p) = resolveTarget()
-                                            viewModel.testConnection(cleanHostStr, p) { ok, msg ->
+                                            viewModel.testConnection(
+                                                cleanHostStr,
+                                                p,
+                                                routerUser.trim(),
+                                                routerPassword,
+                                                useSsl
+                                            ) { ok, msg ->
                                                 isTestingConnection = false
                                                 testResultDialog = Pair(ok, msg)
                                             }
@@ -1222,7 +1256,10 @@ fun LoginScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 5.dp)
-                                    .clickable { selectedSavedRouterId = conn.id },
+                                    .clickable {
+                                        selectedSavedRouterId = conn.id
+                                        syncFormFromSavedRouter = true
+                                    },
                                 shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.cardColors(
                                     containerColor = if (isSelected) Color(0xFFE0F2F1) else MaterialTheme.colorScheme.surface
@@ -1241,7 +1278,10 @@ fun LoginScreen(
                                     // Radio selector
                                     RadioButton(
                                         selected = isSelected,
-                                        onClick = { selectedSavedRouterId = conn.id },
+                                        onClick = {
+                                            selectedSavedRouterId = conn.id
+                                            syncFormFromSavedRouter = true
+                                        },
                                         colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF0C5A60))
                                     )
 
@@ -1331,6 +1371,8 @@ fun LoginScreen(
                                             onClick = {
                                                 // Saved routers store a direct host/port, so never
                                                 // route them through the L2TP/Cloud/Domain fields.
+                                                selectedSavedRouterId = conn.id
+                                                syncFormFromSavedRouter = true
                                                 viewModel.connectRouter(conn, conn.host, conn.port) {
                                                     onLoginSuccess()
                                                 }
@@ -1361,20 +1403,28 @@ fun LoginScreen(
                             // Right: تسجيل الدخول ➔ (Connects to chosen router)
                             Button(
                                 onClick = {
-                                    // The form is the single source of truth — it is
-                                    // auto-filled from the selected saved router above,
-                                    // so login uses exactly what the user sees.
-                                    val (cleanHostStr, p) = resolveTarget()
-                                    val name = connectionDisplayName(cleanHostStr)
-                                    viewModel.connectManualRouter(
-                                        name = name,
-                                        host = cleanHostStr,
-                                        port = p,
-                                        username = routerUser.trim(),
-                                        password = routerPassword,
-                                        useSsl = useSsl,
-                                        onSuccess = { onLoginSuccess() }
-                                    )
+                                    // On the saved-routers tab the selected card is the
+                                    // source of truth; on the credentials tab the form is.
+                                    // This keeps the auto-selected first card from silently
+                                    // overriding a manually entered L2TP/Cloud/Domain form.
+                                    val saved = savedConnections.firstOrNull { it.id == selectedSavedRouterId }
+                                    if (selectedTab == 1 && saved != null) {
+                                        viewModel.connectRouter(saved, saved.host, saved.port) {
+                                            onLoginSuccess()
+                                        }
+                                    } else {
+                                        val (cleanHostStr, p) = resolveTarget()
+                                        val name = connectionDisplayName(cleanHostStr)
+                                        viewModel.connectManualRouter(
+                                            name = name,
+                                            host = cleanHostStr,
+                                            port = p,
+                                            username = routerUser.trim(),
+                                            password = routerPassword,
+                                            useSsl = useSsl,
+                                            onSuccess = { onLoginSuccess() }
+                                        )
+                                    }
                                 },
                                 modifier = Modifier
                                     .weight(1f)
@@ -1518,7 +1568,7 @@ fun LoginScreen(
             },
             title = {
                 Text(
-                    text = if (result.first) "الاتصال ناجح" else "فشل اختبار الاتصال",
+                    text = if (result.first) "نتيجة الاختبار" else "فشل اختبار الاتصال",
                     fontWeight = FontWeight.Bold
                 )
             },
@@ -1650,11 +1700,42 @@ fun LoginScreen(
         )
     }
 
+    // Login failure dialog (always visible, even when the form is scrolled away
+    // from the inline error banner).
+    loginErrorDialog?.let { message ->
+        AlertDialog(
+            onDismissRequest = { loginErrorDialog = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Filled.ErrorOutline,
+                    contentDescription = null,
+                    tint = Color(0xFFDC2626),
+                    modifier = Modifier.size(40.dp)
+                )
+            },
+            title = { Text("تعذر تسجيل الدخول", fontWeight = FontWeight.Bold) },
+            text = { Text(message) },
+            confirmButton = {
+                Button(
+                    onClick = { loginErrorDialog = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
+                ) {
+                    Text("حسناً")
+                }
+            }
+        )
+    }
+
     // Animated Connection Overlay
     if (isConnecting) {
-        val activeConn = savedConnections.firstOrNull { it.id == selectedSavedRouterId }
-        val targetName = activeConn?.name ?: "راوتر ميكروتك"
-        val targetHost = activeConn?.host ?: routerHost
+        // Match the overlay to the target the login button actually uses:
+        // the selected saved card on the saved-routers tab, otherwise the form.
+        val savedTarget = if (selectedTab == 1) {
+            savedConnections.firstOrNull { it.id == selectedSavedRouterId }
+        } else null
+        val (formHost, _) = resolveTarget()
+        val targetName = savedTarget?.name ?: connectionDisplayName(formHost)
+        val targetHost = savedTarget?.host ?: formHost
         com.example.ui.components.AnimatedConnectingDialog(
             routerName = targetName,
             host = targetHost,

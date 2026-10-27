@@ -49,7 +49,7 @@ class MikroTikNativeApi(
                     transport = OperationTelemetry.Transport.NATIVE_API,
                     durationMs = OperationTelemetry.elapsedRealtime() - startedAt
                 )
-                Pair(true, "✅ الاتصال ناجح ومكتمل!\n\nتم الوصول إلى الراوتر ($host) على المنفذ ($port) بنجاح، ومنفذ الخدمة جاهز لاستقبال الأوامر.")
+                Pair(true, "✅ تم الوصول إلى ($host) على المنفذ ($port) عبر TCP.\n\nهذا اختبار وصول للمنفذ فقط، وليس اختبار تسجيل دخول.")
             } catch (e: Exception) {
                 OperationTelemetry.record(
                     event = OperationTelemetry.Event.CONNECTION_RESULT,
@@ -125,6 +125,7 @@ class MikroTikNativeApi(
         val operationId = OperationTelemetry.newOperationId()
         val startedAt = OperationTelemetry.elapsedRealtime()
         synchronized(socketLock) {
+            lastConnectError = null
             return try {
                 val s = if (useSsl) {
                     // Explicit SSL: connect the unconnected socket with our own timeout,
@@ -161,6 +162,8 @@ class MikroTikNativeApi(
                 )
                 true
             } catch (e: Exception) {
+                lastConnectError = e.localizedMessage?.takeIf { it.isNotBlank() }
+                    ?: e.javaClass.simpleName
                 val errorClass = OperationTelemetry.classify(e)
                 OperationTelemetry.record(
                     event = OperationTelemetry.Event.CONNECTION_RESULT,
@@ -198,7 +201,13 @@ class MikroTikNativeApi(
             savedPassword = pass
             if (!isConnected()) {
                 if (!connect()) {
-                    return Pair(false, "تعذر إنشاء اتصال Socket بالراوتر على المنفذ $port. تأكد من فتح خدمة api في الراوتر والاتصال بنفس شبكة الراوتر.")
+                    val reason = lastConnectError?.takeIf { it.isNotBlank() }
+                    return Pair(
+                        false,
+                        "تعذر إنشاء اتصال Socket بالراوتر على المنفذ $port" +
+                            (if (reason != null) " (${reason})" else "") +
+                            ". تأكد من فتح خدمة api في الراوتر والوصول إلى المنفذ الصحيح."
+                    )
                 }
             }
             return performLogin(user, pass)
@@ -258,6 +267,9 @@ class MikroTikNativeApi(
             return finish(Pair(false, "خطأ أثناء محاولة تسجيل الدخول: ${e.localizedMessage ?: "انتهت المهلة"}"), OperationTelemetry.classify(e))
         }
     }
+
+    @Volatile
+    private var lastConnectError: String? = null
 
     @Volatile
     private var lastCommandError: String? = null
