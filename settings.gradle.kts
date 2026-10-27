@@ -28,3 +28,4 @@ dependencyResolutionManagement {
 rootProject.name = "NetCraft"
 
 include(":app")
+include(":l2tp-core")

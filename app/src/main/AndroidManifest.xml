@@ -9,6 +9,9 @@
          public Downloads folder. On Android 10+ (API 29+) MediaStore.Downloads is used
          instead (see CardPrintAndExportHelper.saveToDownloads), which needs no permission. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".NetCraftApp"
@@ -31,6 +34,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".l2tp.L2tpVpnService"
+            android:exported="true"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains a user-initiated L2TP/IPsec VPN tunnel for RouterOS remote access. The service owns the IKE, ESP, PPP and L2TP sockets and the TUN interface, and must keep running while the VPN is up, including when the screen is off." />
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"

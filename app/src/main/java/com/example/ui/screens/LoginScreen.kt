@@ -2,12 +2,12 @@ package com.example.ui.screens
 
 import androidx.compose.material.icons.automirrored.filled.Login
 
+import android.app.Activity
 import android.content.Context
-import android.content.Intent
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import android.provider.Settings
+import android.net.VpnService
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -43,13 +43,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.BuildConfig
 import com.example.data.local.RouterConnection
+import com.example.l2tp.L2tpClientConfig
+import com.example.l2tp.L2tpPhase
+import com.example.l2tp.L2tpStatus
+import com.example.l2tp.L2tpStatusRepository
+import com.example.l2tp.L2tpVpnService
+import com.example.l2tp.parseL2tpEndpoint
 import com.example.ui.components.AppExitConfirmationDialog
 import com.example.ui.components.SegmentedIpField
 import com.example.ui.viewmodel.MikroTikViewModel
+import com.example.util.CryptoManager
 import com.example.util.NetworkUtils
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +66,7 @@ fun LoginScreen(
     val isConnecting by viewModel.isConnecting.collectAsState()
     val connectionError by viewModel.connectionError.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val l2tpStatus by L2tpStatusRepository.state.collectAsState()
 
     // Back button confirmation dialog
     var showExitAppDialog by remember { mutableStateOf(false) }
@@ -78,15 +84,6 @@ fun LoginScreen(
     var connectionMode by rememberSaveable { mutableIntStateOf(0) }
     // Local access (IP/Cloud/Domain) is kept separate from remote L2TP access.
     var lastLocalMode by rememberSaveable { mutableIntStateOf(0) }
-    var vpnActive by remember { mutableStateOf(hasActiveVpn(context)) }
-    LaunchedEffect(connectionMode) {
-        if (connectionMode == 3) {
-            while (true) {
-                vpnActive = hasActiveVpn(context)
-                delay(2000)
-            }
-        }
-    }
 
     // Input States
     var routerHost by rememberSaveable { mutableStateOf(detectedGateway) }
@@ -94,9 +91,16 @@ fun LoginScreen(
     var routerDomain by rememberSaveable { mutableStateOf("") }
     var routerPort by rememberSaveable { mutableStateOf("8728") }
     var vpnServerLink by rememberSaveable { mutableStateOf("") }
-    // L2TP uses UDP 1701 only for establishing the VPN tunnel. The app logs
-    // into RouterOS after the tunnel is active, so this field must be the
-    // RouterOS API port, not the L2TP transport port.
+    // The L2TP client runs inside this app. These are the VPN account details,
+    // not the RouterOS API credentials used further below.
+    var l2tpServer by rememberSaveable { mutableStateOf("") }
+    var l2tpPort by rememberSaveable { mutableStateOf("1701") }
+    var l2tpPsk by remember { mutableStateOf("") }
+    var l2tpUser by rememberSaveable { mutableStateOf("") }
+    var l2tpPassword by remember { mutableStateOf("") }
+    var l2tpPskVisible by remember { mutableStateOf(false) }
+    var l2tpPasswordVisible by remember { mutableStateOf(false) }
+    // After the tunnel is active this is the RouterOS API port, not the L2TP transport port.
     var vpnPort by rememberSaveable { mutableStateOf("8728") }
     var routerUser by rememberSaveable { mutableStateOf("") }
     var routerPassword by remember { mutableStateOf("") }
@@ -160,6 +164,129 @@ fun LoginScreen(
     var deleteConfirmRouter by remember { mutableStateOf<RouterConnection?>(null) }
     var showBackupRestoreDialog by remember { mutableStateOf(false) }
 
+    // ---------------------------------------------------------------- in-app L2TP client
+    val l2tpPrefs = remember { context.getSharedPreferences("l2tp_prefs", Context.MODE_PRIVATE) }
+    LaunchedEffect(Unit) {
+        if (l2tpServer.isBlank()) {
+            l2tpServer = l2tpPrefs.getString("server", "").orEmpty()
+            l2tpPort = l2tpPrefs.getString("port", "1701").orEmpty().ifBlank { "1701" }
+            l2tpUser = l2tpPrefs.getString("user", "").orEmpty()
+            l2tpPsk = CryptoManager.decrypt(l2tpPrefs.getString("psk", ""))
+            l2tpPassword = CryptoManager.decrypt(l2tpPrefs.getString("password", ""))
+        }
+    }
+
+    fun saveL2tpSettings() {
+        val encryptedPsk = CryptoManager.encrypt(l2tpPsk)
+        val encryptedPassword = CryptoManager.encrypt(l2tpPassword)
+        if ((l2tpPsk.isNotBlank() && encryptedPsk == null) ||
+            (l2tpPassword.isNotBlank() && encryptedPassword == null)
+        ) {
+            loginErrorDialog = "تعذر تشفير إعدادات L2TP على هذا الجهاز، لذلك لم تُحفظ."
+            return
+        }
+        l2tpPrefs.edit()
+            .putString("server", l2tpServer.trim())
+            .putString("port", l2tpPort.trim())
+            .putString("user", l2tpUser.trim())
+            .putString("psk", encryptedPsk.orEmpty())
+            .putString("password", encryptedPassword.orEmpty())
+            .apply()
+        testResultDialog = Pair(true, "تم حفظ إعدادات L2TP على هذا الجهاز.")
+    }
+
+    var pendingL2tpConfig by remember { mutableStateOf<L2tpClientConfig?>(null) }
+    val vpnConsentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val config = pendingL2tpConfig
+        pendingL2tpConfig = null
+        if (result.resultCode == Activity.RESULT_OK && config != null) {
+            runCatching { L2tpVpnService.start(context, config) }
+                .onFailure {
+                    loginErrorDialog = "تعذر بدء خدمة VPN: ${it.localizedMessage ?: "خطأ غير معروف"}"
+                }
+        } else {
+            loginErrorDialog = "لم يُمنح إذن إنشاء نفق VPN. لا يمكن الاتصال بـ L2TP بدونه."
+        }
+    }
+
+    fun beginL2tpTunnel(config: L2tpClientConfig) {
+        val consent = try {
+            VpnService.prepare(context)
+        } catch (e: Exception) {
+            loginErrorDialog = "تعذر بدء طلب إذن VPN: ${e.localizedMessage ?: "خطأ غير معروف"}"
+            return
+        }
+        if (consent == null) {
+            runCatching { L2tpVpnService.start(context, config) }
+                .onFailure {
+                    loginErrorDialog = "تعذر بدء خدمة VPN: ${it.localizedMessage ?: "خطأ غير معروف"}"
+                }
+        } else {
+            pendingL2tpConfig = config
+            vpnConsentLauncher.launch(consent)
+        }
+    }
+
+    fun buildL2tpConfig(): L2tpClientConfig? {
+        val endpoint = parseL2tpEndpoint(
+            l2tpServer,
+            l2tpPort.toIntOrNull() ?: L2tpClientConfig.DEFAULT_L2TP_PORT,
+        )
+        if (endpoint == null) {
+            loginErrorDialog = "أدخل عنوان خادم L2TP صحيحًا، مثل ath.vpnbersama.us أو ath.vpnbersama.us:1701."
+            return null
+        }
+        if (l2tpPsk.isBlank()) {
+            loginErrorDialog = "أدخل مفتاح IPsec PSK. التطبيق يدعم حاليًا L2TP/IPsec PSK."
+            return null
+        }
+        if (l2tpUser.isBlank()) {
+            loginErrorDialog = "أدخل اسم مستخدم VPN (حساب L2TP)."
+            return null
+        }
+        if (l2tpPassword.isBlank()) {
+            loginErrorDialog = "أدخل كلمة مرور VPN (حساب L2TP)."
+            return null
+        }
+        return L2tpClientConfig(
+            host = endpoint.host,
+            port = endpoint.port,
+            presharedKey = l2tpPsk,
+            username = l2tpUser.trim(),
+            password = l2tpPassword,
+            displayName = routerCustomName.ifBlank { "L2TP" },
+        )
+    }
+
+    fun ensureL2tpReady(): Boolean {
+        if (connectionMode != 3) return true
+        if (l2tpStatus.isConnected) return true
+        loginErrorDialog = when (l2tpStatus.phase) {
+            L2tpPhase.CONNECTING ->
+                "نفق L2TP قيد الاتصال الآن. انتظر حتى تظهر حالة «متصل» ثم أعد المحاولة."
+            L2tpPhase.DISCONNECTING ->
+                "نفق L2TP قيد الإيقاف. انتظر قليلًا ثم أعد المحاولة."
+            L2tpPhase.FAILED ->
+                "فشل نفق L2TP:\n${l2tpStatus.detail ?: "خطأ غير معروف"}"
+            else ->
+                "شغّل نفق L2TP أولًا من زر «تشغيل نفق L2TP» أعلاه."
+        }
+        return false
+    }
+
+    var lastAutoPeer by remember { mutableStateOf("") }
+    LaunchedEffect(connectionMode, l2tpStatus.phase, l2tpStatus.peerAddress) {
+        if (connectionMode == 3 && l2tpStatus.isConnected) {
+            val peer = l2tpStatus.peerAddress.orEmpty()
+            if (peer.isNotBlank() && (vpnServerLink.isBlank() || vpnServerLink == lastAutoPeer)) {
+                vpnServerLink = peer
+                lastAutoPeer = peer
+            }
+        }
+    }
+
     // Resolves the active connection-mode inputs into (host, port) shared by
     // the "اختبار الاتصال" and "تسجيل الدخول" buttons on both tabs.
     fun resolveTarget(): Pair<String, Int> {
@@ -173,17 +300,16 @@ fun LoginScreen(
                     raw
                 }
             }
-            3 -> vpnServerLink.trim()
+            3 -> vpnServerLink.trim().ifBlank { l2tpStatus.peerAddress.orEmpty() }
             else -> routerDomain.trim()
         }
         val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
         val portField = if (connectionMode == 3) vpnPort else routerPort
-        // L2TP/IPsec is established by Android's VPN settings. The login
-        // itself always speaks RouterOS API through the active tunnel.
+        // The L2TP client runs in this app. Login still speaks RouterOS API
+        // through the active tunnel; the target is normally the tunnel peer.
         val defaultPort = 8728
-        // An explicit port in the entered URL wins for every mode. This is
-        // needed for deployments that publish RouterOS API on a custom WAN
-        // port such as 13196. If no port is embedded, use the selected field.
+        // An explicit port in the entered URL wins for every mode. If no
+        // port is embedded, use the selected field.
         val resolvedPort = parsedPort ?: (portField.toIntOrNull() ?: defaultPort)
         return Pair(cleanHostStr, resolvedPort)
     }
@@ -461,7 +587,7 @@ fun LoginScreen(
                                         selected = connectionMode == 3,
                                         icon = Icons.Filled.VpnKey,
                                         title = "L2TP عن بعد",
-                                        subtitle = "عبر نفق VPN في أندرويد",
+                                        subtitle = "نفق L2TP داخل التطبيق",
                                         onClick = { connectionMode = 3 }
                                     )
                                 }
@@ -500,8 +626,6 @@ fun LoginScreen(
                                             onClick = { connectionMode = 2; lastLocalMode = 2 }
                                         )
                                     }
-                                } else {
-                                    VpnStatusBanner(active = vpnActive)
                                 }
 
                                 when (connectionMode) {
@@ -689,34 +813,25 @@ fun LoginScreen(
                                         }
                                     }
                                     3 -> {
-                                        // 4. L2TP VPN Mode: الدخول عن بعد (رابط VPN والبورت)
+                                        // 4. L2TP client running inside this app
                                         Column(modifier = Modifier.fillMaxWidth()) {
                                             Row(
                                                 modifier = Modifier.fillMaxWidth(),
                                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                verticalAlignment = Alignment.CenterVertically
+                                                verticalAlignment = Alignment.Top
                                             ) {
-                                                // RouterOS API port reachable after the VPN tunnel is active
                                                 OutlinedTextField(
-                                                    value = vpnPort,
-                                                    onValueChange = { vpnPort = it },
-                                                    label = { Text("منفذ API بعد VPN") },
-                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                                    modifier = Modifier.width(82.dp),
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    singleLine = true
-                                                )
-
-                                                // VPN Server Link / Address (رابط VPN)
-                                                OutlinedTextField(
-                                                    value = vpnServerLink,
-                                                    onValueChange = { vpnServerLink = it },
-                                                    label = { Text("عنوان الراوتر عبر VPN") },
-                                                    placeholder = { Text("عنوان الراوتر داخل النفق أو سيرفر VPN") },
+                                                    value = l2tpServer,
+                                                    onValueChange = { l2tpServer = it },
+                                                    label = { Text("خادم L2TP") },
+                                                    placeholder = { Text("ath.vpnbersama.us") },
+                                                    supportingText = {
+                                                        Text("يمكن إضافة المنفذ: ath.vpnbersama.us:13196", fontSize = 9.sp)
+                                                    },
                                                     leadingIcon = {
                                                         Icon(
                                                             imageVector = Icons.Filled.VpnKey,
-                                                            contentDescription = "VPN",
+                                                            contentDescription = "L2TP",
                                                             tint = Color(0xFF0C5A60)
                                                         )
                                                     },
@@ -724,14 +839,220 @@ fun LoginScreen(
                                                     shape = RoundedCornerShape(12.dp),
                                                     singleLine = true
                                                 )
+                                                OutlinedTextField(
+                                                    value = l2tpPort,
+                                                    onValueChange = { value ->
+                                                        l2tpPort = value.filter { it.isDigit() }.take(5)
+                                                    },
+                                                    label = { Text("منفذ L2TP") },
+                                                    supportingText = { Text("داخل IPsec عادة 1701", fontSize = 9.sp) },
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                    modifier = Modifier.width(96.dp),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
                                             }
 
-                                            // L2TP itself uses UDP 1701 in Android VPN settings;
-                                            // these chips select the RouterOS API port used for login.
+                                            Spacer(modifier = Modifier.height(8.dp))
+
+                                            OutlinedTextField(
+                                                value = l2tpPsk,
+                                                onValueChange = { l2tpPsk = it },
+                                                label = { Text("مفتاح IPsec PSK") },
+                                                placeholder = { Text("المفتاح المشترك من مزود VPN") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Lock,
+                                                        contentDescription = null,
+                                                        tint = Color(0xFF0C5A60)
+                                                    )
+                                                },
+                                                trailingIcon = {
+                                                    IconButton(onClick = { l2tpPskVisible = !l2tpPskVisible }) {
+                                                        Icon(
+                                                            imageVector = if (l2tpPskVisible) Icons.Filled.VisibilityOff
+                                                            else Icons.Filled.Visibility,
+                                                            contentDescription = "إظهار مفتاح PSK"
+                                                        )
+                                                    }
+                                                },
+                                                visualTransformation = if (l2tpPskVisible) VisualTransformation.None
+                                                else PasswordVisualTransformation(),
+                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp),
+                                                singleLine = true
+                                            )
+
+                                            Spacer(modifier = Modifier.height(8.dp))
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = l2tpUser,
+                                                    onValueChange = { l2tpUser = it },
+                                                    label = { Text("مستخدم VPN") },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Filled.Person,
+                                                            contentDescription = null,
+                                                            tint = Color(0xFF0C5A60)
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                                OutlinedTextField(
+                                                    value = l2tpPassword,
+                                                    onValueChange = { l2tpPassword = it },
+                                                    label = { Text("كلمة مرور VPN") },
+                                                    trailingIcon = {
+                                                        IconButton(onClick = { l2tpPasswordVisible = !l2tpPasswordVisible }) {
+                                                            Icon(
+                                                                imageVector = if (l2tpPasswordVisible) Icons.Filled.VisibilityOff
+                                                                else Icons.Filled.Visibility,
+                                                                contentDescription = "إظهار كلمة مرور VPN"
+                                                            )
+                                                        }
+                                                    },
+                                                    visualTransformation = if (l2tpPasswordVisible) VisualTransformation.None
+                                                    else PasswordVisualTransformation(),
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(10.dp))
+
+                                            L2tpStatusCard(l2tpStatus)
+
+                                            Spacer(modifier = Modifier.height(10.dp))
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Button(
+                                                    onClick = {
+                                                        if (l2tpStatus.isConnected || l2tpStatus.isBusy) {
+                                                            L2tpVpnService.stop(context)
+                                                        } else {
+                                                            buildL2tpConfig()?.let { beginL2tpTunnel(it) }
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .height(46.dp),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = if (l2tpStatus.isConnected || l2tpStatus.isBusy)
+                                                            Color(0xFFB91C1C) else MaterialTheme.colorScheme.primary,
+                                                        contentColor = Color.White
+                                                    )
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (l2tpStatus.isConnected || l2tpStatus.isBusy)
+                                                            Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = if (l2tpStatus.isConnected || l2tpStatus.isBusy)
+                                                            "إيقاف نفق L2TP" else "تشغيل نفق L2TP",
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { saveL2tpSettings() },
+                                                    modifier = Modifier
+                                                        .width(92.dp)
+                                                        .height(46.dp),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Save,
+                                                        contentDescription = "حفظ",
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(text = "حفظ", fontSize = 12.sp)
+                                                }
+                                            }
+
+                                            Text(
+                                                text = "التطبيق ينشئ النفق بنفسه عبر خدمة VPN في أندرويد، ثم يسجل الدخول إلى RouterOS من خلاله. يستخدم هذا الإصدار L2TP/IPsec PSK؛ إن كان حسابك L2TP بدون IPsec فلن يتصل.",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(top = 6.dp, start = 4.dp)
+                                            )
+
+                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                            Text(
+                                                text = "بعد نجاح النفق: عنوان RouterOS API",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.padding(top = 10.dp, bottom = 6.dp)
+                                            )
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.Top
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = vpnServerLink,
+                                                    onValueChange = { vpnServerLink = it },
+                                                    label = { Text("عنوان الراوتر داخل النفق (اختياري)") },
+                                                    placeholder = {
+                                                        Text(
+                                                            l2tpStatus.peerAddress
+                                                                ?: "يُملأ تلقائيًا من بوابة L2TP"
+                                                        )
+                                                    },
+                                                    supportingText = {
+                                                        val peer = l2tpStatus.peerAddress
+                                                        Text(
+                                                            if (l2tpStatus.isConnected && !peer.isNullOrBlank())
+                                                                "بوابة النفق: $peer — يمكنك تعديل العنوان يدويًا."
+                                                            else
+                                                                "اتركه فارغًا ليُستخدم عنوان بوابة L2TP بعد الاتصال.",
+                                                            fontSize = 10.sp
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                                OutlinedTextField(
+                                                    value = vpnPort,
+                                                    onValueChange = { value ->
+                                                        vpnPort = value.filter { it.isDigit() }.take(5)
+                                                        if (vpnPort == "8729") useSsl = true
+                                                        if (vpnPort == "8728") useSsl = false
+                                                    },
+                                                    label = { Text("منفذ API") },
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                    modifier = Modifier.width(82.dp),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                            }
+
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .padding(top = 6.dp),
+                                                    .padding(top = 2.dp),
                                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
                                                 listOf("API 8728" to "8728", "API-SSL 8729" to "8729")
@@ -757,7 +1078,7 @@ fun LoginScreen(
                                                 }
                                             }
 
-                                            if (!vpnActive) {
+                                            if (vpnPort == "13196" || vpnServerLink.contains(":13196")) {
                                                 Surface(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
@@ -767,7 +1088,7 @@ fun LoginScreen(
                                                     border = BorderStroke(1.dp, Color(0xFFFDBA74))
                                                 ) {
                                                     Text(
-                                                        text = "تنبيه: لا يوجد نفق VPN نشط الآن. شغّل اتصال L2TP من إعدادات أندرويد أولاً، وإلا فقد يفشل الوصول إلى عنوان الراوتر.",
+                                                        text = "تنبيه: المنفذ 13196 على ath.vpnbersama.us هو WebFig (HTTP) وليس RouterOS API. استخدم 8728، أو 8729 مع SSL.",
                                                         fontSize = 11.sp,
                                                         color = Color(0xFF9A3412),
                                                         modifier = Modifier.padding(10.dp)
@@ -775,45 +1096,14 @@ fun LoginScreen(
                                                 }
                                             }
 
-                                            Spacer(modifier = Modifier.height(8.dp))
-
-                                            // Open Android's system VPN settings to add/enable the L2TP profile
-                                            OutlinedButton(
-                                                onClick = {
-                                                    try {
-                                                        context.startActivity(
-                                                            Intent("android.net.vpn.Settings")
-                                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                        )
-                                                    } catch (vpnSettingsMissing: Exception) {
-                                                        try {
-                                                            context.startActivity(
-                                                                Intent(Settings.ACTION_SETTINGS)
-                                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                            )
-                                                        } catch (settingsMissing: Exception) {
-                                                            // No settings screen available — ignore
-                                                        }
-                                                    }
-                                                },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.VpnKey,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
+                                            if (!l2tpStatus.isConnected) {
+                                                Text(
+                                                    text = "شغّل نفق L2TP أولًا، ثم اضغط «اختبار الاتصال» أو «تسجيل الدخول». إذا تعذر الوصول إلى الراوتر، أدخل عنوانه داخل النفق يدويًا.",
+                                                    fontSize = 11.sp,
+                                                    color = Color(0xFF9A3412),
+                                                    modifier = Modifier.padding(top = 6.dp, start = 4.dp)
                                                 )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(text = "فتح إعدادات VPN في أندرويد", fontSize = 12.sp)
                                             }
-
-                                            Text(
-                                                text = "الدخول المحلي (IP/كلاود/دومين) منفصل تماماً عن هذا الوضع. هنا يتصل التطبيق بالراوتر عبر نفق L2TP/IPsec ينشئه نظام أندرويد (منفذ 1701)؛ أضف الاتصال من إعدادات VPN، فعّله، ثم أدخل عنوان الراوتر داخل النفق واختر منفذ RouterOS API ‏8728 أو 8729.",
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(top = 6.dp, start = 4.dp)
-                                            )
 
                                             Surface(
                                                 modifier = Modifier
@@ -824,7 +1114,7 @@ fun LoginScreen(
                                                 border = BorderStroke(1.dp, Color(0xFFFCD34D))
                                             ) {
                                                 Text(
-                                                    text = "مهم: اسم المستخدم وكلمة المرور في الأسفل هما حساب RouterOS (مثل admin)، وليسا حساب خدمة VPN. اختبار الاتصال يتحقق الآن من تسجيل الدخول الفعلي وإصدار RouterOS.",
+                                                    text = "مهم: اسم المستخدم وكلمة المرور في الأسفل هما حساب RouterOS (مثل admin)، وليسا حساب خدمة VPN. حساب VPN يُدخل في الحقول أعلاه فقط.",
                                                     fontSize = 11.sp,
                                                     color = Color(0xFF92400E),
                                                     modifier = Modifier.padding(10.dp)
@@ -902,8 +1192,13 @@ fun LoginScreen(
                                     // اختبار الاتصال
                                     OutlinedButton(
                                         onClick = {
-                                            isTestingConnection = true
+                                            if (!ensureL2tpReady()) return@OutlinedButton
                                             val (cleanHostStr, p) = resolveTarget()
+                                            if (cleanHostStr.isBlank()) {
+                                                loginErrorDialog = "أدخل عنوان الراوتر داخل النفق في قسم «بعد نجاح النفق» أولًا."
+                                                return@OutlinedButton
+                                            }
+                                            isTestingConnection = true
                                             viewModel.testConnection(
                                                 cleanHostStr,
                                                 p,
@@ -929,7 +1224,12 @@ fun LoginScreen(
                                     // تسجيل الدخول (Primary Teal Button)
                                     Button(
                                         onClick = {
+                                            if (!ensureL2tpReady()) return@Button
                                             val (cleanHostStr, p) = resolveTarget()
+                                            if (cleanHostStr.isBlank()) {
+                                                loginErrorDialog = "أدخل عنوان الراوتر داخل النفق في قسم «بعد نجاح النفق» أولًا."
+                                                return@Button
+                                            }
                                             val name = connectionDisplayName(cleanHostStr)
                                             viewModel.connectManualRouter(
                                                 name = name,
@@ -1413,7 +1713,12 @@ fun LoginScreen(
                                             onLoginSuccess()
                                         }
                                     } else {
+                                        if (!ensureL2tpReady()) return@Button
                                         val (cleanHostStr, p) = resolveTarget()
+                                        if (cleanHostStr.isBlank()) {
+                                            loginErrorDialog = "أدخل عنوان الراوتر داخل النفق في قسم «بعد نجاح النفق» أولًا."
+                                            return@Button
+                                        }
                                         val name = connectionDisplayName(cleanHostStr)
                                         viewModel.connectManualRouter(
                                             name = name,
@@ -1843,42 +2148,96 @@ private fun RowScope.LocalModeChip(
 }
 
 @Composable
-private fun VpnStatusBanner(active: Boolean) {
+private fun L2tpStatusCard(status: L2tpStatus) {
+    val container = when (status.phase) {
+        L2tpPhase.CONNECTED -> Color(0xFFDCFCE7)
+        L2tpPhase.CONNECTING, L2tpPhase.DISCONNECTING -> Color(0xFFFFF7ED)
+        L2tpPhase.FAILED -> Color(0xFFFEE2E2)
+        L2tpPhase.IDLE -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    }
+    val accent = when (status.phase) {
+        L2tpPhase.CONNECTED -> Color(0xFF15803D)
+        L2tpPhase.CONNECTING, L2tpPhase.DISCONNECTING -> Color(0xFF9A3412)
+        L2tpPhase.FAILED -> Color(0xFFB91C1C)
+        L2tpPhase.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val border = when (status.phase) {
+        L2tpPhase.CONNECTED -> Color(0xFF86EFAC)
+        L2tpPhase.CONNECTING, L2tpPhase.DISCONNECTING -> Color(0xFFFDBA74)
+        L2tpPhase.FAILED -> Color(0xFFFCA5A5)
+        L2tpPhase.IDLE -> MaterialTheme.colorScheme.outlineVariant
+    }
+    val title = when (status.phase) {
+        L2tpPhase.CONNECTED -> "نفق L2TP متصل"
+        L2tpPhase.CONNECTING -> "جارٍ الاتصال بنفق L2TP"
+        L2tpPhase.DISCONNECTING -> "جارٍ إيقاف نفق L2TP"
+        L2tpPhase.FAILED -> "تعذر إنشاء نفق L2TP"
+        L2tpPhase.IDLE -> "نفق L2TP غير متصل"
+    }
+    val body = when (status.phase) {
+        L2tpPhase.CONNECTED -> buildString {
+            append("عنوانك داخل النفق: ")
+            append(status.assignedAddress ?: "—")
+            val peer = status.peerAddress ?: status.serverAddress
+            if (!peer.isNullOrBlank()) {
+                append(" • بوابة الراوتر: ")
+                append(peer)
+            }
+        }
+        L2tpPhase.CONNECTING -> status.detail ?: "جارٍ تجهيز النفق ومصادقة IPsec..."
+        L2tpPhase.DISCONNECTING -> "جارٍ إغلاق النفق وإعادة المسار الطبيعي..."
+        L2tpPhase.FAILED -> status.detail
+            ?: "فشل الاتصال. تحقق من الخادم والمنفذ ومفتاح PSK وحساب VPN."
+        L2tpPhase.IDLE -> "أدخل بيانات حساب L2TP ثم اضغط «تشغيل نفق L2TP»."
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        color = if (active) Color(0xFFDCFCE7) else Color(0xFFFFF7ED),
-        border = BorderStroke(1.dp, if (active) Color(0xFF86EFAC) else Color(0xFFFDBA74))
+        color = container,
+        border = BorderStroke(1.dp, border)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Top
         ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(if (active) Color(0xFF16A34A) else Color(0xFFF97316))
-            )
+            if (status.phase == L2tpPhase.CONNECTING || status.phase == L2tpPhase.DISCONNECTING) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .padding(top = 1.dp)
+                        .size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = accent
+                )
+            } else {
+                Icon(
+                    imageVector = when (status.phase) {
+                        L2tpPhase.CONNECTED -> Icons.Filled.CheckCircle
+                        L2tpPhase.FAILED -> Icons.Filled.Warning
+                        else -> Icons.Filled.Info
+                    },
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
             Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (active) "نفق VPN نشط — أدخل عنوان الراوتر داخل النفق"
-                else "نفق VPN غير نشط — فعّل اتصال L2TP من إعدادات أندرويد",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = if (active) Color(0xFF15803D) else Color(0xFF9A3412)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = accent
+                )
+                if (!body.isNullOrBlank()) {
+                    Text(
+                        text = body,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
         }
-    }
-}
-
-private fun hasActiveVpn(context: Context): Boolean {
-    val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        ?: return false
-    @Suppress("DEPRECATION")
-    val networks = manager.allNetworks
-    return networks.any { network ->
-        manager.getNetworkCapabilities(network)
-            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
     }
 }
