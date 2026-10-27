@@ -5,7 +5,7 @@ package com.example.data.repository
  *  reviewing generated commands. */
 internal object RouterOsV6AdviceGuard {
     private val v7OnlyPatterns = listOf(
-        Regex("(?i)(?:^|[\\s`])/(?:interface/wifi|routing/(?:table|bgp|ospf|filter|rule)|user-manager)(?:/|\\s|$)")
+        Regex("(?i)(?:^|[\\s`])/(?:interface/(?:wifi|wifiwave2)|routing/(?:table|bgp|ospf|filter|rule)|user-manager)(?:/|\\s|$)")
     )
     private val v6OnlyPatterns = listOf(
         Regex("(?i)(?:^|[\\s`])/tool/user-manager(?:/|\\s|$)")

@@ -151,20 +151,44 @@ class RouterOpsAuditTest {
     }
 
     @Test
-    fun `removeCloudBackup sends numbers param`() = runBlocking {
+    fun `removeCloudBackup uses v6 remove-file slot number`() = runBlocking {
         val server = ScriptableMockServer()
         try {
             val repo = connectRepoToMockRouter(server)
             var success = false; var error: String? = null
-            repo.removeCloudBackup("*2",
+            repo.removeCloudBackup("0",
                 onSuccess = { success = true },
                 onError = { error = it })
             pumpMainUntil { success || error != null }
-            val removes = server.commandsMatching("/system/backup/cloud/remove")
-            if (removes.isNotEmpty()) {
-                assertTrue(removes.first().any { it == "=numbers=*2" })
+            assertTrue("cloud remove must succeed: $error", success)
+            val removes = server.commandsMatching("/system/backup/cloud/remove-file")
+            assertTrue(removes.isNotEmpty())
+            assertTrue(removes.first().any { it == "=number=0" })
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `uploadCloudBackup reuses the single v6 cloud slot`() = runBlocking {
+        val server = ScriptableMockServer()
+        try {
+            server.handler = { words ->
+                when (words.firstOrNull()) {
+                    "/system/backup/cloud/print" ->
+                        listOf(listOf("!re", "=name=cloud-old", "=size=1KiB", "=status=ok"), listOf("!done"))
+                    else -> listOf(listOf("!done"))
+                }
             }
-            assertTrue("call must finish: $error", success || error != null)
+            val repo = connectRepoToMockRouter(server)
+            var success = false; var error: String? = null
+            repo.uploadCloudBackup("new-backup", "secret",
+                onSuccess = { success = true },
+                onError = { error = it })
+            pumpMainUntil { success || error != null }
+            assertTrue("cloud upload must succeed: $error", success)
+            val uploads = server.commandsMatching("/system/backup/cloud/upload-file")
+            assertTrue(uploads.isNotEmpty())
+            assertTrue(uploads.first().any { it == "=action=create-and-upload" })
+            assertTrue(uploads.first().any { it == "=replace=cloud-old" })
         } finally { server.shutdown() }
     }
 

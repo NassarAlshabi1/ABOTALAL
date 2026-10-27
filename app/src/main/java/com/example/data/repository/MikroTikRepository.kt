@@ -98,24 +98,14 @@ class MikroTikRepository(
     @Volatile
     private var routerVersion: String = ""
 
-    // Cached result of probing User Manager menus when /system/resource did not
-    // reveal the version. Kept per connection and cleared on disconnect.
-    @Volatile
-    private var probedUmFlavor: UmFlavor? = null
-
-    /** User-manager menu base for the DETECTED RouterOS version. */
+    /** RouterOS v6 is the only supported generation, so User Manager always
+     *  lives under the legacy `/tool/user-manager` menu. Never probe or send a
+     *  v7 `/user-manager` command on a v6 router. */
     private val umBase: String
-        get() = when {
-            rosMajor == 6 -> "/tool/user-manager"
-            rosMajor >= 7 -> "/user-manager"
-            probedUmFlavor == UmFlavor.V6 -> "/tool/user-manager"
-            else -> "/user-manager"
-        }
+        get() = "/tool/user-manager"
 
-    /** Ordered candidate bases for user-manager commands — detected version first. */
     private val umBases: List<String>
-        get() = if (umBase == "/tool/user-manager") listOf("/tool/user-manager", "/user-manager")
-                else listOf("/user-manager", "/tool/user-manager")
+        get() = listOf(umBase)
 
     @Volatile
     private var cachedCustomer: Pair<String, String>? = null
@@ -236,16 +226,14 @@ class MikroTikRepository(
                 }
             }
 
-            // 2. REST API on the configured (web) port
-            val restResult = tryRestConnect(connection, operationId)
-            if (restResult.first) {
-                launch(Dispatchers.Main) { onSuccess() }
-                return@launch
+            // 2. RouterOS v6 has no REST API. A web port in the saved connection
+            //    therefore falls through to the native API on 8728 below instead
+            //    of silently using v7-only /rest endpoints.
+            if (connection.port in webPorts) {
+                lastError = "REST غير مدعوم على RouterOS v6؛ جارٍ محاولة API على المنفذ 8728"
             }
-            lastError = restResult.second
 
-            // 3. Configured port was a web port and REST failed to reach it — try the
-            //    default native API port 8728 as a last resort.
+            // 3. Configured port was a web port — try the default native API port 8728.
             if (connection.port in webPorts) {
                 val nativeAttempt = tryNativeConnect(connection, operationId, overridePort = 8728)
                 when (nativeAttempt) {
@@ -298,7 +286,6 @@ class MikroTikRepository(
                 // unsupported router never appears as briefly connected.
                 rosMajor = 0
                 routerVersion = ""
-                probedUmFlavor = null
                 detectRouterOsVersion(api, connection)
 
                 if (!RouterOsSupport.isSupported(routerVersion)) {
@@ -306,7 +293,6 @@ class MikroTikRepository(
                     insertActivityLog("تسجيل الدخول", "تم رفض الاتصال: $message", connection.host)
                     try { api.close() } catch (_: Exception) {}
                     rosMajor = 0
-                    probedUmFlavor = null
                     return NativeConnectResult.Unsupported(message)
                 }
 
@@ -420,7 +406,6 @@ class MikroTikRepository(
                     _isConnected.value = true
                     routerVersion = restVersion
                     rosMajor = 6
-                    probedUmFlavor = UmFlavor.V6
 
                     insertActivityLog("تسجيل الدخول", "تم الاتصال بنجاح بالراوتر ${connection.name} (${connection.host}) عبر REST", connection.host)
 
@@ -545,23 +530,13 @@ class MikroTikRepository(
                 }
                 _activeHotspot.value = activeHotspot
 
-                // 5. User Manager Profiles — use the version-detected menu base; probe the
-                // other menu only when the version is still unknown.
-                var umProfList = api.execute("$umBase/profile/print")
-                var isV6UM = detectUmFlavor(api) == UmFlavor.V6
-                if (umProfList.isEmpty() && rosMajor == 0) {
-                    val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
-                    umProfList = api.execute("$alt/profile/print")
-                    if (umProfList.isNotEmpty()) {
-                        isV6UM = !isV6UM
-                        rosMajor = if (isV6UM) 6 else 7
-                    }
-                }
+                // 5. User Manager Profiles — always the v6 legacy menu.
+                val umProfList = api.execute("$umBase/profile/print")
                 if (umProfList.isEmpty()) {
                     insertActivityLog("باقات اليوزرمانجر", api.lastError
                         ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر", connection.host)
                 }
-                val limitations = umReadProfileLimitations(api, isV6UM)
+                val limitations = umReadProfileLimitations(api)
 
                 val umProfiles = umProfList.map { p ->
                     val name = p["name"] ?: p["name-for-users"] ?: "default"
@@ -597,13 +572,7 @@ class MikroTikRepository(
                 }
 
                 // 6. User Manager Users — same version-aware base selection
-                var umList = api.execute("$umBase/user/print")
-                if (umList.isEmpty() && rosMajor == 0) {
-                    umList = api.execute(
-                        if (umBase == "/tool/user-manager") "/user-manager/user/print"
-                        else "/tool/user-manager/user/print"
-                    )
-                }
+                val umList = api.execute("$umBase/user/print")
                 val umUsers = applyRouterExpiry(api, mapUserManagerRows(umList))
                 if (umUsers.isNotEmpty()) {
                     _userManagerUsers.value = umUsers
@@ -814,13 +783,7 @@ class MikroTikRepository(
             }
             try {
                 if (useUserManager) {
-                    var rows = api.execute("$umBase/user/print")
-                    if (rows.isEmpty() && rosMajor == 0) {
-                        rows = api.execute(
-                            if (umBase == "/tool/user-manager") "/user-manager/user/print"
-                            else "/tool/user-manager/user/print"
-                        )
-                    }
+                    val rows = api.execute("$umBase/user/print")
                     val users = mapUserManagerRows(rows)
                     if (users.isNotEmpty()) {
                         _userManagerUsers.value = users
@@ -856,23 +819,14 @@ class MikroTikRepository(
                 launch(Dispatchers.Main) { onProgress(0, 4, "جاري مزامنة باقات وكروت ومستخدمي اليوزرمانجر...") }
 
                 if (api != null && _isConnected.value) {
-                    // Fetch Profiles — version-aware base, probe only when undetected
-                    var umProfList = api.execute("$umBase/profile/print")
-                    var isV6UM = detectUmFlavor(api) == UmFlavor.V6
-                    if (umProfList.isEmpty() && rosMajor == 0) {
-                        val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
-                        umProfList = api.execute("$alt/profile/print")
-                        if (umProfList.isNotEmpty()) {
-                            isV6UM = !isV6UM
-                            rosMajor = if (isV6UM) 6 else 7
-                        }
-                    }
+                    // Fetch Profiles — v6 legacy menu only.
+                    val umProfList = api.execute("$umBase/profile/print")
                     if (umProfList.isEmpty()) {
                         insertActivityLog("باقات اليوزرمانجر", api.lastError
                             ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر",
                             _currentConnection.value?.host ?: "")
                     }
-                    val limitations = umReadProfileLimitations(api, isV6UM)
+                    val limitations = umReadProfileLimitations(api)
 
                     if (umProfList.isNotEmpty()) {
                         val umProfiles = umProfList.map { p ->
@@ -904,13 +858,7 @@ class MikroTikRepository(
                     }
 
                     // Fetch Users / Cards — version-aware base
-                    var umList = api.execute("$umBase/user/print")
-                    if (umList.isEmpty() && rosMajor == 0) {
-                        umList = api.execute(
-                            if (umBase == "/tool/user-manager") "/user-manager/user/print"
-                            else "/tool/user-manager/user/print"
-                        )
-                    }
+                    val umList = api.execute("$umBase/user/print")
                     if (umList.isNotEmpty()) {
                         val umUsers = applyRouterExpiry(api, mapUserManagerRows(umList))
                         _userManagerUsers.value = umUsers
@@ -1051,7 +999,6 @@ class MikroTikRepository(
         cachedCustomer = null
         rosMajor = 0
         routerVersion = ""
-        probedUmFlavor = null
         _isConnected.value = false
         try {
             nativeApi?.close()
@@ -1718,25 +1665,13 @@ class MikroTikRepository(
     }
 
     // User Manager Operations
-    // Runs a user-manager write on the router: ROS v7 menu first, then the
-    // legacy ROS v6 /tool/user-manager path. Throws with the router's real error.
-    private fun umWrite(api: MikroTikNativeApi, action: String, params: Map<String, String>): List<Map<String, String>> {
-        var lastErr: Exception? = null
-        for (base in umBases) {
-            try {
-                return api.executeStrict("$base/$action", params)
-            } catch (e: Exception) {
-                lastErr = e
-            }
-        }
-        throw lastErr ?: java.io.IOException("user-manager غير متوفر على الراوتر")
-    }
+    // Runs a write on the legacy RouterOS v6 /tool/user-manager menu and
+    // throws the router's real error.
+    private fun umWrite(api: MikroTikNativeApi, action: String, params: Map<String, String>): List<Map<String, String>> =
+        api.executeStrict("$umBase/$action", params)
 
     /** Reads v6 profile limitations through the profile -> limitation link table. */
-    private fun umReadProfileLimitations(api: MikroTikNativeApi, isV6: Boolean): Map<String, Map<String, String>> {
-        if (!isV6) {
-            return api.execute("/user-manager/limitation/print").associateBy { it["name"] ?: "" }
-        }
+    private fun umReadProfileLimitations(api: MikroTikNativeApi): Map<String, Map<String, String>> {
         val limitationRows = api.execute("/tool/user-manager/profile/limitation/print")
             .associateBy { it["name"] ?: "" }
         return api.execute("/tool/user-manager/profile/profile-limitation/print")
@@ -1775,36 +1710,11 @@ class MikroTikRepository(
 
     private enum class UmFlavor { V7, V6 }
 
-    /** Detected flavor (null = version unknown and both menus failed the probe,
-     *  so the caller should try both paths). */
-    private fun preferredUmFlavor(api: MikroTikNativeApi): UmFlavor? = when {
-        rosMajor == 6 -> UmFlavor.V6
-        rosMajor >= 7 -> UmFlavor.V7
-        else -> probeUmFlavor(api)
-    }
+    /** This build only admits RouterOS 6.x, so the legacy User Manager menu is
+     *  the only valid flavor. No v7 probe is ever sent on a v6 connection. */
+    @Suppress("UNUSED_PARAMETER")
+    private fun detectUmFlavor(api: MikroTikNativeApi): UmFlavor = UmFlavor.V6
 
-    /** Resolves v6 vs v7 once per connection. The version string is preferred;
-     *  if it is unavailable we probe the two documented User Manager menus. */
-    private fun detectUmFlavor(api: MikroTikNativeApi): UmFlavor =
-        preferredUmFlavor(api) ?: UmFlavor.V7
-
-    private fun probeUmFlavor(api: MikroTikNativeApi): UmFlavor? {
-        probedUmFlavor?.let { return it }
-        if (runCatching { api.executeStrict("/tool/user-manager/profile/print") }.isSuccess) {
-            rosMajor = 6
-            probedUmFlavor = UmFlavor.V6
-            return UmFlavor.V6
-        }
-        if (runCatching { api.executeStrict("/user-manager/profile/print") }.isSuccess) {
-            rosMajor = 7
-            probedUmFlavor = UmFlavor.V7
-            return UmFlavor.V7
-        }
-        return null
-    }
-
-    private fun isNoSuchCommand(e: Exception?): Boolean =
-        e?.message?.contains("no such command", ignoreCase = true) == true
 
     /** RouterOS v6 may encode an exhausted User Manager profile as an empty
      * actual-profile, "none", "-", or "unknown" depending on the v6 minor
@@ -1877,43 +1787,22 @@ class MikroTikRepository(
         return msg.contains("انتهت مهلة") || msg.contains("timeout") || msg.contains("timed out")
     }
 
-    // Adds one user-manager user using the attribute set each RouterOS version
-    // actually accepts: v7 `/user-manager/user/add name=` (no customer), v6
-    // `/tool/user-manager/user/add customer= username=`. When [preferred] is
-    // known (from an earlier row of the same batch) only that path is used.
+    // Adds one user-manager user through the RouterOS v6 legacy menu:
+    // `/tool/user-manager/user/add customer= username= password=`.
     // Returns the flavor that succeeded; throws the router's meaningful error.
     private fun umAddUser(
         api: MikroTikNativeApi,
         username: String,
         password: String,
         customer: () -> String,
-        extra: Map<String, String> = emptyMap(),
-        preferred: UmFlavor? = null
+        extra: Map<String, String> = emptyMap()
     ): UmFlavor {
-        var v7Err: Exception? = null
-        if (preferred != UmFlavor.V6) {
-            try {
-                api.executeStrict("/user-manager/user/add", linkedMapOf(
-                    "name" to username,
-                    "password" to password
-                ) + extra)
-                return UmFlavor.V7
-            } catch (e: Exception) {
-                if (preferred == UmFlavor.V7) throw e
-                v7Err = e
-            }
-        }
-        try {
-            api.executeStrict("/tool/user-manager/user/add", linkedMapOf(
-                "customer" to customer(),
-                "username" to username,
-                "password" to password
-            ) + extra)
-            return UmFlavor.V6
-        } catch (e: Exception) {
-            // On v7 the legacy menu doesn't exist; surface the real v7 error instead.
-            throw if (isNoSuchCommand(e) && v7Err != null) v7Err else e
-        }
+        api.executeStrict("/tool/user-manager/user/add", linkedMapOf(
+            "customer" to customer(),
+            "username" to username,
+            "password" to password
+        ) + extra)
+        return UmFlavor.V6
     }
 
     // Attaches a profile to an existing user-manager user.
@@ -1997,8 +1886,7 @@ class MikroTikRepository(
                     username = user.username,
                     password = user.password,
                     customer = { customer },
-                    extra = extra,
-                    preferred = preferredUmFlavor(api)
+                    extra = extra
                 )
                 if (user.profile.isNotEmpty()) {
                     if (flavor == UmFlavor.V6) {
@@ -2034,28 +1922,10 @@ class MikroTikRepository(
             }
             try {
                 val uid = umResolveUserId(api, username) ?: username
-                // ROS v6 activates a profile on a user via create-and-activate-profile;
-                // ROS v7 accepts a plain set. Try v6 path first, then v7 set.
-                var activated = false
-                var v6Err: Exception? = null
-                try {
-                    umWrite(api, "user/create-and-activate-profile", mapOf("numbers" to uid, "profile" to newProfile, "customer" to umResolveCustomer(api)))
-                    activated = true
-                } catch (e: Exception) {
-                    v6Err = e
-                }
-                if (!activated) {
-                    try {
-                        umWrite(api, "user/set", mapOf("numbers" to uid, "profile" to newProfile, "disabled" to "no"))
-                        activated = true
-                    } catch (e: Exception) {
-                        // Neither shape worked — surface the v6-style error since it's the
-                        // first one tried and usually the more specific of the two on a
-                        // real v6 router (e.g. "no such item" for a bad profile name).
-                        throw if (isNoSuchCommand(v6Err)) e else (v6Err ?: e)
-                    }
-                }
-                if (resetUptime && activated) {
+                // ROS v6 activates/renews a card's profile through
+                // create-and-activate-profile; v6 users have no writable `profile`.
+                umWrite(api, "user/create-and-activate-profile", mapOf("numbers" to uid, "profile" to newProfile, "customer" to umResolveCustomer(api)))
+                if (resetUptime) {
                     runCatching { umWrite(api, "user/reset-counters", mapOf("numbers" to uid)) }
                 }
                 _userManagerUsers.update { list ->
@@ -2229,12 +2099,11 @@ class MikroTikRepository(
                 var matchedBase: String? = null
                 val pid = run {
                     var id: String? = null
-                    for (base in listOf("/user-manager", "/tool/user-manager")) {
-                        try {
-                            id = api.execute("$base/profile/print").firstOrNull { it["name"] == oldName }?.get(".id")
-                            if (id != null) { matchedBase = base; break }
-                        } catch (_: Exception) {}
-                    }
+                    try {
+                        id = api.execute("/tool/user-manager/profile/print")
+                            .firstOrNull { it["name"] == oldName }?.get(".id")
+                        if (id != null) matchedBase = "/tool/user-manager"
+                    } catch (_: Exception) {}
                     id ?: oldName
                 }
                 // Fall back to the connection-detected base if the profile lookup above
@@ -2311,12 +2180,10 @@ class MikroTikRepository(
             try {
                 val pid = run {
                     var id: String? = null
-                    for (base in listOf("/user-manager", "/tool/user-manager")) {
-                        try {
-                            id = api.execute("$base/profile/print").firstOrNull { it["name"] == profileName }?.get(".id")
-                            if (id != null) break
-                        } catch (_: Exception) {}
-                    }
+                    try {
+                        id = api.execute("/tool/user-manager/profile/print")
+                            .firstOrNull { it["name"] == profileName }?.get(".id")
+                    } catch (_: Exception) {}
                     id ?: profileName
                 }
                 // On ROS v6 the profile's limitation + profile-limitation link are separate
@@ -2354,22 +2221,13 @@ class MikroTikRepository(
 
             if (api != null && _isConnected.value) {
                 try {
-                    var umProfList = api.execute("$umBase/profile/print")
-                    var isV6UM = detectUmFlavor(api) == UmFlavor.V6
-                    if (umProfList.isEmpty() && rosMajor == 0) {
-                        val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
-                        umProfList = api.execute("$alt/profile/print")
-                        if (umProfList.isNotEmpty()) {
-                            isV6UM = !isV6UM
-                            rosMajor = if (isV6UM) 6 else 7
-                        }
-                    }
+                    val umProfList = api.execute("$umBase/profile/print")
                     if (umProfList.isEmpty()) {
                         insertActivityLog("باقات اليوزرمانجر", api.lastError
                             ?: "الراوتر لم يرجع أي باقات — تأكد من وجود باقات في User Manager على الراوتر",
                             _currentConnection.value?.host ?: "")
                     }
-                    val limitations = umReadProfileLimitations(api, isV6UM)
+                    val limitations = umReadProfileLimitations(api)
 
                     if (umProfList.isNotEmpty()) {
                         val fetchedProfiles = umProfList.map { p ->
@@ -2479,11 +2337,11 @@ class MikroTikRepository(
                 val customer by lazy { umResolveCustomer(api) }
                 // Detected from the first accepted row so the remaining rows go
                 // straight to the right menu (no double round-trip per card).
-                var flavor: UmFlavor? = null
+                var flavor: UmFlavor? = UmFlavor.V6
 
                 users.forEach { user ->
                     try {
-                        flavor = umAddUser(api, user.username, user.password, { customer }, preferred = flavor)
+                        flavor = umAddUser(api, user.username, user.password, { customer })
                         added.add(user)
                     } catch (e: Exception) {
                         if (firstErr == null) firstErr = e.message
@@ -2661,11 +2519,10 @@ class MikroTikRepository(
                         lastErr = e
                     }
                 }
-                // Both menus refused (or no sessions at all): surface the router's
-                // error only when even the first base threw — an empty list from a
-                // working menu simply means "no live sessions right now".
-                if (sessions.isEmpty() && lastErr != null && rosMajor == 0) {
-                    // Version unknown and both probes trapped — report the real error.
+                // A successful empty print means "no live sessions right now";
+                // a thrown command is a real router/protocol error and must be
+                // surfaced instead of showing a fake empty list.
+                if (sessions.isEmpty() && lastErr != null) {
                     throw lastErr
                 }
                 val mapped = sessions.mapIndexed { idx, s ->
@@ -2687,8 +2544,8 @@ class MikroTikRepository(
     }
 
     /**
-     * Disconnects a user-manager user's LIVE session via `$umBase/session/remove`
-     * (the user/card itself is NOT deleted — only the active connection is cut).
+     * Disconnects a user-manager user's LIVE session via the v6
+     * `session/close-session` command (the card itself is not deleted).
      */
     fun disconnectUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repositoryScope.launch {
@@ -2716,7 +2573,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError("لا توجد جلسة نشطة للمستخدم '$username' على الراوتر حالياً") }
                     return@launch
                 }
-                umWrite(api, "session/remove", mapOf("numbers" to sessionId))
+                umWrite(api, "session/close-session", mapOf("numbers" to sessionId))
                 insertActivityLog("قطع جلسة", "تم قطع الجلسة النشطة للمستخدم '$username' من الراوتر", _currentConnection.value?.host ?: "")
                 launch(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
@@ -3016,8 +2873,6 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null && conn != null) {
                 fetchRealNativeData(api, conn)
-            } else if (conn != null) {
-                fetchRealRouterData(conn)
             }
         }
     }
@@ -3664,17 +3519,8 @@ class MikroTikRepository(
                 delay(20_000)
             }
             try {
-                var umProfList = api.execute("$umBase/profile/print")
-                var isV6UM = detectUmFlavor(api) == UmFlavor.V6
-                if (umProfList.isEmpty() && rosMajor == 0) {
-                    val alt = if (isV6UM) "/user-manager" else "/tool/user-manager"
-                    umProfList = api.execute("$alt/profile/print")
-                    if (umProfList.isNotEmpty()) {
-                        isV6UM = !isV6UM
-                        rosMajor = if (isV6UM) 6 else 7
-                    }
-                }
-                val limitations = umReadProfileLimitations(api, isV6UM)
+                val umProfList = api.execute("$umBase/profile/print")
+                val limitations = umReadProfileLimitations(api)
                 val umProfiles = umProfList.map { p ->
                     val name = p["name"] ?: p["name-for-users"] ?: "default"
                     val lim = limitations[name] ?: emptyMap()
@@ -3699,10 +3545,7 @@ class MikroTikRepository(
                     })
                 }
 
-                var umList = api.execute("$umBase/user/print")
-                if (umList.isEmpty() && rosMajor == 0) {
-                    umList = api.execute(if (umBase == "/tool/user-manager") "/user-manager/user/print" else "/tool/user-manager/user/print")
-                }
+                val umList = api.execute("$umBase/user/print")
                 val umUsers = applyRouterExpiry(api, umList.map { mapUserManagerRow(it) })
                 _userManagerUsers.value = umUsers
                 if (umUsers.isNotEmpty()) {
@@ -4237,11 +4080,13 @@ class MikroTikRepository(
                         val backupList = api.execute("/system/backup/cloud/print")
                         _cloudBackups.value = backupList.mapIndexed { idx, b ->
                             MikroTikCloudBackup(
-                                id = b[".id"] ?: idx.toString(),
+                                // RouterOS v6 addresses cloud slots by their 0-based
+                                // number (`remove-file number=0`), not by a v7 .id.
+                                id = idx.toString(),
                                 name = b["name"] ?: "cloud-backup-$idx",
                                 size = b["size"] ?: "",
-                                downloadStatus = b["download-status"] ?: "complete",
-                                time = b["creation-time"] ?: "",
+                                downloadStatus = b["status"] ?: "ok",
+                                time = b["date"] ?: "",
                                 encrypted = true
                             )
                         }
@@ -4305,8 +4150,7 @@ class MikroTikRepository(
                     launch(Dispatchers.Main) { onError(e.localizedMessage ?: "فشل ضبط مزامنة الوقت") }
                 }
             } else {
-                _cloudInfo.update { it.copy(updateTime = enabled) }
-                launch(Dispatchers.Main) { onSuccess() }
+                launch(Dispatchers.Main) { onError(if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر") }
             }
         }
     }
@@ -4316,10 +4160,16 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    val params = mutableMapOf<String, String>()
+                    val params = mutableMapOf("action" to "create-and-upload")
                     if (name.isNotBlank()) params["name"] = name.trim()
                     if (password.isNotBlank()) params["password"] = password.trim()
-                    api.executeStrict("/system/backup/cloud/upload", params)
+                    // v6 exposes exactly one cloud slot. Re-uploading without
+                    // replace= fails once that slot is occupied, so reuse the
+                    // existing slot explicitly instead of surfacing a false error.
+                    val existing = runCatching { api.execute("/system/backup/cloud/print") }.getOrNull()
+                        ?.firstOrNull()?.get("name")?.takeIf { it.isNotBlank() }
+                    if (existing != null) params["replace"] = existing
+                    api.executeStrict("/system/backup/cloud/upload-file", params)
                     fetchCloudData()
                     insertActivityLog("نسخ سحابي", "تم رفع نسخة احتياطية جديدة إلى سحابة مايكروتك", _currentConnection.value?.host ?: "")
                     launch(Dispatchers.Main) { onSuccess() }
@@ -4337,7 +4187,7 @@ class MikroTikRepository(
             val api = nativeApi
             if (api != null) {
                 try {
-                    api.executeStrict("/system/backup/cloud/remove", mapOf("numbers" to backupId))
+                    api.executeStrict("/system/backup/cloud/remove-file", mapOf("number" to backupId))
                     fetchCloudData()
                     launch(Dispatchers.Main) { onSuccess() }
                 } catch (e: Exception) {

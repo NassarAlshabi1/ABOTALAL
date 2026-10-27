@@ -69,8 +69,10 @@ class AiDoctorClientTest {
     @Test
     fun `blocks known RouterOS v7 command paths for a v6 router`() {
         assertTrue(RouterOsV6AdviceGuard.findKnownV7Paths("6.49.17", "Use /interface/wifi/print").isNotEmpty())
+        assertTrue(RouterOsV6AdviceGuard.findKnownV7Paths("6.49.17", "Use /interface/wifiwave2/print").isNotEmpty())
         assertTrue(RouterOsV6AdviceGuard.findKnownV7Paths("7.14.3", "Use /interface/wifi/print").isEmpty())
         assertTrue(RouterOsV6AdviceGuard.findKnownV7Paths("6.49.17", "Use /tool/user-manager/user/print").isEmpty())
+        assertTrue(RouterOsV6AdviceGuard.findKnownV7Paths("6.49.17", "Use /interface/wireless/print").isEmpty())
     }
 
     @Test

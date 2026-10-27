@@ -847,7 +847,7 @@ fun UserManagerScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "لتعديل هذه الإعدادات استخدم WinBox أو WebFig:\n\n• ROS v6: Tool ← User Manager ← Config\n• ROS v7: User Manager ← Settings",
+                            text = "لتعديل هذه الإعدادات استخدم WinBox أو WebFig:\n\n• RouterOS v6: Tool ← User Manager ← Config",
                             fontFamily = CairoFontFamily,
                             color = Color(0xFF1D4ED8),
                             fontSize = 12.sp,
