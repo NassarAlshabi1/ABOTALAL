@@ -137,8 +137,13 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                 }
             }
 
-            // Main Authenticated Scaffold
+            // Main Authenticated Scaffold. Tab screens (Hotspot, Tools, Cloud, …)
+            // already own a Scaffold/TopAppBar that applies system-bar insets; letting
+            // this shell apply them again doubled the status/navigation padding and
+            // shrank their content. Keep the shell inset-free and let the active
+            // screen handle insets exactly once.
             Scaffold(
+                contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 topBar = {
                     if (currentTab == 0) {
                         // Top Header Bar for Home/Dashboard with luxurious teal/blue horizontal gradient

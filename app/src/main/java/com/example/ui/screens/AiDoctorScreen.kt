@@ -364,7 +364,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                 if (selectedTab == 0) {
                     val scanScroll = rememberScrollState()
                     Column(
-                        modifier = Modifier.fillMaxSize().verticalScroll(scanScroll).padding(14.dp),
+                        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(scanScroll).padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         DoctorSectionCard(title = "اتصال الراوتر", icon = Icons.Filled.Router, card = card, textColor = textColor) {
@@ -529,7 +529,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                 } else {
                     val providerScroll = rememberScrollState()
                     Column(
-                        modifier = Modifier.fillMaxSize().verticalScroll(providerScroll).padding(14.dp),
+                        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(providerScroll).padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Surface(
