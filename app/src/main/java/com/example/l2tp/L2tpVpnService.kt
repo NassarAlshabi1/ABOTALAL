@@ -44,9 +44,6 @@ class L2tpVpnService : VpnService() {
     private val tunDescriptor = AtomicReference<ParcelFileDescriptor?>(null)
 
     @Volatile
-    private var serverHost: String = ""
-
-    @Volatile
     private var lastStartId: Int = 0
 
     override fun onCreate() {
@@ -102,8 +99,7 @@ class L2tpVpnService : VpnService() {
             return
         }
 
-        serverHost = config.host
-        L2tpStatusRepository.onConnecting(config.serverHost)
+        L2tpStatusRepository.onConnecting(config.host)
         updateNotification("جارٍ الاتصال بـ ${config.host}...")
 
         worker.set(
