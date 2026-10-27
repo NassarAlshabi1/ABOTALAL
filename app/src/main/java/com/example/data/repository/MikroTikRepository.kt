@@ -9,6 +9,7 @@ import com.example.data.local.RouterConnection
 import com.example.data.local.*
 import com.example.data.model.*
 import com.example.util.OperationTelemetry
+import com.example.util.RouterOsTls
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -278,7 +279,12 @@ class MikroTikRepository(
                 port = port,
                 connectTimeoutMs = 12000,
                 commandTimeoutMs = 25000,
-                useSsl = if (overridePort != null) port == 8729 else connection.useSsl
+                useSsl = sslEnabled,
+                sslSocketFactory = if (sslEnabled) {
+                    RouterOsTls.socketFactory(context, connection.host, port)
+                } else {
+                    null
+                },
             )
             val (loginSuccess, loginMsg) = api.login(connection.username, connection.password)
             if (loginSuccess) {
@@ -494,7 +500,12 @@ class MikroTikRepository(
                 port = port,
                 connectTimeoutMs = 12000,
                 commandTimeoutMs = 25000,
-                useSsl = useSsl
+                useSsl = useSsl,
+                sslSocketFactory = if (useSsl) {
+                    RouterOsTls.socketFactory(context, host, port)
+                } else {
+                    null
+                },
             )
             try {
                 val (loginOk, loginMsg) = api.login(username, password)
@@ -553,6 +564,11 @@ class MikroTikRepository(
     private fun connectionFailureHint(message: String, useSsl: Boolean, port: Int): String {
         val lower = message.lowercase(Locale.ROOT)
         return when {
+            lower.contains("لا تطابق الشهادة") || lower.contains("الشهادة المحفوظة") ||
+                lower.contains("pin") -> {
+                "💡 شهادة SSL التي يرسلها الراوتر تغيّرت. إذا كنت أنت من أعاد ضبط الراوتر أو جدّد شهادته، " +
+                    "افتح «خيارات متقدمة» واضغط «مسح شهادة SSL المحفوظة» ثم أعد المحاولة."
+            }
             lower.contains("ssl") || lower.contains("handshake") ||
                 lower.contains("certificat") || lower.contains("pkix") ||
                 lower.contains("trust anchor") -> {

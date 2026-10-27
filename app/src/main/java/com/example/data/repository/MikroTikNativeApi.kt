@@ -23,7 +23,8 @@ class MikroTikNativeApi(
     val port: Int = 8728,
     private val connectTimeoutMs: Int = 12000,
     private val commandTimeoutMs: Int = 25000,
-    private val useSsl: Boolean = false
+    private val useSsl: Boolean = false,
+    private val sslSocketFactory: SSLSocketFactory? = null,
 ) {
     private var socket: Socket? = null
     private var inStream: InputStream? = null
@@ -131,7 +132,7 @@ class MikroTikNativeApi(
                     // Explicit SSL: connect the unconnected socket with our own timeout,
                     // then force the handshake immediately so certificate problems surface
                     // here (with a clear log) instead of corrupting the first command read.
-                    val ssl = SSLSocketFactory.getDefault().createSocket() as SSLSocket
+                    val ssl = (sslSocketFactory ?: SSLSocketFactory.getDefault()).createSocket() as SSLSocket
                     ssl.tcpNoDelay = true
                     ssl.keepAlive = true
                     ssl.soTimeout = commandTimeoutMs

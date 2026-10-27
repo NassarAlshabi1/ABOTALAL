@@ -54,6 +54,7 @@ import com.example.ui.components.AppExitConfirmationDialog
 import com.example.ui.components.SegmentedIpField
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.CryptoManager
+import com.example.util.RouterOsTls
 import com.example.util.NetworkUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,7 +102,8 @@ fun LoginScreen(
     var l2tpPskVisible by remember { mutableStateOf(false) }
     var l2tpPasswordVisible by remember { mutableStateOf(false) }
     // After the tunnel is active this is the RouterOS API port, not the L2TP transport port.
-    var vpnPort by rememberSaveable { mutableStateOf("8728") }
+    // API-SSL is the safest default for remote access; the 8728 chip switches to plain API.
+    var vpnPort by rememberSaveable { mutableStateOf("8729") }
     var routerUser by rememberSaveable { mutableStateOf("") }
     var routerPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -1204,7 +1206,7 @@ fun LoginScreen(
                                                 p,
                                                 routerUser.trim(),
                                                 routerPassword,
-                                                useSsl
+                                                if (connectionMode == 3) p == 8729 else useSsl
                                             ) { ok, msg ->
                                                 isTestingConnection = false
                                                 testResultDialog = Pair(ok, msg)
@@ -1237,7 +1239,7 @@ fun LoginScreen(
                                                 port = p,
                                                 username = routerUser.trim(),
                                                 password = routerPassword,
-                                                useSsl = useSsl,
+                                                useSsl = if (connectionMode == 3) p == 8729 else useSsl,
                                                 onSuccess = { onLoginSuccess() }
                                             )
                                         },
@@ -1425,7 +1427,7 @@ fun LoginScreen(
                                                 modifier = Modifier.padding(top = 6.dp)
                                             ) {
                                                 Checkbox(
-                                                    checked = useSsl,
+                                                    checked = if (connectionMode == 3) vpnPort == "8729" else useSsl,
                                                     onCheckedChange = { enabled ->
                                                         useSsl = enabled
                                                         // API-SSL (8729) and plain API (8728) are not
@@ -1441,6 +1443,27 @@ fun LoginScreen(
                                                     colors = CheckboxDefaults.colors(checkedColor = Color(0xFF0C5A60))
                                                 )
                                                 Text("تشفير SSL", fontSize = 12.sp)
+                                            }
+                                        }
+
+                                        if (useSsl || (connectionMode == 3 && vpnPort == "8729")) {
+                                            TextButton(
+                                                onClick = {
+                                                    val (sslHost, sslPort) = resolveTarget()
+                                                    if (sslHost.isBlank()) {
+                                                        loginErrorDialog = "أدخل عنوان الراوتر أولًا ثم امسح شهادة SSL."
+                                                    } else {
+                                                        RouterOsTls.clearPin(context, sslHost, sslPort)
+                                                        testResultDialog = Pair(
+                                                            true,
+                                                            "تم مسح شهادة SSL المحفوظة لـ $sslHost:$sslPort. " +
+                                                                "سيُحفظ استلام الشهادة من جديد عند الاتصال التالي."
+                                                        )
+                                                    }
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                            ) {
+                                                Text("مسح شهادة SSL المحفوظة", fontSize = 11.sp)
                                             }
                                         }
                                     }
@@ -1726,7 +1749,7 @@ fun LoginScreen(
                                             port = p,
                                             username = routerUser.trim(),
                                             password = routerPassword,
-                                            useSsl = useSsl,
+                                            useSsl = if (connectionMode == 3) p == 8729 else useSsl,
                                             onSuccess = { onLoginSuccess() }
                                         )
                                     }

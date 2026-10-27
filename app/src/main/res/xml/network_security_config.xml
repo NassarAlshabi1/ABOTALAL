@@ -3,9 +3,11 @@
   Network security policy for NetCraft:
   - Cleartext HTTP is permitted because MikroTik routers commonly expose the REST
     API over plain http:// on port 80 (no TLS on small routers).
-  - HTTPS uses ONLY system trust anchors — the app no longer ships a trust-all
-    manager. Router HTTPS endpoints with self-signed certs must use a properly
-    imported certificate, or the plain native API ports 8728/8729.
+  - HTTPS and REST use ONLY system trust anchors — the app does not ship a
+    trust-all manager.
+  - RouterOS API-SSL (8729) presents a router-generated self-signed certificate.
+    The native API client pins that certificate on first use (RouterOsTls), and
+    the advanced options can clear the pin when the router certificate changes.
 -->
 <network-security-config xmlns:tools="http://schemas.android.com/tools">
     <!-- MikroTik REST may be HTTP-only; this broad policy is a documented product requirement. -->
