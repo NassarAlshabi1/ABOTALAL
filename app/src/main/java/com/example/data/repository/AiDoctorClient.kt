@@ -14,6 +14,9 @@ import java.util.concurrent.TimeUnit
 
 /** Client for user-configured OpenAI-compatible chat-completions endpoints. */
 internal object AiDoctorClient {
+    const val GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta"
+
+    data class GeminiModel(val id: String, val label: String)
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
@@ -81,6 +84,60 @@ internal object AiDoctorClient {
                 durationMs = OperationTelemetry.elapsedRealtime() - startedAt
             )
             throw e
+        }
+    }
+
+    suspend fun listGeminiModels(apiKey: String): List<GeminiModel> = withContext(Dispatchers.IO) {
+        val key = apiKey.trim()
+        require(key.isNotBlank()) { "أدخل Gemini API Key أولاً." }
+        val url = "$GEMINI_ENDPOINT/models?key=${java.net.URLEncoder.encode(key, "UTF-8")}"
+        http.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("فشل تحميل نماذج Gemini: HTTP ${response.code}.")
+            val models = JSONObject(raw).optJSONArray("models") ?: JSONArray()
+            buildList {
+                for (i in 0 until models.length()) {
+                    val item = models.optJSONObject(i) ?: continue
+                    val methods = item.optJSONArray("supportedGenerationMethods") ?: JSONArray()
+                    val supportsGenerate = (0 until methods.length()).any { methods.optString(it) == "generateContent" }
+                    val fullName = item.optString("name")
+                    if (supportsGenerate && fullName.startsWith("models/")) {
+                        add(GeminiModel(fullName.removePrefix("models/"), item.optString("displayName").ifBlank { fullName }))
+                    }
+                }
+            }.sortedBy { it.label.lowercase() }
+        }
+    }
+
+    suspend fun testGemini(apiKey: String, modelName: String): String {
+        completeGemini(apiKey, modelName, "Reply with the single word OK.", "Connection test. Reply with OK.")
+        return "نجح اختبار Gemini API والنموذج المحدد."
+    }
+
+    suspend fun completeGemini(
+        apiKey: String,
+        modelName: String,
+        systemPrompt: String,
+        userPrompt: String
+    ): String = withContext(Dispatchers.IO) {
+        val key = apiKey.trim()
+        val model = modelName.trim().removePrefix("models/")
+        require(key.isNotBlank()) { "أدخل Gemini API Key أولاً." }
+        require(model.isNotBlank()) { "اختر نموذج Gemini بعد تحميل النماذج." }
+        val encodedModel = java.net.URLEncoder.encode(model, "UTF-8").replace("+", "%20")
+        val encodedKey = java.net.URLEncoder.encode(key, "UTF-8")
+        val url = "$GEMINI_ENDPOINT/models/$encodedModel:generateContent?key=$encodedKey"
+        val body = JSONObject()
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))))
+            .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        http.newCall(Request.Builder().url(url).post(body).build()).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("استجاب Gemini برمز HTTP ${response.code}; تحقق من المفتاح والنموذج.")
+            val parts = JSONObject(raw).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+                ?: throw IllegalStateException("استجابة Gemini لا تحتوي نصًا قابلًا للعرض.")
+            buildString { for (i in 0 until parts.length()) append(parts.optJSONObject(i)?.optString("text").orEmpty()) }
+                .trim().ifBlank { throw IllegalStateException("أعاد Gemini استجابة فارغة.") }
         }
     }
 

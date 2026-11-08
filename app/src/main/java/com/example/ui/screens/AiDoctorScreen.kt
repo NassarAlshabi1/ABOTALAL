@@ -65,6 +65,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val darkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
+    var provider by remember { mutableStateOf(prefs.getString("provider", null) ?: "kiyara") }
     var serviceName by remember { mutableStateOf(prefs.getString("service_name", null) ?: AiDoctorDefaults.SERVICE_NAME) }
     var apiKey by remember {
         mutableStateOf(
@@ -87,6 +88,10 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
             else ""
         )
     }
+
+    var geminiModels by remember { mutableStateOf<List<AiDoctorClient.GeminiModel>>(emptyList()) }
+    var isLoadingGeminiModels by remember { mutableStateOf(false) }
+    var geminiModelsStatus by remember { mutableStateOf<String?>(null) }
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var showKey by remember { mutableStateOf(false) }
@@ -144,6 +149,25 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
     val endpointLabel = remember(apiEndpoint) { endpointHost(apiEndpoint) }
     val settingsReady = apiEndpoint.isNotBlank() && modelName.isNotBlank()
 
+    LaunchedEffect(provider, apiKey) {
+        if (provider != "gemini" || apiKey.trim().length < 20) {
+            geminiModels = emptyList()
+            geminiModelsStatus = null
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(500)
+        isLoadingGeminiModels = true
+        geminiModelsStatus = "جارٍ تحميل نماذج Gemini تلقائيًا..."
+        runCatching { withContext(Dispatchers.IO) { AiDoctorClient.listGeminiModels(apiKey) } }
+            .onSuccess { models ->
+                geminiModels = models
+                if (models.none { it.id == modelName }) modelName = models.firstOrNull()?.id.orEmpty()
+                geminiModelsStatus = if (models.isEmpty()) "لم يعثر المفتاح على نماذج تدعم generateContent." else "تم تحميل ${models.size} نموذجًا تلقائيًا."
+            }
+            .onFailure { geminiModelsStatus = it.message ?: "تعذر تحميل نماذج Gemini." }
+        isLoadingGeminiModels = false
+    }
+
     fun saveSettings(): Boolean {
         val parsedHeaders = runCatching { AiDoctorClient.parseHeaders(additionalHeaders) }
         if (parsedHeaders.isFailure) {
@@ -179,6 +203,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
             return false
         }
         prefs.edit {
+            putString("provider", provider)
             putString("service_name", serviceName.trim())
             putString("api_key_enc", encryptedKey)
             putString("api_endpoint", apiEndpoint.trim())
@@ -193,6 +218,7 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
 
     fun restoreDefaults() {
         prefs.edit { clear() }
+        provider = "kiyara"
         serviceName = AiDoctorDefaults.SERVICE_NAME
         apiKey = AiDoctorDefaults.API_KEY
         apiEndpoint = AiDoctorDefaults.ENDPOINT
@@ -209,6 +235,8 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         selectedFixes = emptySet()
         applyStatus = null
         allowFixes = false
+        geminiModels = emptyList()
+        geminiModelsStatus = null
     }
 
     fun testApi() {
@@ -222,7 +250,11 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    AiDoctorClient.testApi(apiEndpoint, apiKey, modelName, additionalHeaders)
+                    if (provider == "gemini") {
+                        AiDoctorClient.testGemini(apiKey, modelName)
+                    } else {
+                        AiDoctorClient.testApi(apiEndpoint, apiKey, modelName, additionalHeaders)
+                    }
                 }
                 apiStatus = result
             } catch (e: Exception) {
@@ -272,7 +304,14 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
         scope.launch {
             try {
                 val response = withContext(Dispatchers.IO) {
-                    AiDoctorClient.complete(
+                    if (provider == "gemini") {
+                        AiDoctorClient.completeGemini(
+                            apiKey = apiKey,
+                            modelName = modelName,
+                            systemPrompt = "أنت محلل شبكات MikroTik خبير. حلل البيانات الفعلية فقط، ولا تنفذ أوامر.",
+                            userPrompt = "بيانات القراءة فقط من الراوتر (JSON):\n$snapshot\n\nالأقسام المحددة: ${selectedSections.joinToString()}. أجب بالعربية بعناوين واضحة ولا تعرض أسرارًا."
+                        )
+                    } else AiDoctorClient.complete(
                         endpointUrl = apiEndpoint,
                         apiKey = apiKey,
                         modelName = modelName,
@@ -562,8 +601,25 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                         }
 
                         DoctorSectionCard(title = "بيانات المزود", icon = Icons.Filled.Tune, card = card, textColor = textColor) {
+                            Text("اختر مزود الذكاء الاصطناعي:", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(
+                                    selected = provider == "kiyara",
+                                    onClick = { provider = "kiyara"; apiEndpoint = AiDoctorDefaults.ENDPOINT; if (modelName.isBlank()) modelName = AiDoctorDefaults.MODEL },
+                                    label = { Text("Kiyara", fontFamily = CairoFontFamily, fontSize = 10.sp) }
+                                )
+                                FilterChip(
+                                    selected = provider == "gemini",
+                                    onClick = { provider = "gemini"; apiEndpoint = AiDoctorClient.GEMINI_ENDPOINT; serviceName = "Google Gemini"; modelName = "" },
+                                    label = { Text("Google Gemini", fontFamily = CairoFontFamily, fontSize = 10.sp) }
+                                )
+                            }
                             DoctorField(serviceName, { serviceName = it }, "اسم الخدمة (اختياري)", "مثال: مزود الذكاء الاصطناعي")
-                            DoctorField(apiEndpoint, { apiEndpoint = it }, "API Endpoint URL الكامل", "https://provider.example/v1/chat/completions")
+                            if (provider == "gemini") {
+                                Text("Gemini API الرسمي: $apiEndpoint", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                            } else {
+                                DoctorField(apiEndpoint, { apiEndpoint = it }, "API Endpoint URL الكامل", "https://provider.example/v1/chat/completions")
+                            }
                             DoctorField(
                                 value = apiKey,
                                 onValueChange = { apiKey = it },
@@ -579,9 +635,23 @@ fun AiDoctorScreen(viewModel: MikroTikViewModel, onBack: () -> Unit) {
                                     }
                                 }
                             )
-                            DoctorField(modelName, { modelName = it }, "Model Name", "معرّف النموذج لدى المزود")
-
-                            Text("نماذج Kiyara السريعة:", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                            if (provider == "gemini") {
+                                Text("نماذج Gemini المتاحة (تُحمّل تلقائيًا بعد إدخال المفتاح):", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                                if (isLoadingGeminiModels) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                geminiModelsStatus?.let { Text(it, fontFamily = CairoFontFamily, fontSize = 11.sp, color = if (geminiModels.isNotEmpty()) successColor else subdued) }
+                                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    geminiModels.forEach { geminiModel ->
+                                        FilterChip(
+                                            selected = modelName == geminiModel.id,
+                                            onClick = { modelName = geminiModel.id },
+                                            label = { Text(geminiModel.label, fontFamily = CairoFontFamily, fontSize = 10.sp) }
+                                        )
+                                    }
+                                }
+                            } else {
+                                DoctorField(modelName, { modelName = it }, "Model Name", "معرّف النموذج لدى المزود")
+                                Text("نماذج Kiyara السريعة:", fontFamily = CairoFontFamily, fontSize = 11.sp, color = subdued)
+                            }
                             Row(
                                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
