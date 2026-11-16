@@ -127,7 +127,12 @@ internal object AiDoctorClient {
         require(model.isNotBlank()) { "اختر نموذج Gemini بعد تحميل النماذج." }
         val encodedModel = java.net.URLEncoder.encode(model, "UTF-8").replace("+", "%20")
         val encodedKey = java.net.URLEncoder.encode(key, "UTF-8")
-        val url = "$GEMINI_ENDPOINT/models/$encodedModel:generateContent?key=$encodedKey"
+        val url = "$GEMINI_ENDPOINT/models/$encodedModel:generateContent"
+        val body = JSONObject()
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))))
+            .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        http.newCall(Request.Builder().url(url).header("x-goog-api-key", key).post(body).build()).execute().use { response ->
         val body = JSONObject()
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
             .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))))
