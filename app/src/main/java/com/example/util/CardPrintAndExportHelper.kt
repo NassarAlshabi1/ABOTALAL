@@ -1,10 +1,21 @@
 package com.example.util
 
+import androidx.core.content.edit
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.toColorInt
+import androidx.core.net.toUri
+
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.common.BitMatrix
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.oned.Code128Writer
 import android.graphics.Color as AndroidColor
 import android.graphics.DashPathEffect
 import android.graphics.Paint as AndroidPaint
@@ -12,6 +23,7 @@ import android.graphics.Rect as AndroidRect
 import android.graphics.RectF as AndroidRectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Environment
@@ -22,8 +34,11 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.example.data.Design
+import com.example.data.ElementStyle
 import com.example.R
 import com.example.data.model.UserManagerUser
 import com.example.ui.screens.GeneratedBatchRecord
@@ -74,7 +89,7 @@ data class CardTemplateConfig(
     val borderSizeMm: Float = 0.35f,
     val borderColorHex: String = "#000000",
     val pageNoteEnabled: Boolean = false,
-    val pageNoteText: String = "أهلاً بكم في شبكة ABO TALAL",
+    val pageNoteText: String = "أهلاً بكم في شبكة NetCraft",
     val pageNoteX: Float = 40f,
     val pageNoteY: Float = 6f,
     val pageNoteSize: Float = 10f,
@@ -101,7 +116,7 @@ data class CardTemplateConfig(
     val titleConfig: CardElementConfig = CardElementConfig(
         visible = false,
         showTitle = false,
-        titleText = "ABO TALAL",
+        titleText = "NetCraft",
         xMm = 4f,
         yMm = 2f,
         fontSize = 8f,
@@ -123,7 +138,7 @@ data class CardTemplateConfig(
     val priceConfig: CardElementConfig = CardElementConfig(
         visible = false,
         showTitle = false,
-        titleText = "500 ر.ي",
+        titleText = "",
         xMm = 20f,
         yMm = 10f,
         xPercent = 0.88f,
@@ -238,18 +253,91 @@ object CardPrintAndExportHelper {
 
     fun getTemplatesList(context: Context): List<String> {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
-        val defaultList = listOf("افتراضي", "كروت_فئة_100", "كروت_فئة_200", "كروت_فئة_500", "تصميم_مخصص_1")
         val saved = prefs.getStringSet("all_templates_set", null)
-        return if (saved.isNullOrEmpty()) {
-            defaultList
-        } else {
-            saved.toList().sorted()
-        }
+        return saved.orEmpty().toList().sorted()
     }
 
     fun saveTemplatesList(context: Context, list: List<String>) {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putStringSet("all_templates_set", list.toSet()).apply()
+        prefs.edit { putStringSet("all_templates_set", list.toSet()) }
+    }
+
+    /** Persist a saved card design as the exact template consumed by voucher printing. */
+    fun saveDesignAsTemplate(context: Context, design: Design) {
+        val backgroundPath = design.bgUrl?.let { raw ->
+            runCatching {
+                val uri = (raw).toUri()
+                if (uri.scheme == "file") uri.path else null
+            }.getOrNull()
+        }
+        fun ElementStyle.toPrintElement() = CardElementConfig(
+            visible = show,
+            titleText = text,
+            xMm = x,
+            yMm = y,
+            fontSize = fontSize,
+            isBold = bold,
+            isItalic = italic,
+            colorHex = color
+        )
+
+        saveTemplateConfig(
+            context,
+            CardTemplateConfig(
+                templateName = design.name,
+                columns = design.columns.coerceAtLeast(1),
+                rows = design.rows.coerceAtLeast(1),
+                autoFitA4 = design.autoFit,
+                pageMarginMm = design.pageMargin,
+                horizontalMarginMm = design.marginH,
+                verticalMarginMm = design.marginV,
+                cardWidthMm = design.cardWidth,
+                cardHeightMm = design.cardHeight,
+                userManagerPackageId = design.userManagerPackageId.orEmpty(),
+                hotspotPackageId = design.hotspotPackageId.orEmpty(),
+                backgroundEnabled = design.bgOn && backgroundPath != null,
+                bgPreset = if (design.bgOn && backgroundPath != null) "custom" else "none",
+                customBgPath = backgroundPath,
+                borderEnabled = design.borderOn,
+                borderSizeMm = design.borderSize,
+                borderColorHex = design.borderColor,
+                pageNoteEnabled = design.pageNote.show,
+                pageNoteText = design.pageNote.text,
+                pageNoteX = design.pageNote.x,
+                pageNoteY = design.pageNote.y,
+                pageNoteSize = design.pageNote.fontSize,
+                pageNoteColorHex = design.pageNote.color,
+                pageNumberingEnabled = design.pageNumber.show,
+                pageNumberingText = design.pageNumber.text,
+                digits = design.digits,
+                charset = if (design.charset.name == "LETTERS_AND_NUMBERS") "أحرف وأرقام" else "أرقام فقط",
+                moveStep = design.moveStep,
+                showUsername = design.showUsername,
+                usernameConfig = design.username.toPrintElement(),
+                titleConfig = design.title.toPrintElement(),
+                passwordConfig = design.password.toPrintElement(),
+                priceConfig = design.price.toPrintElement(),
+                paymentConfig = design.payment.toPrintElement(),
+                serialConfig = design.serial.toPrintElement(),
+                posConfig = design.pos.toPrintElement(),
+                barcodeConfig = CardElementConfig(
+                    visible = design.barcodeOn,
+                    xMm = design.barcodeX,
+                    yMm = design.barcodeY,
+                    widthMm = design.barcodeWidth,
+                    heightMm = design.barcodeHeight,
+                    barcodeType = "barcode"
+                ),
+                logoUrl = design.logoUrl,
+                logoConfig = CardElementConfig(
+                    visible = design.logoOn,
+                    xMm = design.logoX,
+                    yMm = design.logoY,
+                    widthMm = design.logoWidth,
+                    heightMm = design.logoHeight
+                )
+            )
+        )
     }
 
     fun deleteTemplate(context: Context, templateName: String) {
@@ -257,16 +345,23 @@ object CardPrintAndExportHelper {
         val current = getTemplatesList(context).toMutableList()
         current.remove(templateName)
         saveTemplatesList(context, current)
-        // Also clear template specific keys
-        val editor = prefs.edit()
-        val allKeys = prefs.all.keys.filter { it.startsWith("${templateName}_") }
-        allKeys.forEach { editor.remove(it) }
-        editor.apply()
+        // Also clear template specific keys — exact sanitized prefix match so a
+        // template named "A" never deletes the keys of "A_1"/"A 1" as well.
+        val keyPrefix = prefKey(templateName) + "_"
+        val allKeys = prefs.all.keys.filter { it.startsWith(keyPrefix) }
+        prefs.edit {
+            allKeys.forEach { remove(it) }
+        }
     }
+
+    /** SharedPreferences key for a template name — sanitized so spaces/dots in
+     *  design names can never produce colliding or ambiguous pref keys. */
+    private fun prefKey(name: String): String =
+        name.trim().replace(Regex("[^A-Za-z0-9_-]"), "_")
 
     fun loadTemplateConfig(context: Context, templateName: String): CardTemplateConfig {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
-        val p = templateName
+        val p = prefKey(templateName)
         val cardWMm = prefs.getFloat("${p}_card_w_mm", 65.0f)
         val cardHMm = prefs.getFloat("${p}_card_h_mm", 15.0f)
 
@@ -290,7 +385,7 @@ object CardPrintAndExportHelper {
             borderSizeMm = prefs.getFloat("${p}_border_size", 0.35f),
             borderColorHex = prefs.getString("${p}_border_color", "#000000") ?: "#000000",
             pageNoteEnabled = prefs.getBoolean("${p}_page_note_enabled", false),
-            pageNoteText = prefs.getString("${p}_page_note_text", "أهلاً بكم في شبكة ABO TALAL VIP") ?: "أهلاً بكم في شبكة ABO TALAL VIP",
+            pageNoteText = prefs.getString("${p}_page_note_text", "أهلاً بكم في شبكة NetCraft") ?: "أهلاً بكم في شبكة NetCraft",
             pageNoteX = prefs.getFloat("${p}_page_note_x", 40f),
             pageNoteY = prefs.getFloat("${p}_page_note_y", 6f),
             pageNoteSize = prefs.getFloat("${p}_page_note_size", 10f),
@@ -316,7 +411,7 @@ object CardPrintAndExportHelper {
             titleConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_title_vis", false),
                 showTitle = false,
-                titleText = prefs.getString("${p}_title_text", "ABO TALAL VIP") ?: "ABO TALAL VIP",
+                titleText = prefs.getString("${p}_title_text", "NetCraft") ?: "NetCraft",
                 xMm = prefs.getFloat("${p}_title_x_mm", 4f),
                 yMm = prefs.getFloat("${p}_title_y_mm", 2f),
                 fontSize = prefs.getFloat("${p}_title_size", 8f),
@@ -340,7 +435,7 @@ object CardPrintAndExportHelper {
             priceConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_price_vis", false),
                 showTitle = prefs.getBoolean("${p}_price_title_on", false),
-                titleText = prefs.getString("${p}_price_title_text", "500 ر.ي") ?: "500 ر.ي",
+                titleText = prefs.getString("${p}_price_title_text", "").orEmpty(),
                 xMm = prefs.getFloat("${p}_price_x_mm", 20f),
                 yMm = prefs.getFloat("${p}_price_y_mm", 10f),
                 fontSize = prefs.getFloat("${p}_price_size", 9f),
@@ -419,151 +514,168 @@ object CardPrintAndExportHelper {
 
     fun saveTemplateConfig(context: Context, config: CardTemplateConfig) {
         val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
-        val p = config.templateName
+        val p = prefKey(config.templateName)
         val templates = getTemplatesList(context).toMutableList()
         if (!templates.contains(config.templateName)) {
             templates.add(config.templateName)
             saveTemplatesList(context, templates)
         }
 
-        prefs.edit()
-            .putInt("${p}_columns", config.columns)
-            .putInt("${p}_rows", config.rows)
-            .putBoolean("${p}_auto_fit", config.autoFitA4)
-            .putString("${p}_orientation", config.pageOrientation)
-            .putFloat("${p}_h_margin", config.horizontalMarginMm)
-            .putFloat("${p}_v_margin", config.verticalMarginMm)
-            .putFloat("${p}_page_margin_mm", config.pageMarginMm)
-            .putFloat("${p}_card_w_mm", config.cardWidthMm)
-            .putFloat("${p}_card_h_mm", config.cardHeightMm)
-            .putString("${p}_um_pkg_id", config.userManagerPackageId)
-            .putString("${p}_hs_pkg_id", config.hotspotPackageId)
-            .putBoolean("${p}_bg_enabled", config.backgroundEnabled)
-            .putString("${p}_bg_preset", config.bgPreset)
-            .putString("${p}_custom_bg_path", config.customBgPath)
-            .putBoolean("${p}_border_enabled", config.borderEnabled)
-            .putFloat("${p}_border_size", config.borderSizeMm)
-            .putString("${p}_border_color", config.borderColorHex)
-            .putBoolean("${p}_page_note_enabled", config.pageNoteEnabled)
-            .putString("${p}_page_note_text", config.pageNoteText)
-            .putFloat("${p}_page_note_x", config.pageNoteX)
-            .putFloat("${p}_page_note_y", config.pageNoteY)
-            .putFloat("${p}_page_note_size", config.pageNoteSize)
-            .putString("${p}_page_note_color", config.pageNoteColorHex)
-            .putBoolean("${p}_page_num_enabled", config.pageNumberingEnabled)
-            .putString("${p}_page_num_text", config.pageNumberingText)
-            .putInt("${p}_digits", config.digits)
-            .putString("${p}_charset", config.charset)
-            .putFloat("${p}_move_step", config.moveStep)
-            .putBoolean("${p}_show_username", config.showUsername)
+        prefs.edit {
+            putInt("${p}_columns", config.columns)
+            putInt("${p}_rows", config.rows)
+            putBoolean("${p}_auto_fit", config.autoFitA4)
+            putString("${p}_orientation", config.pageOrientation)
+            putFloat("${p}_h_margin", config.horizontalMarginMm)
+            putFloat("${p}_v_margin", config.verticalMarginMm)
+            putFloat("${p}_page_margin_mm", config.pageMarginMm)
+            putFloat("${p}_card_w_mm", config.cardWidthMm)
+            putFloat("${p}_card_h_mm", config.cardHeightMm)
+            putString("${p}_um_pkg_id", config.userManagerPackageId)
+            putString("${p}_hs_pkg_id", config.hotspotPackageId)
+            putBoolean("${p}_bg_enabled", config.backgroundEnabled)
+            putString("${p}_bg_preset", config.bgPreset)
+            putString("${p}_custom_bg_path", config.customBgPath)
+            putBoolean("${p}_border_enabled", config.borderEnabled)
+            putFloat("${p}_border_size", config.borderSizeMm)
+            putString("${p}_border_color", config.borderColorHex)
+            putBoolean("${p}_page_note_enabled", config.pageNoteEnabled)
+            putString("${p}_page_note_text", config.pageNoteText)
+            putFloat("${p}_page_note_x", config.pageNoteX)
+            putFloat("${p}_page_note_y", config.pageNoteY)
+            putFloat("${p}_page_note_size", config.pageNoteSize)
+            putString("${p}_page_note_color", config.pageNoteColorHex)
+            putBoolean("${p}_page_num_enabled", config.pageNumberingEnabled)
+            putString("${p}_page_num_text", config.pageNumberingText)
+            putInt("${p}_digits", config.digits)
+            putString("${p}_charset", config.charset)
+            putFloat("${p}_move_step", config.moveStep)
+            putBoolean("${p}_show_username", config.showUsername)
             // Username
-            .putBoolean("${p}_user_vis", config.usernameConfig.visible)
-            .putBoolean("${p}_user_title_on", config.usernameConfig.showTitle)
-            .putString("${p}_user_title_text", config.usernameConfig.titleText)
-            .putFloat("${p}_user_x_mm", config.usernameConfig.xMm)
-            .putFloat("${p}_user_y_mm", config.usernameConfig.yMm)
-            .putFloat("${p}_user_size", config.usernameConfig.fontSize)
-            .putBoolean("${p}_user_bold", config.usernameConfig.isBold)
-            .putBoolean("${p}_user_italic", config.usernameConfig.isItalic)
-            .putString("${p}_user_color", config.usernameConfig.colorHex)
-            .putString("${p}_user_align", config.usernameConfig.alignment)
+            putBoolean("${p}_user_vis", config.usernameConfig.visible)
+            putBoolean("${p}_user_title_on", config.usernameConfig.showTitle)
+            putString("${p}_user_title_text", config.usernameConfig.titleText)
+            putFloat("${p}_user_x_mm", config.usernameConfig.xMm)
+            putFloat("${p}_user_y_mm", config.usernameConfig.yMm)
+            putFloat("${p}_user_size", config.usernameConfig.fontSize)
+            putBoolean("${p}_user_bold", config.usernameConfig.isBold)
+            putBoolean("${p}_user_italic", config.usernameConfig.isItalic)
+            putString("${p}_user_color", config.usernameConfig.colorHex)
+            putString("${p}_user_align", config.usernameConfig.alignment)
             // Title
-            .putBoolean("${p}_title_vis", config.titleConfig.visible)
-            .putString("${p}_title_text", config.titleConfig.titleText)
-            .putFloat("${p}_title_x_mm", config.titleConfig.xMm)
-            .putFloat("${p}_title_y_mm", config.titleConfig.yMm)
-            .putFloat("${p}_title_size", config.titleConfig.fontSize)
-            .putBoolean("${p}_title_bold", config.titleConfig.isBold)
-            .putBoolean("${p}_title_italic", config.titleConfig.isItalic)
-            .putString("${p}_title_color", config.titleConfig.colorHex)
-            .putString("${p}_title_align", config.titleConfig.alignment)
+            putBoolean("${p}_title_vis", config.titleConfig.visible)
+            putString("${p}_title_text", config.titleConfig.titleText)
+            putFloat("${p}_title_x_mm", config.titleConfig.xMm)
+            putFloat("${p}_title_y_mm", config.titleConfig.yMm)
+            putFloat("${p}_title_size", config.titleConfig.fontSize)
+            putBoolean("${p}_title_bold", config.titleConfig.isBold)
+            putBoolean("${p}_title_italic", config.titleConfig.isItalic)
+            putString("${p}_title_color", config.titleConfig.colorHex)
+            putString("${p}_title_align", config.titleConfig.alignment)
             // Password
-            .putBoolean("${p}_pass_vis", config.passwordConfig.visible)
-            .putBoolean("${p}_pass_title_on", config.passwordConfig.showTitle)
-            .putString("${p}_pass_title_text", config.passwordConfig.titleText)
-            .putFloat("${p}_pass_x_mm", config.passwordConfig.xMm)
-            .putFloat("${p}_pass_y_mm", config.passwordConfig.yMm)
-            .putFloat("${p}_pass_size", config.passwordConfig.fontSize)
-            .putBoolean("${p}_pass_bold", config.passwordConfig.isBold)
-            .putBoolean("${p}_pass_italic", config.passwordConfig.isItalic)
-            .putString("${p}_pass_color", config.passwordConfig.colorHex)
-            .putString("${p}_pass_align", config.passwordConfig.alignment)
+            putBoolean("${p}_pass_vis", config.passwordConfig.visible)
+            putBoolean("${p}_pass_title_on", config.passwordConfig.showTitle)
+            putString("${p}_pass_title_text", config.passwordConfig.titleText)
+            putFloat("${p}_pass_x_mm", config.passwordConfig.xMm)
+            putFloat("${p}_pass_y_mm", config.passwordConfig.yMm)
+            putFloat("${p}_pass_size", config.passwordConfig.fontSize)
+            putBoolean("${p}_pass_bold", config.passwordConfig.isBold)
+            putBoolean("${p}_pass_italic", config.passwordConfig.isItalic)
+            putString("${p}_pass_color", config.passwordConfig.colorHex)
+            putString("${p}_pass_align", config.passwordConfig.alignment)
             // Price
-            .putBoolean("${p}_price_vis", config.priceConfig.visible)
-            .putBoolean("${p}_price_title_on", config.priceConfig.showTitle)
-            .putString("${p}_price_title_text", config.priceConfig.titleText)
-            .putFloat("${p}_price_x_mm", config.priceConfig.xMm)
-            .putFloat("${p}_price_y_mm", config.priceConfig.yMm)
-            .putFloat("${p}_price_size", config.priceConfig.fontSize)
-            .putBoolean("${p}_price_bold", config.priceConfig.isBold)
-            .putBoolean("${p}_price_italic", config.priceConfig.isItalic)
-            .putString("${p}_price_color", config.priceConfig.colorHex)
-            .putString("${p}_price_align", config.priceConfig.alignment)
+            putBoolean("${p}_price_vis", config.priceConfig.visible)
+            putBoolean("${p}_price_title_on", config.priceConfig.showTitle)
+            putString("${p}_price_title_text", config.priceConfig.titleText)
+            putFloat("${p}_price_x_mm", config.priceConfig.xMm)
+            putFloat("${p}_price_y_mm", config.priceConfig.yMm)
+            putFloat("${p}_price_size", config.priceConfig.fontSize)
+            putBoolean("${p}_price_bold", config.priceConfig.isBold)
+            putBoolean("${p}_price_italic", config.priceConfig.isItalic)
+            putString("${p}_price_color", config.priceConfig.colorHex)
+            putString("${p}_price_align", config.priceConfig.alignment)
             // Profile
-            .putBoolean("${p}_prof_vis", config.profileConfig.visible)
-            .putBoolean("${p}_prof_title_on", config.profileConfig.showTitle)
-            .putString("${p}_prof_title_text", config.profileConfig.titleText)
-            .putFloat("${p}_prof_x_mm", config.profileConfig.xMm)
-            .putFloat("${p}_prof_y_mm", config.profileConfig.yMm)
-            .putFloat("${p}_prof_size", config.profileConfig.fontSize)
-            .putBoolean("${p}_prof_bold", config.profileConfig.isBold)
-            .putBoolean("${p}_prof_italic", config.profileConfig.isItalic)
-            .putString("${p}_prof_color", config.profileConfig.colorHex)
-            .putString("${p}_prof_align", config.profileConfig.alignment)
+            putBoolean("${p}_prof_vis", config.profileConfig.visible)
+            putBoolean("${p}_prof_title_on", config.profileConfig.showTitle)
+            putString("${p}_prof_title_text", config.profileConfig.titleText)
+            putFloat("${p}_prof_x_mm", config.profileConfig.xMm)
+            putFloat("${p}_prof_y_mm", config.profileConfig.yMm)
+            putFloat("${p}_prof_size", config.profileConfig.fontSize)
+            putBoolean("${p}_prof_bold", config.profileConfig.isBold)
+            putBoolean("${p}_prof_italic", config.profileConfig.isItalic)
+            putString("${p}_prof_color", config.profileConfig.colorHex)
+            putString("${p}_prof_align", config.profileConfig.alignment)
             // Payment
-            .putBoolean("${p}_payment_vis", config.paymentConfig.visible)
-            .putString("${p}_payment_text", config.paymentConfig.titleText)
-            .putFloat("${p}_payment_x_mm", config.paymentConfig.xMm)
-            .putFloat("${p}_payment_y_mm", config.paymentConfig.yMm)
-            .putFloat("${p}_payment_size", config.paymentConfig.fontSize)
-            .putBoolean("${p}_payment_bold", config.paymentConfig.isBold)
-            .putBoolean("${p}_payment_italic", config.paymentConfig.isItalic)
-            .putString("${p}_payment_color", config.paymentConfig.colorHex)
-            .putString("${p}_payment_align", config.paymentConfig.alignment)
+            putBoolean("${p}_payment_vis", config.paymentConfig.visible)
+            putString("${p}_payment_text", config.paymentConfig.titleText)
+            putFloat("${p}_payment_x_mm", config.paymentConfig.xMm)
+            putFloat("${p}_payment_y_mm", config.paymentConfig.yMm)
+            putFloat("${p}_payment_size", config.paymentConfig.fontSize)
+            putBoolean("${p}_payment_bold", config.paymentConfig.isBold)
+            putBoolean("${p}_payment_italic", config.paymentConfig.isItalic)
+            putString("${p}_payment_color", config.paymentConfig.colorHex)
+            putString("${p}_payment_align", config.paymentConfig.alignment)
             // Serial
-            .putBoolean("${p}_ser_vis", config.serialConfig.visible)
-            .putString("${p}_ser_title_text", config.serialConfig.titleText)
-            .putFloat("${p}_ser_x_mm", config.serialConfig.xMm)
-            .putFloat("${p}_ser_y_mm", config.serialConfig.yMm)
-            .putFloat("${p}_ser_size", config.serialConfig.fontSize)
-            .putBoolean("${p}_ser_bold", config.serialConfig.isBold)
-            .putBoolean("${p}_ser_italic", config.serialConfig.isItalic)
-            .putString("${p}_ser_color", config.serialConfig.colorHex)
-            .putString("${p}_ser_align", config.serialConfig.alignment)
+            putBoolean("${p}_ser_vis", config.serialConfig.visible)
+            putString("${p}_ser_title_text", config.serialConfig.titleText)
+            putFloat("${p}_ser_x_mm", config.serialConfig.xMm)
+            putFloat("${p}_ser_y_mm", config.serialConfig.yMm)
+            putFloat("${p}_ser_size", config.serialConfig.fontSize)
+            putBoolean("${p}_ser_bold", config.serialConfig.isBold)
+            putBoolean("${p}_ser_italic", config.serialConfig.isItalic)
+            putString("${p}_ser_color", config.serialConfig.colorHex)
+            putString("${p}_ser_align", config.serialConfig.alignment)
             // POS
-            .putBoolean("${p}_pos_vis", config.posConfig.visible)
-            .putString("${p}_pos_text", config.posConfig.titleText)
-            .putFloat("${p}_pos_x_mm", config.posConfig.xMm)
-            .putFloat("${p}_pos_y_mm", config.posConfig.yMm)
-            .putFloat("${p}_pos_size", config.posConfig.fontSize)
-            .putBoolean("${p}_pos_bold", config.posConfig.isBold)
-            .putBoolean("${p}_pos_italic", config.posConfig.isItalic)
-            .putString("${p}_pos_color", config.posConfig.colorHex)
-            .putString("${p}_pos_align", config.posConfig.alignment)
+            putBoolean("${p}_pos_vis", config.posConfig.visible)
+            putString("${p}_pos_text", config.posConfig.titleText)
+            putFloat("${p}_pos_x_mm", config.posConfig.xMm)
+            putFloat("${p}_pos_y_mm", config.posConfig.yMm)
+            putFloat("${p}_pos_size", config.posConfig.fontSize)
+            putBoolean("${p}_pos_bold", config.posConfig.isBold)
+            putBoolean("${p}_pos_italic", config.posConfig.isItalic)
+            putString("${p}_pos_color", config.posConfig.colorHex)
+            putString("${p}_pos_align", config.posConfig.alignment)
             // Barcode
-            .putBoolean("${p}_barcode_vis", config.barcodeConfig.visible)
-            .putFloat("${p}_barcode_x_mm", config.barcodeConfig.xMm)
-            .putFloat("${p}_barcode_y_mm", config.barcodeConfig.yMm)
-            .putFloat("${p}_barcode_w_mm", config.barcodeConfig.widthMm)
-            .putFloat("${p}_barcode_h_mm", config.barcodeConfig.heightMm)
-            .putString("${p}_barcode_type", config.barcodeConfig.barcodeType)
-            .putFloat("${p}_barcode_padding", config.barcodeConfig.paddingMm)
+            putBoolean("${p}_barcode_vis", config.barcodeConfig.visible)
+            putFloat("${p}_barcode_x_mm", config.barcodeConfig.xMm)
+            putFloat("${p}_barcode_y_mm", config.barcodeConfig.yMm)
+            putFloat("${p}_barcode_w_mm", config.barcodeConfig.widthMm)
+            putFloat("${p}_barcode_h_mm", config.barcodeConfig.heightMm)
+            putString("${p}_barcode_type", config.barcodeConfig.barcodeType)
+            putFloat("${p}_barcode_padding", config.barcodeConfig.paddingMm)
             // Logo
-            .putBoolean("${p}_logo_vis", config.logoConfig.visible)
-            .putFloat("${p}_logo_x_mm", config.logoConfig.xMm)
-            .putFloat("${p}_logo_y_mm", config.logoConfig.yMm)
-            .putFloat("${p}_logo_w_mm", config.logoConfig.widthMm)
-            .putFloat("${p}_logo_h_mm", config.logoConfig.heightMm)
-            .putString("${p}_logo_url", config.logoUrl)
-            .apply()
+            putBoolean("${p}_logo_vis", config.logoConfig.visible)
+            putFloat("${p}_logo_x_mm", config.logoConfig.xMm)
+            putFloat("${p}_logo_y_mm", config.logoConfig.yMm)
+            putFloat("${p}_logo_w_mm", config.logoConfig.widthMm)
+            putFloat("${p}_logo_h_mm", config.logoConfig.heightMm)
+            putString("${p}_logo_url", config.logoUrl)
+        }
 
         // Also sync profile link if package specified
         if (config.userManagerPackageId.isNotEmpty()) {
-            prefs.edit().putString("${config.userManagerPackageId}_template", config.templateName).apply()
+            prefs.edit { putString("${config.userManagerPackageId}_template", config.templateName) }
         }
         if (config.hotspotPackageId.isNotEmpty()) {
-            prefs.edit().putString("${config.hotspotPackageId}_template", config.templateName).apply()
+            prefs.edit { putString("${config.hotspotPackageId}_template", config.templateName) }
         }
+    }
+
+    /** Grid limits actually honoured by [drawHighFidelityCardPage]. */
+    const val MAX_COLUMNS = 10
+    const val MAX_ROWS = 30
+
+    /** Cards that really fit on one sheet for [config] (same clamp the renderer uses). */
+    fun cardsPerPage(config: CardTemplateConfig): Int =
+        config.columns.coerceIn(1, MAX_COLUMNS) * config.rows.coerceIn(1, MAX_ROWS)
+
+    /** Sheets needed to print exactly [cardCount] cards with [config]. */
+    fun pageCountFor(cardCount: Int, config: CardTemplateConfig): Int =
+        pageCountFor(cardCount, config.columns, config.rows)
+
+    fun pageCountFor(cardCount: Int, columns: Int, rows: Int): Int {
+        val perPage = columns.coerceIn(1, MAX_COLUMNS) * rows.coerceIn(1, MAX_ROWS)
+        return ((cardCount.coerceAtLeast(0) + perPage - 1) / perPage).coerceAtLeast(1)
     }
 
     /**
@@ -577,25 +689,15 @@ object CardPrintAndExportHelper {
         batch: GeneratedBatchRecord? = null
     ): File? {
         return try {
-            val totalCards = (config.columns * config.rows).coerceAtLeast(1)
-            val realCards = if (users.isNotEmpty()) {
-                users
-            } else {
-                (1..totalCards).map { i ->
-                    val code = String.format(Locale.US, "%010d", (1000000000L + (i * 388954024L % 9000000000L)))
-                    UserManagerUser(
-                        username = code,
-                        password = String.format(Locale.US, "%04d", 5000 + i),
-                        profile = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                        active = true
-                    )
-                }
+            if (users.isEmpty()) {
+                Toast.makeText(context, "لا توجد كروت فعلية لمعاينتها أو تصديرها", Toast.LENGTH_LONG).show()
+                return null
             }
-
+            val realCards = users
             val curBatch = batch ?: GeneratedBatchRecord(
-                batchId = "معاينة",
-                profileName = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                pricePerCard = 100,
+                batchId = "",
+                profileName = realCards.firstOrNull()?.profile.orEmpty(),
+                pricePerCard = 0,
                 count = realCards.size,
                 date = SimpleDateFormat("yyyy/MM/dd", Locale.US).format(Date()),
                 prefix = ""
@@ -608,21 +710,25 @@ object CardPrintAndExportHelper {
             val sheetH = if (isLandscape) 595 else 842
 
             val pdfDocument = android.graphics.pdf.PdfDocument()
-            val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(sheetW, sheetH, 1).create()
-            val page = pdfDocument.startPage(pageInfo)
+            val totalPages = pageCountFor(realCards.size, config)
+            for (p in 0 until totalPages) {
+                val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(sheetW, sheetH, p + 1).create()
+                val page = pdfDocument.startPage(pageInfo)
+                drawHighFidelityCardPage(
+                    canvas = page.canvas,
+                    pageIndex = p,
+                    totalPages = totalPages,
+                    users = realCards,
+                    config = config,
+                    bgBitmap = bgBitmap,
+                    batch = curBatch
+                )
+                pdfDocument.finishPage(page)
+            }
 
-            drawHighFidelityCardPage(
-                canvas = page.canvas,
-                pageIndex = 0,
-                totalPages = 1,
-                users = realCards,
-                config = config,
-                bgBitmap = bgBitmap,
-                batch = curBatch
-            )
-            pdfDocument.finishPage(page)
-
-            val cacheFile = File(context.cacheDir, "preview_${config.templateName}.pdf")
+            val previewDir = File(context.cacheDir, "previews").apply { mkdirs() }
+            val safeTemplateName = config.templateName.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
+            val cacheFile = File(previewDir, "preview_$safeTemplateName.pdf")
             val fos = FileOutputStream(cacheFile)
             pdfDocument.writeTo(fos)
             fos.flush()
@@ -631,7 +737,7 @@ object CardPrintAndExportHelper {
 
             cacheFile
         } catch (e: Exception) {
-            e.printStackTrace()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
             null
         }
     }
@@ -650,7 +756,7 @@ object CardPrintAndExportHelper {
             for (i in 0 until pages) {
                 val page = renderer.openPage(i)
                 val scale = 2
-                val bmp = Bitmap.createBitmap(page.width * scale, page.height * scale, Bitmap.Config.ARGB_8888)
+                val bmp = createBitmap(page.width * scale, page.height * scale, Bitmap.Config.ARGB_8888)
                 val canvas = android.graphics.Canvas(bmp)
                 canvas.drawColor(android.graphics.Color.WHITE)
                 page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
@@ -658,7 +764,7 @@ object CardPrintAndExportHelper {
                 list.add(bmp)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
         } finally {
             try {
                 renderer?.close()
@@ -693,10 +799,53 @@ object CardPrintAndExportHelper {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
 
-            context.startActivity(Intent.createChooser(intent, "معاينة ملف PDF - ABO TALAL"))
+            context.startActivity(Intent.createChooser(intent, "معاينة ملف PDF - NetCraft"))
         } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "تعذر فتح معاينة PDF: ${e.message}", Toast.LENGTH_LONG).show()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+            Toast.makeText(context, "تعذر فتح معاينة PDF.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
+     * Saves a file into the device's public Downloads collection and returns a
+     * shareable Uri for it, or throws on failure.
+     *
+     * On Android 10+ (API 29+) direct File()/FileOutputStream writes into
+     * Environment.getExternalStoragePublicDirectory(DIRECTORY_DOWNLOADS) fail
+     * silently or throw under scoped storage — there is no legacy-storage
+     * opt-in and no WRITE_EXTERNAL_STORAGE permission declared for this app.
+     * MediaStore.Downloads is the only API that reliably works there without
+     * any extra permission. Below API 29, MediaStore.Downloads does not exist
+     * yet, so we fall back to the legacy direct-file path.
+     */
+    private fun saveToDownloads(context: Context, fileName: String, mimeType: String, write: (java.io.OutputStream) -> Unit): Uri {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw java.io.IOException("تعذر إنشاء الملف في مجلد التنزيلات")
+            try {
+                val stream = resolver.openOutputStream(uri)
+                    ?: throw java.io.IOException("تعذر فتح ملف التنزيلات للكتابة")
+                stream.use(write)
+            } catch (e: Exception) {
+                runCatching { resolver.delete(uri, null, null) }
+                throw e
+            }
+            return uri
+        } else {
+            @Suppress("DEPRECATION")
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadsDir.exists() && !downloadsDir.mkdirs()) {
+                throw java.io.IOException("تعذر إنشاء مجلد التنزيلات")
+            }
+            val targetFile = File(downloadsDir, fileName)
+            FileOutputStream(targetFile).use(write)
+            return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", targetFile)
         }
     }
 
@@ -711,27 +860,17 @@ object CardPrintAndExportHelper {
         batch: GeneratedBatchRecord? = null
     ) {
         try {
-            val totalCards = (config.columns * config.rows).coerceAtLeast(1)
-            val realCards = if (users.isNotEmpty()) {
-                users
-            } else {
-                (1..totalCards).map { i ->
-                    val code = (1000000000L + (i * 388954024L % 9000000000L)).toString()
-                    UserManagerUser(
-                        username = code,
-                        password = (5000 + i).toString(),
-                        profile = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                        active = true
-                    )
-                }
+            if (users.isEmpty()) {
+                Toast.makeText(context, "لا توجد كروت فعلية للطباعة أو التصدير", Toast.LENGTH_LONG).show()
+                return
             }
-
+            val realCards = users
             val curBatch = batch ?: GeneratedBatchRecord(
-                batchId = "معاينة",
-                profileName = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                pricePerCard = 100,
+                batchId = "",
+                profileName = realCards.firstOrNull()?.profile.orEmpty(),
+                pricePerCard = 0,
                 count = realCards.size,
-                date = "2026/09/03",
+                date = SimpleDateFormat("yyyy/MM/dd", Locale.US).format(Date()),
                 prefix = ""
             )
 
@@ -739,14 +878,10 @@ object CardPrintAndExportHelper {
 
             // 1. Save PDF file to Downloads
             try {
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                if (!downloadsDir.exists()) downloadsDir.mkdirs()
-                val fileName = "ABO_TALAL_${config.templateName}_${System.currentTimeMillis()}.pdf"
-                val targetFile = File(downloadsDir, fileName)
+                val fileName = "NetCraft_${config.templateName}_${System.currentTimeMillis()}.pdf"
 
                 val pdfDocument = android.graphics.pdf.PdfDocument()
-                val cardsPerPage = config.columns * config.rows
-                val totalPages = Math.ceil(realCards.size.toDouble() / cardsPerPage.toDouble()).toInt().coerceAtLeast(1)
+                val totalPages = pageCountFor(realCards.size, config)
 
                 val isLandscape = config.pageOrientation.equals("landscape", ignoreCase = true)
                 val sheetW = if (isLandscape) 842 else 595
@@ -755,15 +890,11 @@ object CardPrintAndExportHelper {
                 for (p in 0 until totalPages) {
                     val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(sheetW, sheetH, p + 1).create()
                     val page = pdfDocument.startPage(pageInfo)
-                    val startIdx = p * cardsPerPage
-                    val endIdx = (startIdx + cardsPerPage).coerceAtMost(realCards.size)
-                    val subList = if (startIdx < realCards.size) realCards.subList(startIdx, endIdx) else emptyList()
-
                     drawHighFidelityCardPage(
                         canvas = page.canvas,
                         pageIndex = p,
                         totalPages = totalPages,
-                        users = subList,
+                        users = realCards,
                         config = config,
                         bgBitmap = bgBitmap,
                         batch = curBatch
@@ -771,21 +902,22 @@ object CardPrintAndExportHelper {
                     pdfDocument.finishPage(page)
                 }
 
-                val fos = FileOutputStream(targetFile)
-                pdfDocument.writeTo(fos)
-                fos.flush()
-                fos.close()
-                pdfDocument.close()
-                Toast.makeText(context, "تم حفظ ملف PDF في التنزيلات:\n$fileName", Toast.LENGTH_LONG).show()
+                try {
+                    saveToDownloads(context, fileName, "application/pdf") { out -> pdfDocument.writeTo(out) }
+                    Toast.makeText(context, "تم حفظ ملف PDF في التنزيلات:\n$fileName", Toast.LENGTH_LONG).show()
+                } finally {
+                    pdfDocument.close()
+                }
             } catch (e: Exception) {
-                e.printStackTrace()
+                OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+                Toast.makeText(context, "تعذر حفظ ملف PDF في التنزيلات.", Toast.LENGTH_LONG).show()
             }
 
             // 2. Open native print manager
-            previewDesignInSystemPrint(context, config, bgBitmap)
+            previewDesignInSystemPrint(context, config, bgBitmap, realCards, curBatch)
         } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "فشل الطباعة: ${e.message}", Toast.LENGTH_LONG).show()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+            Toast.makeText(context, "فشل إنشاء ملف الطباعة.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -795,38 +927,22 @@ object CardPrintAndExportHelper {
     fun previewDesignInSystemPrint(
         context: Context,
         config: CardTemplateConfig,
-        customBgBitmap: Bitmap? = null
+        customBgBitmap: Bitmap? = null,
+        users: List<UserManagerUser>,
+        batch: GeneratedBatchRecord
     ) {
+        if (users.isEmpty()) {
+            Toast.makeText(context, "لا توجد كروت فعلية لمعاينتها", Toast.LENGTH_LONG).show()
+            return
+        }
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {
             Toast.makeText(context, "خدمة الطباعة غير متوفرة في هذا الجهاز!", Toast.LENGTH_LONG).show()
             return
         }
 
-        val totalCards = config.columns * config.rows
-        // Generate realistic sample cards matching the preview
-        val sampleCards = (1..totalCards).map { i ->
-            val code = (1000000000L + (i * 388954024L % 9000000000L)).toString()
-            UserManagerUser(
-                username = code,
-                password = (5000 + i).toString(),
-                profile = if (config.profileConfig.titleText.isNotEmpty()) config.profileConfig.titleText else "باقة VIP",
-                active = true,
-                uptimeUsed = "0s",
-                downloadLimit = "2GB"
-            )
-        }
-
-        val sampleBatch = GeneratedBatchRecord(
-            batchId = "معاينة",
-            profileName = "باقة VIP",
-            pricePerCard = 100,
-            count = totalCards,
-            date = "2026/09/03",
-            prefix = ""
-        )
-
         val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
+        val totalPages = pageCountFor(users.size, config)
 
         val printAdapter = object : PrintDocumentAdapter() {
             private var mPdfDocument: PrintedPdfDocument? = null
@@ -844,9 +960,9 @@ object CardPrintAndExportHelper {
                     return
                 }
 
-                val info = PrintDocumentInfo.Builder("ABO_TALAL_Preview_${config.templateName}.pdf")
+                val info = PrintDocumentInfo.Builder("NetCraft_Preview_${config.templateName}.pdf")
                     .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                    .setPageCount(1)
+                    .setPageCount(totalPages)
                     .build()
                 callback.onLayoutFinished(info, true)
             }
@@ -859,23 +975,29 @@ object CardPrintAndExportHelper {
             ) {
                 val pdfDoc = mPdfDocument ?: return
                 try {
-                    val page = pdfDoc.startPage(0)
-                    drawHighFidelityCardPage(
-                        canvas = page.canvas,
-                        pageIndex = 0,
-                        totalPages = 1,
-                        users = sampleCards,
-                        config = config,
-                        bgBitmap = bgBitmap,
-                        batch = sampleBatch
-                    )
-                    pdfDoc.finishPage(page)
+                    for (pageNumber in 0 until totalPages) {
+                        if (cancellationSignal?.isCanceled == true) {
+                            callback.onWriteCancelled()
+                            return
+                        }
+                        val page = pdfDoc.startPage(pageNumber)
+                        drawHighFidelityCardPage(
+                            canvas = page.canvas,
+                            pageIndex = pageNumber,
+                            totalPages = totalPages,
+                            users = users,
+                            config = config,
+                            bgBitmap = bgBitmap,
+                            batch = batch
+                        )
+                        pdfDoc.finishPage(page)
+                    }
 
                     pdfDoc.writeTo(FileOutputStream(destination.fileDescriptor))
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    callback.onWriteFailed(e.localizedMessage)
+                    OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+                    callback.onWriteFailed("تعذر إنشاء ملف الطباعة.")
                 } finally {
                     pdfDoc.close()
                     mPdfDocument = null
@@ -883,7 +1005,7 @@ object CardPrintAndExportHelper {
             }
         }
 
-        printManager.print("ABO TALAL - معاينة تصميم ${config.templateName}", printAdapter, null)
+        printManager.print("NetCraft - معاينة تصميم ${config.templateName}", printAdapter, null)
     }
 
     /**
@@ -927,8 +1049,7 @@ object CardPrintAndExportHelper {
             return
         }
 
-        val cardsPerPage = (config.columns * config.rows).coerceAtLeast(1)
-        val totalPages = Math.ceil(users.size.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)
+        val totalPages = pageCountFor(users.size, config)
         val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
 
         val printAdapter = object : PrintDocumentAdapter() {
@@ -947,7 +1068,7 @@ object CardPrintAndExportHelper {
                     return
                 }
 
-                val info = PrintDocumentInfo.Builder("ABO_TALAL_TK_${batch.batchId}.pdf")
+                val info = PrintDocumentInfo.Builder("NetCraft_TK_${batch.batchId}.pdf")
                     .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
                     .setPageCount(totalPages)
                     .build()
@@ -984,8 +1105,8 @@ object CardPrintAndExportHelper {
                     pdfDoc.writeTo(FileOutputStream(destination.fileDescriptor))
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    callback.onWriteFailed(e.localizedMessage)
+                    OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+                    callback.onWriteFailed("تعذر إنشاء ملف الطباعة.")
                 } finally {
                     pdfDoc.close()
                     mPdfDocument = null
@@ -993,7 +1114,7 @@ object CardPrintAndExportHelper {
             }
         }
 
-        printManager.print("ABO TALAL - كروت ${batch.batchId}", printAdapter, null)
+        printManager.print("NetCraft - كروت ${batch.batchId}", printAdapter, null)
     }
 
     /**
@@ -1005,11 +1126,10 @@ object CardPrintAndExportHelper {
         users: List<UserManagerUser>,
         config: CardTemplateConfig,
         customBgBitmap: Bitmap? = null,
-        onComplete: (File?) -> Unit
+        onComplete: (Uri?) -> Unit = {}
     ) {
         try {
-            val cardsPerPage = (config.columns * config.rows).coerceAtLeast(1)
-            val totalPages = Math.ceil(users.size.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)
+            val totalPages = pageCountFor(users.size, config)
             val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
 
             val isLandscape = config.pageOrientation.equals("landscape", ignoreCase = true)
@@ -1036,26 +1156,18 @@ object CardPrintAndExportHelper {
                 pdfDoc.finishPage(page)
             }
 
-            val fileName = "ABO_TALAL_TK_${batch.batchId}_${System.currentTimeMillis()}.pdf"
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val targetDir = if (downloadsDir != null && downloadsDir.exists()) downloadsDir else context.filesDir
-            val pdfFile = File(targetDir, fileName)
-
-            FileOutputStream(pdfFile).use { out ->
-                pdfDoc.writeTo(out)
+            val fileName = "NetCraft_TK_${batch.batchId}_${System.currentTimeMillis()}.pdf"
+            val uri: Uri
+            try {
+                uri = saveToDownloads(context, fileName, "application/pdf") { out -> pdfDoc.writeTo(out) }
+            } finally {
+                pdfDoc.close()
             }
-            pdfDoc.close()
-
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                pdfFile
-            )
 
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "application/pdf"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "كروت ${batch.batchId} - ABO TALAL")
+                putExtra(Intent.EXTRA_SUBJECT, "كروت ${batch.batchId} - NetCraft")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
@@ -1064,10 +1176,10 @@ object CardPrintAndExportHelper {
             context.startActivity(chooser)
 
             Toast.makeText(context, "تم حفظ ملف PDF بنجاح (${users.size} كرت)", Toast.LENGTH_LONG).show()
-            onComplete(pdfFile)
+            onComplete(uri)
         } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "خطأ في حفظ PDF: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+            Toast.makeText(context, "تعذر حفظ ملف PDF.", Toast.LENGTH_LONG).show()
             onComplete(null)
         }
     }
@@ -1082,7 +1194,7 @@ object CardPrintAndExportHelper {
         posName: String = "المركز الرئيسي"
     ): File? {
         try {
-            val fileName = "ABO_TALAL_TK_${batch.batchId}_${System.currentTimeMillis()}.csv"
+            val fileName = "NetCraft_TK_${batch.batchId}_${System.currentTimeMillis()}.csv"
             val exportDir = File(context.cacheDir, "exports")
             if (!exportDir.exists()) exportDir.mkdirs()
             val file = File(exportDir, fileName)
@@ -1117,7 +1229,7 @@ object CardPrintAndExportHelper {
                 type = "text/csv"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, "تصدير دفعة كروت: ${batch.batchId}")
-                putExtra(Intent.EXTRA_TEXT, "ملف إكسل لكروت الدفعة ${batch.batchId} - نظام ABO TALAL (${users.size} كرت)")
+                putExtra(Intent.EXTRA_TEXT, "ملف إكسل لكروت الدفعة ${batch.batchId} - نظام NetCraft (${users.size} كرت)")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
@@ -1128,14 +1240,24 @@ object CardPrintAndExportHelper {
             Toast.makeText(context, "تم تصدير ${users.size} كرت إلى Excel بنجاح!", Toast.LENGTH_LONG).show()
             return file
         } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "خطأ أثناء التصدير: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+            Toast.makeText(context, "تعذر تصدير الملف.", Toast.LENGTH_LONG).show()
             return null
         }
     }
 
     private fun sanitizeCsv(input: String): String {
-        var res = input.replace("\"", "\"\"")
+        var res = input
+        // Neutralize spreadsheet formula injection: a cell starting with =, +, -, @
+        // (or tab/CR) is interpreted as a formula by Excel/LibreOffice/Sheets when the
+        // CSV is opened, letting a hotspot/user-manager username or comment the admin
+        // imported from elsewhere execute arbitrary formulas (e.g. DDE commands) on
+        // whoever opens the exported file. Prefixing with an apostrophe forces plain
+        // text in every major spreadsheet app without changing the visible value.
+        if (res.isNotEmpty() && res[0] in charArrayOf('=', '+', '-', '@', '\t', '\r')) {
+            res = "'$res"
+        }
+        res = res.replace("\"", "\"\"")
         if (res.contains(",") || res.contains("\n") || res.contains("\"")) {
             res = "\"$res\""
         }
@@ -1193,8 +1315,8 @@ object CardPrintAndExportHelper {
         val printableW = pageWidth - (marginX * 2)
         val printableH = pageHeight - (marginY * 2) - footerSpace
 
-        val cols = config.columns.coerceIn(1, 10)
-        val rows = config.rows.coerceIn(1, 30)
+        val cols = config.columns.coerceIn(1, MAX_COLUMNS)
+        val rows = config.rows.coerceIn(1, MAX_ROWS)
         val cardsPerPage = cols * rows
 
         val hSpacing = config.horizontalMarginMm * 2.83465f // Convert mm to pt
@@ -1215,7 +1337,10 @@ object CardPrintAndExportHelper {
             config.cardHeightMm * 2.83465f
         }
 
-        val startIndex = if (users.size <= cardsPerPage) 0 else pageIndex * cardsPerPage
+        // `users` is always the whole batch; each page draws only its own slice so
+        // the printed total equals the generated count exactly (no repeats, no padding).
+        val startIndex = pageIndex * cardsPerPage
+        if (startIndex >= users.size) return
         val endIndex = Math.min(startIndex + cardsPerPage, users.size)
         var cardIdx = startIndex
 
@@ -1281,7 +1406,7 @@ object CardPrintAndExportHelper {
                 isAntiAlias = true
                 textAlign = AndroidPaint.Align.CENTER
                 textSize = config.pageNoteSize.coerceIn(6f, 16f)
-                color = parseColorSafe(config.pageNoteColorHex, AndroidColor.parseColor("#0C5A60"))
+                color = parseColorSafe(config.pageNoteColorHex, ("#0C5A60").toColorInt())
                 isFakeBoldText = true
             }
             val noteY = pageHeight - 8f
@@ -1294,13 +1419,58 @@ object CardPrintAndExportHelper {
                 isAntiAlias = true
                 textAlign = AndroidPaint.Align.RIGHT
                 textSize = 8f
-                color = AndroidColor.parseColor("#64748B")
+                color = ("#64748B").toColorInt()
             }
             val numText = config.pageNumberingText
                 .replace("{page}", "${pageIndex + 1}")
                 .replace("{total}", "$totalPages")
                 .ifEmpty { "${pageIndex + 1}/$totalPages" }
             canvas.drawText(numText, pageWidth - marginX, pageHeight - 8f, numPaint)
+        }
+    }
+
+    /** Renders a ZXing [BitMatrix] (QR or Code128) scaled to fit [rect], keeping
+     *  square modules crisp for reliable scanning. */
+    private fun drawBitMatrix(
+        canvas: AndroidCanvas,
+        matrix: BitMatrix,
+        rect: AndroidRectF,
+        paint: AndroidPaint
+    ) {
+        val w = matrix.width
+        val h = matrix.height
+        if (w <= 0 || h <= 0) return
+        // Fit the matrix inside the rect while preserving module aspect ratio
+        val moduleSize = minOf(rect.width() / w, rect.height() / h)
+        val totalW = moduleSize * w
+        val totalH = moduleSize * h
+        val originX = rect.left + (rect.width() - totalW) / 2f
+        val originY = rect.top + (rect.height() - totalH) / 2f
+        for (x in 0 until w) {
+            var runStart = -1
+            for (y in 0 until h) {
+                if (matrix[x, y]) {
+                    if (runStart < 0) runStart = y
+                } else if (runStart >= 0) {
+                    canvas.drawRect(
+                        originX + x * moduleSize,
+                        originY + runStart * moduleSize,
+                        originX + (x + 1) * moduleSize,
+                        originY + y * moduleSize,
+                        paint
+                    )
+                    runStart = -1
+                }
+            }
+            if (runStart >= 0) {
+                canvas.drawRect(
+                    originX + x * moduleSize,
+                    originY + runStart * moduleSize,
+                    originX + (x + 1) * moduleSize,
+                    originY + h * moduleSize,
+                    paint
+                )
+            }
         }
     }
 
@@ -1342,7 +1512,7 @@ object CardPrintAndExportHelper {
                     else -> AndroidPaint.Align.RIGHT
                 }
                 textSize = elem.fontSize.coerceIn(5f, 26f)
-                color = parseColorSafe(elem.colorHex, AndroidColor.parseColor("#0F172A"))
+                color = parseColorSafe(elem.colorHex, ("#0F172A").toColorInt())
                 isFakeBoldText = elem.isBold
             }
             val posX = when (elem.alignment) {
@@ -1365,7 +1535,7 @@ object CardPrintAndExportHelper {
                     else -> AndroidPaint.Align.RIGHT
                 }
                 textSize = uCfg.fontSize.coerceIn(6f, 24f)
-                color = parseColorSafe(uCfg.colorHex, AndroidColor.parseColor("#0F172A"))
+                color = parseColorSafe(uCfg.colorHex, ("#0F172A").toColorInt())
                 isFakeBoldText = uCfg.isBold
             }
             val posX = when (uCfg.alignment) {
@@ -1407,7 +1577,7 @@ object CardPrintAndExportHelper {
             } else if (batch.pricePerCard > 0) {
                 "${batch.pricePerCard} ر.ي"
             } else {
-                "500 ر.ي"
+                ""
             }
             drawTextItem(config.priceConfig, prText)
         }
@@ -1454,7 +1624,9 @@ object CardPrintAndExportHelper {
             drawTextItem(config.posConfig, posText)
         }
 
-        // 9. Barcode / QR Code
+        // 9. Barcode / QR Code — REAL scannable codes via ZXing.
+        // QR encodes "username:password" (readable by any scanner app), the linear
+        // barcode encodes the username as Code128.
         if (config.barcodeConfig.visible) {
             val bCfg = config.barcodeConfig
             val bw = (bCfg.widthMm * scaleX).coerceAtLeast(10f)
@@ -1473,59 +1645,49 @@ object CardPrintAndExportHelper {
             val pad = (bCfg.paddingMm * scaleX).coerceIn(0f, bw * 0.25f)
             val innerRect = AndroidRectF(bRect.left + pad, bRect.top + pad, bRect.right - pad, bRect.bottom - pad)
 
-            if (bCfg.barcodeType == "qr") {
-                val qrPaint = AndroidPaint().apply {
-                    isAntiAlias = true
-                    color = AndroidColor.BLACK
-                    style = AndroidPaint.Style.FILL
-                }
-                val qrSize = Math.min(innerRect.width(), innerRect.height())
-                val qrLeft = innerRect.left + (innerRect.width() - qrSize) / 2f
-                val qrTop = innerRect.top + (innerRect.height() - qrSize) / 2f
+            val darkPaint = AndroidPaint().apply {
+                isAntiAlias = false // crisp module edges scan better
+                color = AndroidColor.BLACK
+                style = AndroidPaint.Style.FILL
+            }
 
-                // Corner finder patterns
-                fun drawFinder(cx: Float, cy: Float, size: Float) {
-                    qrPaint.color = AndroidColor.BLACK
-                    canvas.drawRect(AndroidRectF(cx, cy, cx + size, cy + size), qrPaint)
-                    qrPaint.color = AndroidColor.WHITE
-                    canvas.drawRect(AndroidRectF(cx + size * 0.2f, cy + size * 0.2f, cx + size * 0.8f, cy + size * 0.8f), qrPaint)
-                    qrPaint.color = AndroidColor.BLACK
-                    canvas.drawRect(AndroidRectF(cx + size * 0.35f, cy + size * 0.35f, cx + size * 0.65f, cy + size * 0.65f), qrPaint)
-                }
-
-                val cSize = qrSize * 0.28f
-                drawFinder(qrLeft, qrTop, cSize)
-                drawFinder(qrLeft + qrSize - cSize, qrTop, cSize)
-                drawFinder(qrLeft, qrTop + qrSize - cSize, cSize)
-
-                // Grid modules
-                val grid = 8
-                val cellSize = qrSize / grid
-                val seed = user.username.hashCode()
-                for (gx in 0 until grid) {
-                    for (gy in 0 until grid) {
-                        if ((gx < 3 && gy < 3) || (gx >= grid - 3 && gy < 3) || (gx < 3 && gy >= grid - 3)) continue
-                        if (((seed + gx * 11 + gy * 7) % 2) == 0) {
-                            val mx = qrLeft + gx * cellSize
-                            val my = qrTop + gy * cellSize
-                            qrPaint.color = AndroidColor.BLACK
-                            canvas.drawRect(AndroidRectF(mx, my, mx + cellSize * 0.85f, my + cellSize * 0.85f), qrPaint)
-                        }
+            try {
+                if (bCfg.barcodeType == "qr") {
+                    // Real QR code (ZXing) carrying the voucher credentials
+                    val content = if (user.password.isNotBlank()) {
+                        "${user.username}:${user.password}"
+                    } else {
+                        user.username
                     }
+                    val hints = mapOf(EncodeHintType.MARGIN to 0, EncodeHintType.CHARACTER_SET to "UTF-8")
+                    val matrix: BitMatrix = QRCodeWriter().encode(
+                        content, BarcodeFormat.QR_CODE,
+                        innerRect.width().toInt().coerceAtLeast(21),
+                        innerRect.height().toInt().coerceAtLeast(21),
+                        hints
+                    )
+                    drawBitMatrix(canvas, matrix, innerRect, darkPaint)
+                } else {
+                    // Real Code128 barcode (ZXing) carrying the username
+                    val content = user.username
+                    val hints = mapOf(EncodeHintType.MARGIN to 1)
+                    val matrix: BitMatrix = Code128Writer().encode(
+                        content, BarcodeFormat.CODE_128,
+                        innerRect.width().toInt().coerceAtLeast(40),
+                        innerRect.height().toInt().coerceAtLeast(12),
+                        hints
+                    )
+                    drawBitMatrix(canvas, matrix, innerRect, darkPaint)
                 }
-            } else {
-                val barPaint = AndroidPaint().apply {
-                    isAntiAlias = true
-                    color = AndroidColor.BLACK
-                }
-                val lineCount = 14
-                val step = innerRect.width() / (lineCount + 1)
-                val seed = user.username.hashCode()
-                for (i in 1..lineCount) {
-                    val lx = innerRect.left + (i * step)
-                    barPaint.strokeWidth = if ((seed + i) % 3 == 0) 2.2f else 1.1f
-                    canvas.drawLine(lx, innerRect.top + 1f, lx, innerRect.bottom - 1f, barPaint)
-                }
+            } catch (e: Exception) {
+                // Encoding failed (e.g. empty content) — draw an honest empty box
+                // instead of a fake decorative pattern.
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.EXPORT_RESULT,
+                    operation = OperationTelemetry.Operation.EXPORT,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.ErrorClass.PARSE
+                )
             }
         }
 
@@ -1557,7 +1719,7 @@ object CardPrintAndExportHelper {
         val bgPaint = AndroidPaint().apply {
             isAntiAlias = true
             style = AndroidPaint.Style.FILL
-            color = AndroidColor.parseColor("#0C2340") // Deep Luxury Navy
+            color = ("#0C2340").toColorInt() // Deep Luxury Navy
         }
         canvas.drawRoundRect(cardRect, 3f, 3f, bgPaint)
 
@@ -1597,8 +1759,8 @@ object CardPrintAndExportHelper {
 
     private fun parseColorSafe(hex: String, fallback: Int): Int {
         return try {
-            if (hex.startsWith("#")) AndroidColor.parseColor(hex)
-            else AndroidColor.parseColor("#$hex")
+            if (hex.startsWith("#")) (hex).toColorInt()
+            else ("#$hex").toColorInt()
         } catch (_: Exception) {
             fallback
         }

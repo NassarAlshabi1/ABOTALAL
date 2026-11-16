@@ -3,13 +3,11 @@ package com.example.util
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
-import android.util.Log
 import java.io.BufferedReader
 import java.io.FileReader
 import java.util.Locale
 
 object NetworkUtils {
-    private const val TAG = "NetworkUtils"
 
     /**
      * Accurately detects the default Gateway IP of the connected router.
@@ -28,17 +26,15 @@ object NetworkUtils {
                     ?: routes?.firstOrNull { it.gateway != null && !it.gateway?.hostAddress.isNullOrEmpty() }?.gateway?.hostAddress
 
                 if (!defaultRouteGateway.isNullOrBlank() && isValidIpv4(defaultRouteGateway) && defaultRouteGateway != "0.0.0.0") {
-                    Log.d(TAG, "Gateway detected via LinkProperties: $defaultRouteGateway")
                     return defaultRouteGateway
                 }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error checking LinkProperties gateway", e)
-        }
+        } catch (_: Exception) { }
 
-        // Method 2: WifiManager DHCP Info Gateway
+        // Fallback for devices/OEMs that omit the default gateway from LinkProperties.
         try {
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            @Suppress("DEPRECATION")
             val dhcpInfo = wifiManager?.dhcpInfo
             val gatewayInt = dhcpInfo?.gateway ?: 0
             if (gatewayInt != 0) {
@@ -51,13 +47,10 @@ object NetworkUtils {
                     gatewayInt shr 24 and 0xff
                 )
                 if (isValidIpv4(gatewayIp) && gatewayIp != "0.0.0.0") {
-                    Log.d(TAG, "Gateway detected via WifiManager DHCP: $gatewayIp")
                     return gatewayIp
                 }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error checking WifiManager DHCP gateway", e)
-        }
+        } catch (_: Exception) { }
 
         // Method 3: Linux /proc/net/route table
         try {
@@ -74,19 +67,16 @@ object NetworkUtils {
                             val b4 = hexGateway.substring(0, 2).toInt(16)
                             val ip = "$b1.$b2.$b3.$b4"
                             if (isValidIpv4(ip)) {
-                                Log.d(TAG, "Gateway detected via /proc/net/route: $ip")
                                 return ip
                             }
                         }
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error reading /proc/net/route", e)
-        }
+        } catch (_: Exception) { }
 
-        // Fallback to standard MikroTik default gateway
-        return "192.168.88.1"
+        // No gateway was detected; leave the field empty instead of guessing a router address.
+        return ""
     }
 
     private fun isValidIpv4(ip: String): Boolean {

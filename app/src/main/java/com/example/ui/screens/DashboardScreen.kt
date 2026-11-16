@@ -1,5 +1,16 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+
+import androidx.core.content.edit
+
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -8,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,6 +29,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,28 +38,35 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.RouterBackupFile
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 @Composable
 fun DashboardScreen(
     viewModel: MikroTikViewModel,
     navigateToTab: (Int) -> Unit
 ) {
-    val stats by viewModel.routerStats.collectAsState()
-    val conn by viewModel.currentConnection.collectAsState()
-    val logs by viewModel.activityLogs.collectAsState()
-    val hotspotUsers by viewModel.hotspotUsers.collectAsState()
-    val userManagerUsers by viewModel.userManagerUsers.collectAsState()
-    val activeHotspot by viewModel.activeHotspot.collectAsState()
-    val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val stats by viewModel.routerStats.collectAsStateWithLifecycle()
+    val conn by viewModel.currentConnection.collectAsStateWithLifecycle()
+    val logs by viewModel.activityLogs.collectAsStateWithLifecycle()
+    val hotspotUsers by viewModel.hotspotUsers.collectAsStateWithLifecycle()
+    val userManagerUsers by viewModel.userManagerUsers.collectAsStateWithLifecycle()
+    val profiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
+    val activeHotspot by viewModel.activeHotspot.collectAsStateWithLifecycle()
+    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+    val profilePrices = remember(profiles) { profiles.associate { it.name to it.price } }
+    val cardsAccountValue = userManagerUsers.sumOf { profilePrices[it.profile] ?: 0 }
+    val formattedCardsAccountValue = String.format(Locale.getDefault(), "%,d", cardsAccountValue)
 
     val coroutineScope = rememberCoroutineScope()
     var isRefreshing by remember { mutableStateOf(false) }
@@ -69,6 +89,7 @@ fun DashboardScreen(
     var showAboutDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
     var showPrintingSystemDialog by remember { mutableStateOf(false) }
+    var feedbackMessage by remember { mutableStateOf<String?>(null) }
 
     // Refresh animation rotation
     val infiniteTransition = rememberInfiniteTransition(label = "refresh_rotation")
@@ -190,7 +211,7 @@ fun DashboardScreen(
                                 }
                             }
                             Text(
-                                text = conn?.host?.ifEmpty { "172.16.0.1" } ?: "172.16.0.1",
+                                text = conn?.host?.ifEmpty { "-" } ?: "-",
                                 fontFamily = CairoFontFamily,
                                 color = Color.White,
                                 fontSize = 15.sp,
@@ -229,13 +250,13 @@ fun DashboardScreen(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.Schedule,
                             label = "مدة التشغيل",
-                            value = stats?.uptime?.ifEmpty { "1d18h59m52s" } ?: "1d18h59m52s"
+                            value = stats?.uptime?.ifEmpty { "-" } ?: "-"
                         )
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.Settings,
                             label = "اصدار الراوتر",
-                            value = "(stable) ${stats?.version?.ifEmpty { "6.49.19" } ?: "6.49.19"}"
+                            value = stats?.version?.ifEmpty { "-" } ?: "-"
                         )
                     }
 
@@ -248,7 +269,7 @@ fun DashboardScreen(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.Memory,
                             label = "المعالج",
-                            value = "${stats?.cpuUsage ?: 30}%"
+                            value = "${stats?.cpuUsage ?: 0}%"
                         )
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
@@ -265,11 +286,19 @@ fun DashboardScreen(
                     ) {
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
-                            icon = Icons.Outlined.FormatListBulleted,
+                            icon = Icons.AutoMirrored.Outlined.FormatListBulleted,
                             label = "الذاكرة",
-                            value = "MB / 128.0 MB 48.0",
-                            hasProgressBar = true,
-                            progressFraction = 48f / 128f
+                            value = run {
+                                val total = stats?.totalMemoryBytes ?: 0L
+                                val free = stats?.freeMemoryBytes ?: 0L
+                                val usedMb = ((total - free).coerceAtLeast(0L)) / 1048576f
+                                val totalMb = total / 1048576f
+                                if (total > 0) "%.1f / %.1f MB".format(usedMb, totalMb) else "-"
+                            },
+                            hasProgressBar = (stats?.totalMemoryBytes ?: 0L) > 0L,
+                            progressFraction = if ((stats?.totalMemoryBytes ?: 0L) > 0L)
+                                (((stats!!.totalMemoryBytes - stats!!.freeMemoryBytes).toFloat()) / stats!!.totalMemoryBytes).coerceIn(0f, 1f)
+                            else 0f
                         )
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
@@ -285,20 +314,20 @@ fun DashboardScreen(
         // 3. شبكة إحصائيات الكروت (4 بطاقات 2 × 2 Grid - مطابقة تماماً للشاشة)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // الصف العلوي من الكروت: إجمالي البيع | الكروت المولدة
+                // الصف العلوي من الكروت: قيمة الحسابات | الكروت المولدة
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // كرت إجمالي البيع (يمين)
+                    // قيمة الحسابات محسوبة من أسعار الباقات المحمّلة من الراوتر.
                     StatCardItem(
                         modifier = Modifier.weight(1f),
-                        title = "إجمالي البيع",
+                        title = "قيمة الحسابات",
                         icon = Icons.Filled.PointOfSale,
                         iconTint = Color(0xFF0284C7),
                         iconBackground = Color(0xFFE0F2FE),
-                        value = "-",
-                        footer = "نظام اليوزرمانجر",
+                        value = "$formattedCardsAccountValue ريال",
+                        footer = "حسب أسعار باقات اليوزرمانجر",
                         isDarkMode = isDarkMode,
                         onClick = { showFinancialReportDialog = true }
                     )
@@ -317,20 +346,20 @@ fun DashboardScreen(
                     )
                 }
 
-                // الصف السفلي من الكروت: الكروت المباعة | الكروت المتبقية
+                // الصف السفلي من الكروت: الكروت النشطة في User Manager | كروت الهوتسبوت
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // كرت الكروت المباعة (يمين)
+                    // الكروت النشطة تُحسب من User Manager فقط، وليس من جلسات الهوتسبوت.
                     StatCardItem(
                         modifier = Modifier.weight(1f),
-                        title = "الكروت المباعة",
+                        title = "الكروت النشطة",
                         icon = Icons.Filled.CheckCircle,
                         iconTint = Color(0xFF10B981),
                         iconBackground = Color(0xFFD1FAE5),
-                        value = "-",
-                        footer = "كروت يوزرمنجر: 0",
+                        value = "${userManagerUsers.count { it.active }}",
+                        footer = "User Manager",
                         isDarkMode = isDarkMode,
                         onClick = { navigateToTab(2) }
                     )
@@ -339,10 +368,10 @@ fun DashboardScreen(
                     StatCardItem(
                         modifier = Modifier.weight(1f),
                         title = "الكروت المتبقية",
-                        icon = Icons.Filled.Article,
+                        icon = Icons.AutoMirrored.Filled.Article,
                         iconTint = Color(0xFF0284C7),
                         iconBackground = Color(0xFFE0F2FE),
-                        value = "-",
+                        value = "${hotspotUsers.size}",
                         footer = "كروت الهوتسبوت: ${hotspotUsers.size}",
                         isDarkMode = isDarkMode,
                         onClick = { navigateToTab(1) }
@@ -351,7 +380,7 @@ fun DashboardScreen(
             }
         }
 
-        // 4. شريط نظام الطباعة ABO TALAL VIP
+        // 4. شريط نظام الطباعة NetCraft
         item {
             Surface(
                 modifier = Modifier
@@ -391,7 +420,7 @@ fun DashboardScreen(
                             }
                         }
                         Text(
-                            text = "معا نظام الطباعة ABO TALAL VIP",
+                            text = "معا نظام الطباعة NetCraft",
                             fontFamily = CairoFontFamily,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
@@ -474,7 +503,7 @@ fun DashboardScreen(
                 ServiceCard(
                     modifier = Modifier.weight(1f),
                     title = "المصروفات",
-                    icon = Icons.Filled.ReceiptLong,
+                    icon = Icons.AutoMirrored.Filled.ReceiptLong,
                     backgroundColor = Color(0xFFFECDD3),
                     contentColor = Color(0xFFE11D48),
                     isDarkMode = isDarkMode,
@@ -725,53 +754,16 @@ fun DashboardScreen(
             }
         }
 
-        // Row of quick tool buttons in Dashboard
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                ServiceCard(
-                    modifier = Modifier.weight(1f),
-                    title = "إشعارات التيليجرام",
-                    icon = Icons.Filled.Send,
-                    backgroundColor = if (isDarkMode) Color(0xFF0088CC).copy(alpha = 0.2f) else Color(0xFFE0F2FE),
-                    contentColor = Color(0xFF0088CC),
-                    isDarkMode = isDarkMode,
-                    onClick = { navigateToTab(6) }
-                )
-
-                ServiceCard(
-                    modifier = Modifier.weight(1f),
-                    title = "حسابات البروباند",
-                    icon = Icons.Filled.Dns,
-                    backgroundColor = if (isDarkMode) Color(0xFF2563EB).copy(alpha = 0.2f) else Color(0xFFDBEAFE),
-                    contentColor = Color(0xFF2563EB),
-                    isDarkMode = isDarkMode,
-                    onClick = { navigateToTab(6) }
-                )
-
-                ServiceCard(
-                    modifier = Modifier.weight(1f),
-                    title = "مجلد الهوتسبوت",
-                    icon = Icons.Filled.FolderSpecial,
-                    backgroundColor = if (isDarkMode) Color(0xFF0D9488).copy(alpha = 0.2f) else Color(0xFFCCFBF1),
-                    contentColor = Color(0xFF0D9488),
-                    isDarkMode = isDarkMode,
-                    onClick = { navigateToTab(6) }
-                )
-            }
-        }
     }
 
     // --- Dialogs ---
     if (showPrintingSystemDialog) {
         AlertDialog(
             onDismissRequest = { showPrintingSystemDialog = false },
-            title = { Text("نظام الطباعة ABO TALAL VIP", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            title = { Text("نظام الطباعة NetCraft", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "يتيح نظام الطباعة ABO TALAL VIP تصميم وطباعة كروت الهوتسبوت واليوزرمانجر بتنسيقات متعددة وقوالب جاهزة للطباعة الحرارية ومقاس A4.",
+                    "يتيح نظام الطباعة NetCraft تصميم وطباعة كروت الهوتسبوت واليوزرمانجر بتنسيقات متعددة وقوالب جاهزة للطباعة الحرارية ومقاس A4.",
                     fontFamily = CairoFontFamily
                 )
             },
@@ -845,7 +837,11 @@ fun DashboardScreen(
             onDismissRequest = { showFinancialReportDialog = false },
             title = { Text("الحسابات المالية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
-                Text("إجمالي المبيعات المحصلة لكروت النظام: 0 ريال.", fontFamily = CairoFontFamily)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("قيمة الكروت الحالية حسب أسعار الباقات: $formattedCardsAccountValue ريال.", fontFamily = CairoFontFamily)
+                    Text("عدد كروت User Manager: ${userManagerUsers.size}", fontFamily = CairoFontFamily)
+                    Text("هذه قيمة تقديرية للحسابات وليست سجل مبيعات محصل.", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color.Gray)
+                }
             },
             confirmButton = {
                 Button(
@@ -864,8 +860,8 @@ fun DashboardScreen(
             title = { Text("الملف الشخصي", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("المستخدم: ${conn?.username ?: "abdulhamid"}", fontFamily = CairoFontFamily)
-                    Text("الراوتر: ${conn?.name ?: "172.16.0.1"}", fontFamily = CairoFontFamily)
+                    Text("المستخدم: ${conn?.username ?: "-"}", fontFamily = CairoFontFamily)
+                    Text("الراوتر: ${conn?.name ?: "-"}", fontFamily = CairoFontFamily)
                     Text("الصلاحية: مدير النظام (Full Admin)", fontFamily = CairoFontFamily)
                 }
             },
@@ -881,18 +877,354 @@ fun DashboardScreen(
     }
 
     if (showBackupDialog) {
+        val context = LocalContext.current
+        val backupPrefs = remember { context.getSharedPreferences("router_backup_preferences", android.content.Context.MODE_PRIVATE) }
+        var backups by remember { mutableStateOf<List<RouterBackupFile>>(emptyList()) }
+        var isLoadingList by remember { mutableStateOf(true) }
+        var isCreating by remember { mutableStateOf(false) }
+        var listError by remember { mutableStateOf<String?>(null) }
+        var pendingRestoreFile by remember { mutableStateOf<String?>(null) }
+        var pendingDeleteFile by remember { mutableStateOf<String?>(null) }
+        var pendingDownloadFile by remember { mutableStateOf<RouterBackupFile?>(null) }
+        var backupFolderUriText by remember { mutableStateOf(backupPrefs.getString("folder_uri", null)) }
+        var downloadingBackupName by remember { mutableStateOf<String?>(null) }
+        var downloadedBackupBytes by remember { mutableLongStateOf(0L) }
+        val backupFolderUri = backupFolderUriText?.let(Uri::parse)
+        val backupFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri == null) {
+                pendingDownloadFile = null
+            } else {
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                    backupPrefs.edit { putString("folder_uri", uri.toString()) }
+                    backupFolderUriText = uri.toString()
+                } catch (e: Exception) {
+                    pendingDownloadFile = null
+                    feedbackMessage = "تعذر حفظ صلاحية الوصول إلى المجلد المختار: ${e.localizedMessage ?: "أعد اختيار مجلد آخر"}"
+                }
+            }
+        }
+
+        fun startBackupDownload(file: RouterBackupFile) {
+            val folderUri = backupFolderUri
+            if (folderUri == null) {
+                feedbackMessage = "اختر أولاً مجلد التنزيل على الهاتف أو بطاقة الذاكرة الخارجية."
+                return
+            }
+            pendingDownloadFile = null
+            downloadingBackupName = file.name
+            downloadedBackupBytes = 0L
+            viewModel.downloadRouterBackup(
+                fileName = file.name,
+                folderUri = folderUri,
+                expectedSizeBytes = file.sizeBytes,
+                onProgress = { downloadedBackupBytes = it },
+                onSuccess = { bytes ->
+                    downloadingBackupName = null
+                    downloadedBackupBytes = bytes
+                    feedbackMessage = "تم تنزيل النسخة '${file.name}' بنجاح (${formatBackupFileSize(bytes)}) إلى المجلد المختار."
+                },
+                onError = { error ->
+                    downloadingBackupName = null
+                    feedbackMessage = "فشل تنزيل النسخة '${file.name}': $error"
+                }
+            )
+        }
+
+        fun reloadBackups() {
+            isLoadingList = true
+            listError = null
+            viewModel.fetchRouterBackups(
+                onSuccess = { list -> backups = list; isLoadingList = false },
+                onError = { err -> listError = err; isLoadingList = false }
+            )
+        }
+
+        // Fetch the real list from the router the moment the dialog opens, instead
+        // of showing a static placeholder — this is the actual fix for "backups" on
+        // the dashboard: it used to just be inert text with a Close button.
+        LaunchedEffect(showBackupDialog) { reloadBackups() }
+
         AlertDialog(
             onDismissRequest = { showBackupDialog = false },
-            title = { Text("النسخ الاحتياطية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            title = { Text("النسخ الاحتياطية لإعدادات الراوتر", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
-                Text("يمكنك أخذ نسخة احتياطية من بيانات الراوتر أو استعادتها.", fontFamily = CairoFontFamily)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "نسخة احتياطية كاملة لإعدادات الراوتر (System Backup) — تُحفظ على الراوتر نفسه ويمكن استعادتها منه في أي وقت.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 12.sp,
+                        color = textSecondary
+                    )
+
+                    OutlinedButton(
+                        onClick = { backupFolderPicker.launch(backupFolderUri) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (backupFolderUri == null) "اختيار مجلد على الهاتف أو بطاقة SD"
+                            else "تغيير مجلد التنزيل المحفوظ",
+                            fontFamily = CairoFontFamily
+                        )
+                    }
+                    Text(
+                        if (backupFolderUri == null)
+                            "لم يتم اختيار مجلد بعد. سيُحفظ اختيارك للاستخدام القادم. يمكنك اختيار مجلد داخل بطاقة SD."
+                        else {
+                            val folder = runCatching { DocumentsContract.getTreeDocumentId(backupFolderUri).substringAfter(':') }.getOrNull()
+                            "مجلد الحفظ: ${folder?.takeIf { it.isNotBlank() } ?: "المجلد المختار"} — محفوظ على هذا الجهاز."
+                        },
+                        fontFamily = CairoFontFamily,
+                        fontSize = 11.sp,
+                        color = textSecondary
+                    )
+                    Text(
+                        "تنبيه أمني: نقل النسخة يتم عبر FTP غير مشفّر. استخدم شبكة محلية موثوقة أو VPN؛ لا تفتح خدمة FTP للإنترنت. النسخة قد تحتوي كلمات مرور ومفاتيح الراوتر.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 11.sp,
+                        color = Color(0xFFB45309)
+                    )
+                    Text(
+                        "قد يمنع Android اختيار جذر بطاقة SD مباشرة؛ اختر مجلدًا داخل البطاقة.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 10.sp,
+                        color = textSecondary
+                    )
+
+                    Button(
+                        onClick = {
+                            isCreating = true
+                            viewModel.createRouterBackup(
+                                onSuccess = { name ->
+                                    isCreating = false
+                                    feedbackMessage = "تم إنشاء نسخة احتياطية جديدة: $name"
+                                    reloadBackups()
+                                },
+                                onError = { err ->
+                                    isCreating = false
+                                    feedbackMessage = "فشل إنشاء النسخة الاحتياطية: $err"
+                                }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isCreating,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
+                    ) {
+                        if (isCreating) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("أخذ نسخة احتياطية جديدة الآن", fontFamily = CairoFontFamily)
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    Text(
+                        "النسخ المحفوظة على الراوتر:",
+                        fontFamily = CairoFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = textPrimary
+                    )
+
+                    when {
+                        isLoadingList -> Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                        }
+                        listError != null -> Text(
+                            listError ?: "",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = Color(0xFFDC2626)
+                        )
+                        backups.isEmpty() -> Text(
+                            "لا توجد نسخ احتياطية محفوظة على الراوتر حالياً.",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = textSecondary
+                        )
+                        else -> LazyColumn(
+                            modifier = Modifier.heightIn(max = 220.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(backups) { file ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            file.name,
+                                            fontFamily = CairoFontFamily,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = textPrimary
+                                        )
+                                        Text(
+                                            "${formatBackupFileSize(file.sizeBytes)} • ${file.time}",
+                                            fontFamily = CairoFontFamily,
+                                            fontSize = 11.sp,
+                                            color = textSecondary
+                                        )
+                                        if (downloadingBackupName == file.name) {
+                                            Text(
+                                                "جارٍ التنزيل: ${formatBackupFileSize(downloadedBackupBytes)} من ${formatBackupFileSize(file.sizeBytes)}",
+                                                fontFamily = CairoFontFamily,
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF0284C7)
+                                            )
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            pendingDownloadFile = file
+                                            if (backupFolderUri == null) backupFolderPicker.launch(null)
+                                        },
+                                        enabled = downloadingBackupName == null
+                                    ) {
+                                        if (downloadingBackupName == file.name) {
+                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                        } else {
+                                            Icon(Icons.Filled.Download, contentDescription = "تنزيل إلى الهاتف", tint = Color(0xFF059669))
+                                        }
+                                    }
+                                    IconButton(onClick = { pendingRestoreFile = file.name }) {
+                                        Icon(Icons.Filled.Restore, contentDescription = "استعادة", tint = Color(0xFF0891B2))
+                                    }
+                                    IconButton(onClick = { pendingDeleteFile = file.name }) {
+                                        Icon(Icons.Filled.Delete, contentDescription = "حذف", tint = Color(0xFFDC2626))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
+                TextButton(onClick = { showBackupDialog = false }) {
+                    Text("إغلاق", fontFamily = CairoFontFamily)
+                }
+            }
+        )
+
+        pendingDownloadFile?.takeIf { backupFolderUri != null }?.let { file ->
+            AlertDialog(
+                onDismissRequest = { pendingDownloadFile = null },
+                title = { Text("تأكيد تنزيل النسخة", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        "سيتم حفظ '${file.name}' (${formatBackupFileSize(file.sizeBytes)}) في المجلد الذي اخترته. ملف النسخة يحتوي بيانات حساسة، وFTP يرسل كلمة المرور والملف دون تشفير. تابع فقط عبر LAN موثوقة أو VPN، وتأكد من عدم إتاحة FTP من الإنترنت.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 13.sp
+                    )
+                },
+                confirmButton = {
+                    Button(onClick = { startBackupDownload(file) }) {
+                        Text("متابعة التنزيل", fontFamily = CairoFontFamily)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDownloadFile = null }) {
+                        Text("إلغاء", fontFamily = CairoFontFamily)
+                    }
+                }
+            )
+        }
+
+        // Restoring overwrites the router's entire current configuration and makes
+        // it reboot immediately — a second explicit confirmation before sending it.
+        pendingRestoreFile?.let { fileName ->
+            AlertDialog(
+                onDismissRequest = { pendingRestoreFile = null },
+                title = { Text("تأكيد الاستعادة", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626)) },
+                text = {
+                    Text(
+                        "استعادة '$fileName' ستستبدل كل إعدادات الراوتر الحالية بالإعدادات المحفوظة في هذه النسخة، وسيُعيد الراوتر تشغيل نفسه فورًا. هل أنت متأكد؟",
+                        fontFamily = CairoFontFamily
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val name = fileName
+                            pendingRestoreFile = null
+                            viewModel.restoreRouterBackup(
+                                name,
+                                onSuccess = { msg -> feedbackMessage = msg; showBackupDialog = false },
+                                onError = { err -> feedbackMessage = err }
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
+                    ) {
+                        Text("نعم، استعادة الآن", fontFamily = CairoFontFamily)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingRestoreFile = null }) {
+                        Text("إلغاء", fontFamily = CairoFontFamily)
+                    }
+                }
+            )
+        }
+
+        pendingDeleteFile?.let { fileName ->
+            AlertDialog(
+                onDismissRequest = { pendingDeleteFile = null },
+                title = { Text("حذف النسخة الاحتياطية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+                text = {
+                    Text("هل تريد حذف '$fileName' نهائيًا من الراوتر؟ لا يمكن التراجع عن هذا الإجراء.", fontFamily = CairoFontFamily)
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val name = fileName
+                            pendingDeleteFile = null
+                            viewModel.deleteRouterBackup(
+                                name,
+                                onSuccess = { feedbackMessage = "تم حذف النسخة الاحتياطية '$name'"; reloadBackups() },
+                                onError = { err -> feedbackMessage = err }
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
+                    ) {
+                        Text("حذف", fontFamily = CairoFontFamily)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDeleteFile = null }) {
+                        Text("إلغاء", fontFamily = CairoFontFamily)
+                    }
+                }
+            )
+        }
+    }
+
+    // Feedback dialog for backup create/restore/delete results (and any future
+    // async action on this screen that needs to surface a result to the user).
+    feedbackMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { feedbackMessage = null },
+            title = { Text("تنبيه النظام", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = { Text(msg, fontFamily = CairoFontFamily) },
+            confirmButton = {
                 Button(
-                    onClick = { showBackupDialog = false },
+                    onClick = { feedbackMessage = null },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
                 ) {
-                    Text("إغلاق", fontFamily = CairoFontFamily)
+                    Text("حسناً", fontFamily = CairoFontFamily)
                 }
             }
         )
@@ -922,8 +1254,8 @@ fun DashboardScreen(
             title = { Text("الإرشاد والمساعدة والدعم الفني", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("برمجة وتطوير: المهندس عبدالحميد داوؤد", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    Text("هاتف التواصل: 778215553", fontFamily = CairoFontFamily)
+                    Text("برمجة وتطوير: شركة الهيثم للبرمجيات", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                    Text("هاتف التواصل: 773114243", fontFamily = CairoFontFamily)
                     Text("فريق الدعم الفني جاهز لمساعدتكم في أي استفسارات أو دعم للشبكة.", fontFamily = CairoFontFamily)
                 }
             },
@@ -944,9 +1276,9 @@ fun DashboardScreen(
             title = { Text("حول التطبيق", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("نظام ABO TALAL VIP", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                    Text("نظام NetCraft", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                     Text("الإصدار: v1.0.1", fontFamily = CairoFontFamily)
-                    Text("تطوير: المهندس عبدالحميد داوؤد (778215553)", fontFamily = CairoFontFamily)
+                    Text("تطوير: شركة الهيثم للبرمجيات (773114243)", fontFamily = CairoFontFamily)
                 }
             },
             confirmButton = {
@@ -1057,18 +1389,18 @@ fun StatCardItem(
 
     Surface(
         modifier = modifier
-            .shadow(elevation = 2.dp, shape = RoundedCornerShape(18.dp))
-            .clip(RoundedCornerShape(18.dp))
+            .shadow(elevation = 2.dp, shape = RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable { onClick() },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(14.dp),
         color = cardBg,
         border = if (isDarkMode) BorderStroke(1.dp, Color(0xFF334155)) else null
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(9.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1085,14 +1417,14 @@ fun StatCardItem(
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = if (isDarkMode) iconTint.copy(alpha = 0.2f) else iconBackground,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(24.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = icon,
                             contentDescription = null,
                             tint = iconTint,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(14.dp)
                         )
                     }
                 }
@@ -1101,7 +1433,7 @@ fun StatCardItem(
             Text(
                 text = value,
                 fontFamily = CairoFontFamily,
-                fontSize = 22.sp,
+                fontSize = 19.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = valueColor
             )
@@ -1109,7 +1441,7 @@ fun StatCardItem(
             Text(
                 text = footer,
                 fontFamily = CairoFontFamily,
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Normal,
                 color = footerColor,
                 maxLines = 1,
@@ -1139,11 +1471,11 @@ fun ServiceCard(
 
     Surface(
         modifier = modifier
-            .height(100.dp)
-            .shadow(elevation = if (hasBorder) 1.dp else 2.dp, shape = RoundedCornerShape(18.dp))
-            .clip(RoundedCornerShape(18.dp))
+            .height(78.dp)
+            .shadow(elevation = if (hasBorder) 1.dp else 2.dp, shape = RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable { onClick() },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(14.dp),
         color = actualBg,
         border = if (isDarkMode) {
             BorderStroke(1.dp, Color(0xFF334155))
@@ -1163,24 +1495,24 @@ fun ServiceCard(
             Surface(
                 shape = CircleShape,
                 color = contentColor.copy(alpha = if (isDarkMode) 0.22f else 0.15f),
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(32.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = icon,
                         contentDescription = title,
                         tint = contentColor,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             Text(
                 text = title,
                 fontFamily = CairoFontFamily,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = titleColor,
                 textAlign = TextAlign.Center,
@@ -1246,5 +1578,15 @@ fun WideServiceCard(
                 color = titleColor
             )
         }
+    }
+}
+
+private fun formatBackupFileSize(bytes: Long): String {
+    val b = bytes.toDouble()
+    return when {
+        b >= 1024 * 1024 * 1024 -> String.format(Locale.US, "%.2f GB", b / (1024 * 1024 * 1024))
+        b >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", b / (1024 * 1024))
+        b >= 1024 -> String.format(Locale.US, "%.0f KB", b / 1024)
+        else -> "$bytes B"
     }
 }

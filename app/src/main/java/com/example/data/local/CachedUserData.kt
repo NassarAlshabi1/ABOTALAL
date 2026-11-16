@@ -25,7 +25,8 @@ data class CachedUserManagerUser(
     val profile: String = "default",
     val active: Boolean = true,
     val uptimeUsed: String = "0s",
-    val downloadLimit: String = "unlimited"
+    val downloadLimit: String = "unlimited",
+    val profileExpired: Boolean = false
 )
 
 @Entity(tableName = "cached_router_stats")
@@ -52,7 +53,8 @@ data class CachedUserManagerProfile(
     @PrimaryKey val name: String,
     val routerHost: String,
     val validity: String = "30d",
-    val price: Double = 0.0,
+    // Whole currency units — see UserManagerProfile.price for rationale.
+    val price: Int = 0,
     val sharedUsers: Int = 1,
     val downloadLimit: String = "unlimited",
     val uptimeLimit: String = "unlimited",
@@ -82,6 +84,9 @@ interface CacheDao {
     @Query("DELETE FROM cached_hotspot_users WHERE routerHost = :host")
     suspend fun clearHotspotUsers(host: String)
 
+    @Query("DELETE FROM cached_hotspot_users WHERE routerHost = :host AND id IN (:ids)")
+    suspend fun deleteHotspotUsers(host: String, ids: List<String>)
+
     @Query("SELECT * FROM cached_usermanager_users WHERE routerHost = :host")
     suspend fun getUserManagerUsers(host: String): List<CachedUserManagerUser>
 
@@ -90,6 +95,9 @@ interface CacheDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertUserManagerUsers(users: List<CachedUserManagerUser>)
+
+    @Query("DELETE FROM cached_usermanager_users WHERE routerHost = :host AND username IN (:usernames)")
+    suspend fun deleteUserManagerUsers(host: String, usernames: List<String>)
 
     @Query("SELECT * FROM cached_usermanager_profiles")
     suspend fun getAllUserManagerProfiles(): List<CachedUserManagerProfile>

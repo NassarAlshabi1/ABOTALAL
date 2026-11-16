@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.core.graphics.toColorInt
+
+import java.util.Locale
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -60,10 +63,18 @@ import com.example.data.model.UserManagerUser
 import com.example.ui.viewmodel.MikroTikViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.IOException
 import java.util.UUID
+
+// Prevent accidental multi-thousand-card generations that would freeze the UI
+// and saturate the router. The preview is additionally capped below.
+private const val MAX_VOUCHERS_PER_BATCH = 500
+private const val MAX_PREVIEW_VOUCHERS = 120
 
 enum class VoucherMode {
     HOTSPOT,
@@ -169,23 +180,59 @@ fun VoucherPrinterScreen(
     val generatedVouchersList = remember { mutableStateListOf<TempVoucher>() }
     var isGeneratingAndAdding by remember { mutableStateOf(false) }
     var generationProgress by remember { mutableStateOf(0f) }
+    var syncStatusText by remember { mutableStateOf<String?>(null) }
 
-    // Re-trigger visual placeholder generation for live preview
-    LaunchedEffect(selectedMode, selectedProfile, qtyToGenerate, prefixText, usernameLength, generationTypeSeq, startSeqNum, matchPasswordWithUsername, bindMacOnFirstLogin) {
-        generatedVouchersList.clear()
-        for (i in 0 until qtyToGenerate) {
+    // Re-trigger visual placeholder generation for live preview.
+    // NOTE: the credentials generated here are the REAL ones sent to the router
+    // when the user confirms, so they come from a cryptographically secure
+    // SecureRandom — not kotlin.random.
+    val secureRandom = remember { java.security.SecureRandom() }
+
+    // Usernames already present on the router (synced into local state). Both
+    // the preview and the final batch skip these names, so bulk generation can
+    // never create a duplicate User Manager card or Hotspot user.
+    // Reads the live StateFlow values (not a composition snapshot) so cards
+    // that were just synced from the router are always part of the comparison.
+    fun occupiedUsernames(): Set<String> = when (selectedMode) {
+        VoucherMode.HOTSPOT -> viewModel.hotspotUsers.value.map { it.name }
+        VoucherMode.USER_MANAGER -> viewModel.userManagerUsers.value.map { it.username }
+    }.filter { it.isNotBlank() }.toSet()
+
+    fun buildVoucherBatch(quantity: Int, occupied: Set<String>): List<TempVoucher> {
+        val allowedChars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ" // Easy readability, skip 0/O/1/I
+        val used = occupied.toMutableSet()
+        val result = ArrayList<TempVoucher>(quantity)
+        var nextSequence = startSeqNum
+        repeat(quantity) {
             val userStr = if (generationTypeSeq) {
-                "$prefixText${startSeqNum + i}"
+                var candidate: String
+                var attempts = 0
+                do {
+                    candidate = "$prefixText${nextSequence++}"
+                    attempts++
+                } while (candidate in used && attempts < 100_000)
+                candidate
             } else {
-                val allowedChars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ" // Easy readability, skip 0/O/1/I
-                val randomSeq = (1..usernameLength).map { allowedChars.random() }.joinToString("")
-                "$prefixText$randomSeq"
+                var candidate: String
+                var attempts = 0
+                do {
+                    val randomSeq = (1..usernameLength)
+                        .map { allowedChars[secureRandom.nextInt(allowedChars.length)] }
+                        .joinToString("")
+                    candidate = "$prefixText$randomSeq"
+                    attempts++
+                } while (candidate in used && attempts < 100)
+                // Practically unreachable; guarantees uniqueness even if the
+                // random space is exhausted.
+                if (candidate in used) candidate = "$prefixText${UUID.randomUUID().toString().take(8)}"
+                candidate
             }
+            used.add(userStr)
             val passStr = if (matchPasswordWithUsername) userStr else {
-                val randomSeq = (1..5).map { ('0'..'9').random() }.joinToString("")
+                val randomSeq = (1..5).map { ('0' + secureRandom.nextInt(10)) }.joinToString("")
                 randomSeq
             }
-            generatedVouchersList.add(
+            result.add(
                 TempVoucher(
                     username = userStr,
                     password = passStr,
@@ -195,6 +242,13 @@ fun VoucherPrinterScreen(
                 )
             )
         }
+        return result
+    }
+
+    LaunchedEffect(selectedMode, selectedProfile, qtyToGenerate, prefixText, usernameLength, generationTypeSeq, startSeqNum, matchPasswordWithUsername, bindMacOnFirstLogin) {
+        generatedVouchersList.clear()
+        val safeQty = qtyToGenerate.coerceIn(0, MAX_VOUCHERS_PER_BATCH)
+        generatedVouchersList.addAll(buildVoucherBatch(safeQty, occupiedUsernames()))
     }
 
     LazyVerticalGrid(
@@ -349,7 +403,7 @@ fun VoucherPrinterScreen(
                         }
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // Horizontal Inputs
                     Row(
@@ -358,7 +412,13 @@ fun VoucherPrinterScreen(
                     ) {
                         OutlinedTextField(
                             value = if (qtyToGenerate == 0) "" else qtyToGenerate.toString(),
-                            onValueChange = { qtyToGenerate = it.toIntOrNull() ?: 0 },
+                            onValueChange = { raw ->
+                                qtyToGenerate = (raw.toIntOrNull() ?: 0)
+                                    .coerceIn(0, MAX_VOUCHERS_PER_BATCH)
+                            },
+                            supportingText = {
+                                Text("الحد الأقصى $MAX_VOUCHERS_PER_BATCH كرت في الدفعة")
+                            },
                             label = { Text("عدد الكروت") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             shape = RoundedCornerShape(12.dp),
@@ -535,7 +595,7 @@ fun VoucherPrinterScreen(
                         )
                     }
 
-                    Divider()
+                    HorizontalDivider()
 
                     // LIVE CARD PREVIEW CONTAINER - High Graphic Polish
                     Text("المعاينة والتصميم المباشر (تعديل دقة وموضع الخطوط):", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
@@ -589,7 +649,7 @@ fun VoucherPrinterScreen(
 
                             // Static Brand
                             Text(
-                                text = "شبكة ABO TALAL VIP",
+                                text = "شبكة NetCraft",
                                 color = if (designTheme == CardDesignTheme.MINIMAL_WHITE) Color.Black else Color.White,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
@@ -614,7 +674,7 @@ fun VoucherPrinterScreen(
                                         fontSize = (passwordFontSize - 3).sp
                                     )
                                     Text(
-                                        text = if (generatedVouchersList.isNotEmpty()) generatedVouchersList.first().username else "ABO-TALAL-VIP-101",
+                                        text = if (generatedVouchersList.isNotEmpty()) generatedVouchersList.first().username else "NETCRAFT-101",
                                         color = textDesignColor,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = usernameFontSize.sp,
@@ -684,12 +744,12 @@ fun VoucherPrinterScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("أفقي X (يمين/يسار)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = usernameX, onValueChange = { usernameX = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                    Text(String.format("%.0f%%", usernameX*100), style = MaterialTheme.typography.labelSmall)
+                                    Text(String.format(Locale.US, "%.0f%%", usernameX*100), style = MaterialTheme.typography.labelSmall)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("رأسي Y (أعلى/أسفل)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = usernameY, onValueChange = { usernameY = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                    Text(String.format("%.0f%%", usernameY*100), style = MaterialTheme.typography.labelSmall)
+                                    Text(String.format(Locale.US, "%.0f%%", usernameY*100), style = MaterialTheme.typography.labelSmall)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("حجم الخط (Size)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
@@ -707,12 +767,12 @@ fun VoucherPrinterScreen(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("أفقي X (يمين/يسار)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                         Slider(value = passwordX, onValueChange = { passwordX = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                        Text(String.format("%.0f%%", passwordX*100), style = MaterialTheme.typography.labelSmall)
+                                        Text(String.format(Locale.US, "%.0f%%", passwordX*100), style = MaterialTheme.typography.labelSmall)
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("رأسي Y (أعلى/أسفل)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                         Slider(value = passwordY, onValueChange = { passwordY = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                        Text(String.format("%.0f%%", passwordY*100), style = MaterialTheme.typography.labelSmall)
+                                        Text(String.format(Locale.US, "%.0f%%", passwordY*100), style = MaterialTheme.typography.labelSmall)
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("حجم الخط (Size)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
@@ -730,12 +790,12 @@ fun VoucherPrinterScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("أفقي X", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = detailsX, onValueChange = { detailsX = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                    Text(String.format("%.0f%%", detailsX*100), style = MaterialTheme.typography.labelSmall)
+                                    Text(String.format(Locale.US, "%.0f%%", detailsX*100), style = MaterialTheme.typography.labelSmall)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("رأسي Y", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = detailsY, onValueChange = { detailsY = it }, valueRange = 0.1f..0.9f, modifier = Modifier.weight(1f))
-                                    Text(String.format("%.0f%%", detailsY*100), style = MaterialTheme.typography.labelSmall)
+                                    Text(String.format(Locale.US, "%.0f%%", detailsY*100), style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
@@ -846,54 +906,139 @@ fun VoucherPrinterScreen(
                     .padding(vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Text(
+                    text = "قبل التوليد تتم مزامنة كروت الراوتر ومقارنة الأسماء تلقائياً، لذلك لن يتم إنشاء كرت مكرر.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
                 // Generate and append to server button
                 Button(
                     onClick = {
                         isGeneratingAndAdding = true
                         generationProgress = 0.0f
+                        syncStatusText = "جاري مزامنة كروت الراوتر..."
                         scope.launch {
-                            try {
-                                val generatedUsers = generatedVouchersList.toList()
-                                var index = 0
-                                for (voucher in generatedUsers) {
-                                    delay(40) // Simulate fast responsive server transmission
-                                    if (selectedMode == VoucherMode.HOTSPOT) {
-                                        viewModel.addHotspotUser(
-                                            HotspotUser(
-                                                name = voucher.username,
-                                                password = voucher.password,
-                                                profile = voucher.profile,
-                                                comment = "توليد تلقائي بالجملة"
-                                            ),
-                                            onSuccess = {},
-                                            onError = {}
-                                        )
-                                    } else {
-                                        viewModel.addUserManagerUser(
-                                            UserManagerUser(
-                                                username = voucher.username,
-                                                password = voucher.password,
-                                                profile = voucher.profile,
-                                                downloadLimit = "unlimited"
-                                            ),
-                                            onSuccess = {},
-                                            onError = {}
-                                        )
-                                    }
-                                    index++
-                                    generationProgress = index.toFloat() / generatedUsers.size
-                                }
+                            if (!viewModel.isConnected.value) {
+                                isGeneratingAndAdding = false
+                                syncStatusText = null
+                                Toast.makeText(context, "اتصل بالراوتر أولاً قبل توليد الكروت.", Toast.LENGTH_LONG).show()
+                                return@launch
+                            }
 
+                            // Always pull the current RouterOS cards first. Without
+                            // this, two operators (or two devices) could generate
+                            // the same usernames from a stale local cache.
+                            var syncError: String? = null
+                            val synced = withTimeoutOrNull(30_000L) {
+                                suspendCancellableCoroutine { continuation ->
+                                    // Card-only sync: one router call and an
+                                    // incremental Room write, so generation starts
+                                    // quickly instead of re-syncing the whole DB.
+                                    viewModel.syncVoucherCards(
+                                        useUserManager = selectedMode == VoucherMode.USER_MANAGER,
+                                        onComplete = {
+                                            if (continuation.isActive) continuation.resume(true)
+                                        },
+                                        onError = { message ->
+                                            syncError = message
+                                            if (continuation.isActive) continuation.resume(false)
+                                        }
+                                    )
+                                }
+                            } ?: false
+
+                            if (!synced) {
+                                isGeneratingAndAdding = false
+                                syncStatusText = null
+                                Toast.makeText(
+                                    context,
+                                    syncError ?: "تعذرت مزامنة كروت الراوتر. لم يتم توليد أي كرت لتفادي التكرار.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                return@launch
+                            }
+
+                            syncStatusText = "جاري توليد أسماء غير مكررة..."
+                            val freshBatch = buildVoucherBatch(
+                                qtyToGenerate.coerceIn(0, MAX_VOUCHERS_PER_BATCH),
+                                occupiedUsernames()
+                            )
+                            // Keep the on-screen cards identical to what is about
+                            // to be sent (and later printed).
+                            generatedVouchersList.clear()
+                            generatedVouchersList.addAll(freshBatch)
+                            val generatedUsers = freshBatch
+                            syncStatusText = null
+                            if (generatedUsers.isEmpty()) {
+                                isGeneratingAndAdding = false
+                                return@launch
+                            }
+
+                            suspend fun sendVoucher(voucher: TempVoucher): Boolean =
+                                withTimeoutOrNull(30_000L) {
+                                    suspendCancellableCoroutine { continuation ->
+                                        val onDone = { ok: Boolean ->
+                                            if (continuation.isActive) continuation.resume(ok)
+                                        }
+                                        if (selectedMode == VoucherMode.HOTSPOT) {
+                                            viewModel.addHotspotUser(
+                                                HotspotUser(
+                                                    name = voucher.username,
+                                                    password = voucher.password,
+                                                    profile = voucher.profile,
+                                                    comment = "توليد تلقائي بالجملة"
+                                                ),
+                                                onSuccess = { onDone(true) },
+                                                onError = { onDone(false) }
+                                            )
+                                        } else {
+                                            viewModel.addUserManagerUser(
+                                                UserManagerUser(
+                                                    username = voucher.username,
+                                                    password = voucher.password,
+                                                    profile = voucher.profile,
+                                                    downloadLimit = "unlimited"
+                                                ),
+                                                onSuccess = { onDone(true) },
+                                                onError = { onDone(false) }
+                                            )
+                                        }
+                                    }
+                                } ?: false
+
+                            var successCount = 0
+                            var failureCount = 0
+                            generatedUsers.forEachIndexed { index, voucher ->
+                                val ok = try {
+                                    sendVoucher(voucher)
+                                } catch (e: Exception) {
+                                    false
+                                }
+                                if (ok) successCount++ else failureCount++
+                                generationProgress = (index + 1).toFloat() / generatedUsers.size
+                            }
+
+                            isGeneratingAndAdding = false
+                            if (successCount > 0) {
                                 viewModel.writeActivityLog(
                                     "توليد كروت آلي",
-                                    "تم توليد وإضافة عدد $qtyToGenerate كارت بنجاح لبروفايل $selectedProfile بروابط آمنة"
+                                    "تمت إضافة $successCount كارت لبروفايل $selectedProfile" +
+                                        if (failureCount > 0) " وفشل $failureCount كارت." else "."
                                 )
-                                isGeneratingAndAdding = false
-                                Toast.makeText(context, "تم حفظ وتثبيت كافة الكروت داخل روتر الأمير بنجاح!", Toast.LENGTH_LONG).show()
-                            } catch (e: Exception) {
-                                isGeneratingAndAdding = false
-                                Toast.makeText(context, "فشل الإرسال: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
                             }
+                            val message = buildString {
+                                if (successCount > 0) append("تمت إضافة $successCount كرت بنجاح.")
+                                if (failureCount > 0) {
+                                    if (successCount > 0) append(" ")
+                                    append("تعذر إضافة $failureCount كرت — راجع اتصال الراوتر وأعد المحاولة.")
+                                }
+                            }
+                            Toast.makeText(
+                                context,
+                                message.ifBlank { "لم تتم إضافة أي كرت." },
+                                if (failureCount > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                            ).show()
                         }
                     },
                     enabled = !isGeneratingAndAdding && generatedVouchersList.isNotEmpty(),
@@ -907,7 +1052,8 @@ fun VoucherPrinterScreen(
                         CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "جاري الحفظ وإرسال الحسابات للسيرفر... (%${(generationProgress * 100).toInt()})",
+                            text = syncStatusText
+                                ?: "جاري الحفظ وإرسال الحسابات للسيرفر... (%${(generationProgress * 100).toInt()})",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -1017,7 +1163,24 @@ fun VoucherPrinterScreen(
                             )
                         }
                     } else {
-                        val pages = generatedVouchersList.chunked(limitPerPage)
+                        val previewVouchers = generatedVouchersList.take(MAX_PREVIEW_VOUCHERS)
+                        if (previewVouchers.size < generatedVouchersList.size) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 10.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer
+                            ) {
+                                Text(
+                                    text = "تتم معاينة أول ${previewVouchers.size} كرت فقط من أصل ${generatedVouchersList.size} لتفادي استهلاك الذاكرة. تُطبع كل الكروت المولدة عند التأكيد.",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
+                        }
+                        val pages = previewVouchers.chunked(limitPerPage)
                         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
                             pages.forEachIndexed { p, pageVouchers ->
                                 Column(
@@ -1323,7 +1486,7 @@ class VoucherPDFPrinter(
                 }
 
                 if (mTotalPages > 0) {
-                    val info = PrintDocumentInfo.Builder("Alameer_Vouchers.pdf")
+                    val info = PrintDocumentInfo.Builder("NetCraft_Vouchers.pdf")
                         .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
                         .setPageCount(mTotalPages)
                         .build()
@@ -1436,13 +1599,13 @@ class VoucherPDFPrinter(
                             }
                             when (theme) {
                                 CardDesignTheme.CLASSIC_BLUE -> {
-                                    localPaint.color = AndroidColor.parseColor("#1B2A4A")
+                                    localPaint.color = ("#1B2A4A").toColorInt()
                                 }
                                 CardDesignTheme.ROYAL_GOLD -> {
-                                    localPaint.color = AndroidColor.parseColor("#1e160a")
+                                    localPaint.color = ("#1e160a").toColorInt()
                                 }
                                 CardDesignTheme.SHINY_PURPLE -> {
-                                    localPaint.color = AndroidColor.parseColor("#4A154B")
+                                    localPaint.color = ("#4A154B").toColorInt()
                                 }
                                 CardDesignTheme.MINIMAL_WHITE -> {
                                     localPaint.color = AndroidColor.WHITE
@@ -1466,7 +1629,7 @@ class VoucherPDFPrinter(
                             textSize = 10f
                             isFakeBoldText = true
                         }
-                        canvas.drawText("شبكة ABO TALAL VIP", (xLeft + (singleW / 2)).toFloat(), yTop + 20f, paintBrand)
+                        canvas.drawText("شبكة NetCraft", (xLeft + (singleW / 2)).toFloat(), yTop + 20f, paintBrand)
 
                         // 2. Plot Username
                         val uX = xLeft + (singleW * xUser)
@@ -1474,7 +1637,7 @@ class VoucherPDFPrinter(
                         val paintUserLabel = AndroidPaint().apply {
                             isAntiAlias = true
                             textAlign = AndroidPaint.Align.CENTER
-                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else AndroidColor.parseColor("#DCDCDC")
+                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else ("#DCDCDC").toColorInt()
                             textSize = 7f
                         }
                         canvas.drawText("USER:", uX, uY - 3f, paintUserLabel)
@@ -1495,7 +1658,7 @@ class VoucherPDFPrinter(
                             val paintPassLabel = AndroidPaint().apply {
                                 isAntiAlias = true
                                 textAlign = AndroidPaint.Align.CENTER
-                                color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else AndroidColor.parseColor("#DCDCDC")
+                                color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else ("#DCDCDC").toColorInt()
                                 textSize = 7f
                             }
                             canvas.drawText("PASS:", pX, pY - 3f, paintPassLabel)
@@ -1516,7 +1679,7 @@ class VoucherPDFPrinter(
                         val paintDetailsVal = AndroidPaint().apply {
                             isAntiAlias = true
                             textAlign = AndroidPaint.Align.CENTER
-                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.parseColor("#1B2A4A") else AndroidColor.WHITE
+                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) ("#1B2A4A").toColorInt() else AndroidColor.WHITE
                             textSize = sizeDetails.toFloat()
                             isFakeBoldText = true
                         }
@@ -1529,6 +1692,6 @@ class VoucherPDFPrinter(
         };
 
         // Trigger Printing Frame Flow
-        printManager.print("Alameer Net Cards", printAdapter, null)
+        printManager.print("NetCraft Cards", printAdapter, null)
     }
 }

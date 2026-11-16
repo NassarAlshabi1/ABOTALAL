@@ -1,21 +1,33 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.net.Uri
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
+import com.example.data.local.GeneratedBatchEntity
 import com.example.data.local.RouterConnection
 import com.example.data.model.HotspotProfile
 import com.example.data.model.HotspotUser
+import com.example.data.model.RouterBackupFile
+import com.example.data.model.RouterLogEntry
 import com.example.data.model.UserManagerProfile
+import com.example.data.model.UserManagerSession
 import com.example.data.model.UserManagerUser
+import com.example.data.repository.AiFix
 import com.example.data.repository.MikroTikRepository
+import com.example.util.CryptoManager
+import com.example.util.OperationTelemetry
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -27,16 +39,29 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
     
     val repository = MikroTikRepository(application, logDao, database.cacheDao())
 
-    // Theme Mode (Default is Light mode as requested: "وطبعاً اجعل الوضع الافتراضي اجعله الوضع الفاتح")
-    private val _isDarkMode = MutableStateFlow(false)
+    private val uiPreferences =
+        application.getSharedPreferences("netcraft_ui_preferences", Context.MODE_PRIVATE)
+
+    // Theme Mode (Default is Light mode) persisted across launches.
+    private val _isDarkMode = MutableStateFlow(
+        uiPreferences.getBoolean("dark_mode", false)
+    )
     val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
 
     fun toggleDarkMode() {
-        _isDarkMode.value = !_isDarkMode.value
+        val newValue = !_isDarkMode.value
+        _isDarkMode.value = newValue
+        uiPreferences.edit { putBoolean("dark_mode", newValue) }
     }
 
-    // Local saved router list (observed reactively)
+    // Local saved router list (observed reactively) — passwords are stored encrypted
+    // in Room and decrypted transparently for the UI.
     val savedConnections: StateFlow<List<RouterConnection>> = routerDao.getAllConnections()
+        .map { list -> list.map { it.copy(password = CryptoManager.decrypt(it.password)) } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Persisted batch history (real Room table, survives restarts)
+    val batchHistory: StateFlow<List<GeneratedBatchEntity>> = database.generatedBatchDao().getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // All logs
@@ -45,7 +70,6 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     // UI exposed states from repository
     val isConnected = repository.isConnected
-    val isDemoMode = repository.isDemoMode
     val currentConnection = repository.currentConnection
     val routerStats = repository.routerStats
     val hotspotUsers = repository.hotspotUsers
@@ -71,21 +95,27 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     // Connect to real saved router
     fun connectRouter(connection: RouterConnection, onSuccess: () -> Unit) {
+        connectRouter(connection, connection.host, connection.port, onSuccess)
+    }
+
+    // Connect to a temporary target (such as the active VPN endpoint) while
+    // preserving the saved router's original host and port in Room.
+    fun connectRouter(connection: RouterConnection, targetHost: String, targetPort: Int, onSuccess: () -> Unit) {
         _isConnecting.value = true
         _connectionError.value = null
         repository.connectToRouter(
-            connection = connection,
+            connection = connection.copy(host = targetHost.trim(), port = targetPort),
             onSuccess = {
                 _isConnecting.value = false
                 // Save/update connection timestamp in DB
-                viewModelScope.launch {
-                    routerDao.insertConnection(connection.copy(lastConnected = System.currentTimeMillis()))
-                }
+                persistEncryptedConnection(connection)
                 onSuccess()
             },
             onError = { errorMsg ->
                 _isConnecting.value = false
-                _connectionError.value = errorMsg
+                _connectionError.value = errorMsg +
+                    "\n\nالهدف: ${targetHost.trim()}:$targetPort" +
+                    (if (connection.useSsl) " (SSL)" else "")
             }
         )
     }
@@ -109,31 +139,25 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
             onSuccess = {
                 _isConnecting.value = false
                 // Persist to local contacts list in SQLite
-                viewModelScope.launch {
-                    routerDao.insertConnection(conn.copy(lastConnected = System.currentTimeMillis()))
-                }
+                persistEncryptedConnection(conn)
                 onSuccess()
             },
             onError = { error ->
                 _isConnecting.value = false
-                _connectionError.value = error
+                _connectionError.value = error +
+                    "\n\nالهدف: ${conn.host}:${conn.port}" +
+                    (if (conn.useSsl) " (SSL)" else "")
             }
         )
     }
-
-    // Launch Demo System Mode
-    fun startDemoMode(onSuccess: () -> Unit) {
-        _isConnecting.value = true
-        _connectionError.value = null
-        repository.enableDemoMode {
-            _isConnecting.value = false
-            onSuccess()
-        }
-    }
-
-    // Disconnect
+    // Disconnect. repository.disconnect() acquires the native socket's lock to
+    // close it, which can briefly block if another coroutine is mid-command on
+    // that socket (e.g. a long-running maintenance command awaiting a reply) —
+    // run it off the main thread so a logout tap can never freeze the UI.
     fun logout() {
-        repository.disconnect()
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.disconnect()
+        }
     }
 
     // Delete router from database connection history
@@ -157,7 +181,7 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
                 com.example.data.local.ActivityLog(
                     action = action,
                     details = details,
-                    routerHost = currentConnection.value?.host ?: "192.168.88.1"
+                    routerHost = currentConnection.value?.host.orEmpty()
                 )
             )
         }
@@ -197,8 +221,8 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.bulkDeleteUserManagerUsers(usernames, onSuccess, onError)
     }
 
-    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit) {
-        repository.bulkToggleUserManagerUsers(usernames, active, onSuccess)
+    fun bulkToggleUserManagerUsers(usernames: List<String>, active: Boolean, onSuccess: (Int) -> Unit, onError: (String) -> Unit = {}) {
+        repository.bulkToggleUserManagerUsers(usernames, active, onSuccess, onError)
     }
 
     fun addUserManagerProfile(profile: UserManagerProfile, onSuccess: () -> Unit, onError: (String) -> Unit) {
@@ -217,35 +241,157 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.importUserManagerProfiles(onSuccess, onError)
     }
 
-    fun batchAddUserManagerUsers(users: List<UserManagerUser>, batchName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+    fun batchAddUserManagerUsers(
+        users: List<UserManagerUser>,
+        batchName: String,
+        onSuccess: (List<UserManagerUser>) -> Unit,
+        onError: (String, List<UserManagerUser>) -> Unit
+    ) {
         repository.batchAddUserManagerUsers(users, batchName, onSuccess, onError)
     }
 
-    fun cleanExpiredUserManagerUsers(onSuccess: (Int) -> Unit) {
-        repository.cleanExpiredUserManagerUsers(onSuccess)
+    fun cleanExpiredUserManagerUsers(onSuccess: (Int) -> Unit, onError: (String) -> Unit = {}) {
+        repository.cleanExpiredUserManagerUsers(onSuccess, onError)
     }
 
-    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit) {
-        repository.toggleUserManagerUser(username, onSuccess)
+    fun toggleUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit = {}) {
+        repository.toggleUserManagerUser(username, onSuccess, onError)
     }
 
-    fun backupUserManagerDatabase(onSuccess: (String) -> Unit) {
-        repository.backupUserManagerDatabase(onSuccess)
+    fun backupUserManagerDatabase(onSuccess: (String) -> Unit, onError: (String) -> Unit = {}) {
+        repository.backupUserManagerDatabase(onSuccess, onError)
     }
 
-    /* Offline Program Mode */
-    fun startOfflineProgramMode(onSuccess: () -> Unit) {
-        _isConnecting.value = true
-        _connectionError.value = null
-        repository.enableOfflineProgramMode {
-            _isConnecting.value = false
-            onSuccess()
-        }
+    /* Router configuration backups (full system config — distinct from the User
+     * Manager database backup above and from the MikroTik Cloud backup feature) */
+    fun fetchRouterBackups(onSuccess: (List<RouterBackupFile>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchRouterBackups(onSuccess, onError)
     }
 
-    /* Test Connection */
-    fun testConnection(host: String, port: Int, onResult: (Boolean, String) -> Unit) {
-        repository.testConnection(host, port, onResult)
+    fun createRouterBackup(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.createRouterBackup(onSuccess, onError)
+    }
+
+    fun downloadRouterBackup(
+        fileName: String,
+        folderUri: Uri,
+        expectedSizeBytes: Long,
+        onProgress: (Long) -> Unit,
+        onSuccess: (Long) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.downloadRouterBackup(fileName, folderUri, expectedSizeBytes, onProgress, onSuccess, onError)
+    }
+
+    fun deleteRouterBackup(fileName: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.deleteRouterBackup(fileName, onSuccess, onError)
+    }
+
+    fun restoreRouterBackup(fileName: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.restoreRouterBackup(fileName, onSuccess, onError)
+    }
+
+    fun probeAiDoctorRouter(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.probeAiDoctorRouter(onSuccess, onError)
+    }
+
+    fun collectAiDoctorData(selectedSections: Set<String>, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.collectAiDoctorData(selectedSections, onSuccess, onError)
+    }
+
+    fun applyAiFixes(fixes: List<AiFix>, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        repository.applyAiFixes(fixes, onSuccess, onError)
+    }
+
+    /* Expired-cards maintenance wizard (9 manual steps) */
+    fun archiveExpiredCardsLocally(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.archiveExpiredCardsLocally(onSuccess, onError)
+    }
+
+    fun disableHotspotForMaintenance(
+        onSuccess: (List<String>) -> Unit,
+        onError: (String, List<String>) -> Unit
+    ) {
+        repository.disableHotspotForMaintenance(onSuccess, onError)
+    }
+
+    fun cleanStaleUserManagerSessions(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.cleanStaleUserManagerSessions(onSuccess, onError)
+    }
+
+    fun rebuildUserManagerLocalDatabase(onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.rebuildUserManagerLocalDatabase(onSuccess, onError)
+    }
+
+    fun rebuildUserManagerLocalRecords(onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        repository.rebuildUserManagerLocalRecords(onSuccess, onError)
+    }
+
+    fun restoreHotspotAfterMaintenance(disabledServerIds: List<String>, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.restoreHotspotAfterMaintenance(disabledServerIds, onSuccess, onError)
+    }
+
+    fun verifyHotspotAndRebootRouter(
+        disabledServerIds: List<String>,
+        onSuccess: (String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.verifyHotspotAndRebootRouter(disabledServerIds, onSuccess, onError)
+    }
+
+    /* User Manager live sessions */
+    fun fetchUserManagerSessions(onSuccess: (List<UserManagerSession>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchUserManagerSessions(onSuccess, onError)
+    }
+
+    /* Cut a user's live session (session/remove) — does NOT delete the card */
+    fun disconnectUserManagerUser(username: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        repository.disconnectUserManagerUser(username, onSuccess, onError)
+    }
+
+    /* Real router state for the quick-services switches */
+    fun fetchQuickServicesState(
+        onResult: (freeHotspotEnabled: Boolean, antiShareEnabled: Boolean) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.fetchQuickServicesState(onResult, onError)
+    }
+
+    /* Router's own log buffer (/log/print) */
+    fun fetchRouterLogs(onSuccess: (List<RouterLogEntry>) -> Unit, onError: (String) -> Unit) {
+        repository.fetchRouterLogs(onSuccess, onError)
+    }
+
+    /* Add a real hotspot IP binding (blocked/bypassed/regular) */
+    fun addHotspotIpBinding(
+        macAddress: String,
+        address: String,
+        type: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.addHotspotIpBinding(macAddress, address, type, onSuccess, onError)
+    }
+
+    /* Router-side user-manager search (?name~ / ?profile~ query words) */
+    fun searchUserManagerUsers(
+        query: String,
+        field: String,
+        onSuccess: (List<UserManagerUser>) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.searchUserManagerUsers(query, field, onSuccess, onError)
+    }
+    /* Test Connection — authenticates like a real login when credentials exist */
+    fun testConnection(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        useSsl: Boolean,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        repository.testConnection(host, port, username, password, useSsl, onResult)
     }
 
     /* Sync Database */
@@ -257,10 +403,67 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.syncDatabase(onProgress, onComplete, onError)
     }
 
-    /* Save Router Connection without connecting */
+    /** Fast, card-only sync for the voucher generator (delta DB write). */
+    fun syncVoucherCards(
+        useUserManager: Boolean,
+        onComplete: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        repository.syncVoucherCards(useUserManager, onComplete, onError)
+    }
+
+    /* Save Router Connection without connecting — password stored encrypted */
     fun saveRouterConnection(connection: RouterConnection) {
+        persistEncryptedConnection(connection)
+    }
+
+    private fun persistEncryptedConnection(connection: RouterConnection) {
         viewModelScope.launch {
-            routerDao.insertConnection(connection)
+            val encryptedPassword = CryptoManager.encrypt(connection.password)
+            if (encryptedPassword == null) {
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CRYPTO_RESULT,
+                    operation = OperationTelemetry.Operation.CRYPTO_ENCRYPT,
+                    outcome = OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.ErrorClass.CRYPTO
+                )
+                _connectionError.value = "تعذر حفظ الراوتر: لم يتوفر التشفير الآمن على هذا الجهاز؛ لم تُحفظ كلمة المرور."
+                return@launch
+            }
+            val existing = routerDao.findConnection(
+                host = connection.host.trim(),
+                port = connection.port,
+                username = connection.username.trim()
+            )
+            // Reuse the saved row instead of appending a duplicate on every login.
+            // Keep a previously customized name when the caller only supplied the
+            // generated "راوتر <host>" label.
+            val finalName = when {
+                existing == null -> connection.name
+                connection.name.startsWith("راوتر ") -> existing.name
+                else -> connection.name
+            }
+            routerDao.insertConnection(
+                connection.copy(
+                    id = existing?.id ?: connection.id,
+                    name = finalName,
+                    password = encryptedPassword,
+                    lastConnected = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    /* Persist / delete generated batch records in Room */
+    fun saveGeneratedBatch(entity: GeneratedBatchEntity) {
+        viewModelScope.launch {
+            database.generatedBatchDao().insert(entity)
+        }
+    }
+
+    fun deleteGeneratedBatch(batchId: String) {
+        viewModelScope.launch {
+            database.generatedBatchDao().deleteById(batchId)
         }
     }
 
@@ -345,6 +548,14 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
 
     fun removeCloudBackup(backupId: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         repository.removeCloudBackup(backupId, onSuccess, onError)
+    }
+
+    // Ensures repositoryScope's SupervisorJob (ticker, pending fetches, etc.)
+    // is cancelled and the socket closed when this ViewModel is torn down,
+    // instead of relying solely on process death.
+    override fun onCleared() {
+        super.onCleared()
+        repository.shutdown()
     }
 
     // Simple Factory pattern for ViewModel Initialization

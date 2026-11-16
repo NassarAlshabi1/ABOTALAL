@@ -1,6 +1,13 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.Login
+
+import android.app.Activity
+import android.content.Context
+import android.net.VpnService
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -18,12 +25,14 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
@@ -34,11 +43,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.BuildConfig
 import com.example.data.local.RouterConnection
+import com.example.l2tp.L2tpClientConfig
+import com.example.l2tp.L2tpPhase
+import com.example.l2tp.L2tpStatus
+import com.example.l2tp.L2tpStatusRepository
+import com.example.l2tp.L2tpVpnService
+import com.example.l2tp.parseL2tpEndpoint
 import com.example.ui.components.AppExitConfirmationDialog
 import com.example.ui.components.SegmentedIpField
 import com.example.ui.viewmodel.MikroTikViewModel
+import com.example.util.CryptoManager
+import com.example.util.RouterOsTls
 import com.example.util.NetworkUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,6 +67,7 @@ fun LoginScreen(
     val isConnecting by viewModel.isConnecting.collectAsState()
     val connectionError by viewModel.connectionError.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val l2tpStatus by L2tpStatusRepository.state.collectAsState()
 
     // Back button confirmation dialog
     var showExitAppDialog by remember { mutableStateOf(false) }
@@ -62,47 +79,246 @@ fun LoginScreen(
     val detectedGateway = remember { NetworkUtils.getRouterGatewayIp(context) }
 
     // Active Tab: 0 = بيانات الدخول, 1 = الراوترات المسجلة
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
-    // Connection Mode: 0 = عنوان IP, 1 = كلاود Cloud, 2 = رابط Domain
-    var connectionMode by remember { mutableIntStateOf(0) }
+    // Connection Mode: 0 = عنوان IP, 1 = كلاود Cloud, 2 = رابط Domain, 3 = L2TP VPN عن بعد
+    var connectionMode by rememberSaveable { mutableIntStateOf(0) }
+    // Local access (IP/Cloud/Domain) is kept separate from remote L2TP access.
+    var lastLocalMode by rememberSaveable { mutableIntStateOf(0) }
 
     // Input States
-    var routerHost by remember { mutableStateOf(detectedGateway) }
-    var routerCloudDns by remember { mutableStateOf("") }
-    var routerDomain by remember { mutableStateOf("") }
-    var routerPort by remember { mutableStateOf("8728") }
-    var routerUser by remember { mutableStateOf("") }
+    var routerHost by rememberSaveable { mutableStateOf(detectedGateway) }
+    var routerCloudDns by rememberSaveable { mutableStateOf("") }
+    var routerDomain by rememberSaveable { mutableStateOf("") }
+    var routerPort by rememberSaveable { mutableStateOf("8728") }
+    var vpnServerLink by rememberSaveable { mutableStateOf("") }
+    // The L2TP client runs inside this app. These are the VPN account details,
+    // not the RouterOS API credentials used further below.
+    var l2tpServer by rememberSaveable { mutableStateOf("") }
+    var l2tpPort by rememberSaveable { mutableStateOf("1701") }
+    var l2tpPsk by remember { mutableStateOf("") }
+    var l2tpUser by rememberSaveable { mutableStateOf("") }
+    var l2tpPassword by remember { mutableStateOf("") }
+    var l2tpPskVisible by remember { mutableStateOf(false) }
+    var l2tpPasswordVisible by remember { mutableStateOf(false) }
+    // After the tunnel is active this is the RouterOS API port, not the L2TP transport port.
+    // API-SSL is the safest default for remote access; the 8728 chip switches to plain API.
+    var vpnPort by rememberSaveable { mutableStateOf("8729") }
+    var routerUser by rememberSaveable { mutableStateOf("") }
     var routerPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
     // Login Options Checkboxes
-    var rememberPassword by remember { mutableStateOf(true) }
-    var syncOnLogin by remember { mutableStateOf(true) }
-    var backupUserManager by remember { mutableStateOf(false) }
-    var isAdvancedOpen by remember { mutableStateOf(false) }
+    var rememberPassword by rememberSaveable { mutableStateOf(true) }
+    var syncOnLogin by rememberSaveable { mutableStateOf(true) }
+    var backupUserManager by rememberSaveable { mutableStateOf(false) }
+    var isAdvancedOpen by rememberSaveable { mutableStateOf(false) }
 
     // Advanced fields
-    var routerCustomName by remember { mutableStateOf("") }
-    var radiusHost by remember { mutableStateOf("") }
-    var timeoutSeconds by remember { mutableStateOf("10") }
-    var useSsl by remember { mutableStateOf(false) }
+    var routerCustomName by rememberSaveable { mutableStateOf("") }
+    var radiusHost by rememberSaveable { mutableStateOf("") }
+    var timeoutSeconds by rememberSaveable { mutableStateOf("10") }
+    var useSsl by rememberSaveable { mutableStateOf(false) }
 
     // Selected router from saved list (default first or null)
-    var selectedSavedRouterId by remember { mutableStateOf<Int?>(null) }
+    var selectedSavedRouterId by rememberSaveable { mutableStateOf<Int?>(null) }
+    // Auto-selecting a saved router must NOT overwrite a manually entered
+    // L2TP/Cloud/Domain form. Only an explicit card tap syncs the form.
+    var syncFormFromSavedRouter by remember { mutableStateOf(false) }
     LaunchedEffect(savedConnections) {
-        if (savedConnections.isNotEmpty() && selectedSavedRouterId == null) {
+        val selectedStillExists = savedConnections.any { it.id == selectedSavedRouterId }
+        if (savedConnections.isNotEmpty() && !selectedStillExists) {
             selectedSavedRouterId = savedConnections.first().id
         }
+    }
+
+    // Keep the manual form in sync with the selected saved router so the bottom
+    // "تسجيل الدخول" button, the card "تسجيل" button and "اختبار الاتصال" all
+    // target the same host/port/credentials the user sees on screen.
+    LaunchedEffect(selectedSavedRouterId, syncFormFromSavedRouter) {
+        if (!syncFormFromSavedRouter) return@LaunchedEffect
+        syncFormFromSavedRouter = false
+        val conn = savedConnections.firstOrNull { it.id == selectedSavedRouterId } ?: return@LaunchedEffect
+        // A saved router always stores a direct host/port, so selecting one must
+        // leave L2TP/Cloud/Domain modes; otherwise login would target a stale field.
+        connectionMode = 0
+        lastLocalMode = 0
+        routerHost = conn.host
+        routerPort = conn.port.toString()
+        routerCustomName = conn.name
+        routerUser = conn.username
+        routerPassword = conn.password
+        useSsl = conn.useSsl
     }
 
     // Dialogs & Feedback
     var showAccountIdDialog by remember { mutableStateOf(false) }
     var testResultDialog by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    // Login errors used to be rendered only at the top of the form's LazyColumn.
+    // In L2TP mode the user is usually scrolled far below it, so a failed login
+    // looked like "nothing happened". Surface the same message in a dialog.
+    var loginErrorDialog by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(connectionError) {
+        if (!connectionError.isNullOrBlank()) loginErrorDialog = connectionError
+    }
     var isTestingConnection by remember { mutableStateOf(false) }
     var showAddRouterDialog by remember { mutableStateOf(false) }
     var deleteConfirmRouter by remember { mutableStateOf<RouterConnection?>(null) }
     var showBackupRestoreDialog by remember { mutableStateOf(false) }
+
+    // ---------------------------------------------------------------- in-app L2TP client
+    val l2tpPrefs = remember { context.getSharedPreferences("l2tp_prefs", Context.MODE_PRIVATE) }
+    LaunchedEffect(Unit) {
+        if (l2tpServer.isBlank()) {
+            l2tpServer = l2tpPrefs.getString("server", "").orEmpty()
+            l2tpPort = l2tpPrefs.getString("port", "1701").orEmpty().ifBlank { "1701" }
+            l2tpUser = l2tpPrefs.getString("user", "").orEmpty()
+            l2tpPsk = CryptoManager.decrypt(l2tpPrefs.getString("psk", ""))
+            l2tpPassword = CryptoManager.decrypt(l2tpPrefs.getString("password", ""))
+        }
+    }
+
+    fun saveL2tpSettings() {
+        val encryptedPsk = CryptoManager.encrypt(l2tpPsk)
+        val encryptedPassword = CryptoManager.encrypt(l2tpPassword)
+        if ((l2tpPsk.isNotBlank() && encryptedPsk == null) ||
+            (l2tpPassword.isNotBlank() && encryptedPassword == null)
+        ) {
+            loginErrorDialog = "تعذر تشفير إعدادات L2TP على هذا الجهاز، لذلك لم تُحفظ."
+            return
+        }
+        l2tpPrefs.edit()
+            .putString("server", l2tpServer.trim())
+            .putString("port", l2tpPort.trim())
+            .putString("user", l2tpUser.trim())
+            .putString("psk", encryptedPsk.orEmpty())
+            .putString("password", encryptedPassword.orEmpty())
+            .apply()
+        testResultDialog = Pair(true, "تم حفظ إعدادات L2TP على هذا الجهاز.")
+    }
+
+    var pendingL2tpConfig by remember { mutableStateOf<L2tpClientConfig?>(null) }
+    val vpnConsentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val config = pendingL2tpConfig
+        pendingL2tpConfig = null
+        if (result.resultCode == Activity.RESULT_OK && config != null) {
+            runCatching { L2tpVpnService.start(context, config) }
+                .onFailure {
+                    loginErrorDialog = "تعذر بدء خدمة VPN: ${it.localizedMessage ?: "خطأ غير معروف"}"
+                }
+        } else {
+            loginErrorDialog = "لم يُمنح إذن إنشاء نفق VPN. لا يمكن الاتصال بـ L2TP بدونه."
+        }
+    }
+
+    fun beginL2tpTunnel(config: L2tpClientConfig) {
+        val consent = try {
+            VpnService.prepare(context)
+        } catch (e: Exception) {
+            loginErrorDialog = "تعذر بدء طلب إذن VPN: ${e.localizedMessage ?: "خطأ غير معروف"}"
+            return
+        }
+        if (consent == null) {
+            runCatching { L2tpVpnService.start(context, config) }
+                .onFailure {
+                    loginErrorDialog = "تعذر بدء خدمة VPN: ${it.localizedMessage ?: "خطأ غير معروف"}"
+                }
+        } else {
+            pendingL2tpConfig = config
+            vpnConsentLauncher.launch(consent)
+        }
+    }
+
+    fun buildL2tpConfig(): L2tpClientConfig? {
+        val endpoint = parseL2tpEndpoint(
+            l2tpServer,
+            l2tpPort.toIntOrNull() ?: L2tpClientConfig.DEFAULT_L2TP_PORT,
+        )
+        if (endpoint == null) {
+            loginErrorDialog = "أدخل عنوان خادم L2TP صحيحًا، مثل ath.vpnbersama.us أو ath.vpnbersama.us:1701."
+            return null
+        }
+        if (l2tpPsk.isBlank()) {
+            loginErrorDialog = "أدخل مفتاح IPsec PSK. التطبيق يدعم حاليًا L2TP/IPsec PSK."
+            return null
+        }
+        if (l2tpUser.isBlank()) {
+            loginErrorDialog = "أدخل اسم مستخدم VPN (حساب L2TP)."
+            return null
+        }
+        if (l2tpPassword.isBlank()) {
+            loginErrorDialog = "أدخل كلمة مرور VPN (حساب L2TP)."
+            return null
+        }
+        return L2tpClientConfig(
+            host = endpoint.host,
+            port = endpoint.port,
+            presharedKey = l2tpPsk,
+            username = l2tpUser.trim(),
+            password = l2tpPassword,
+            displayName = routerCustomName.ifBlank { "L2TP" },
+        )
+    }
+
+    fun ensureL2tpReady(): Boolean {
+        if (connectionMode != 3) return true
+        if (l2tpStatus.isConnected) return true
+        loginErrorDialog = when (l2tpStatus.phase) {
+            L2tpPhase.CONNECTING ->
+                "نفق L2TP قيد الاتصال الآن. انتظر حتى تظهر حالة «متصل» ثم أعد المحاولة."
+            L2tpPhase.DISCONNECTING ->
+                "نفق L2TP قيد الإيقاف. انتظر قليلًا ثم أعد المحاولة."
+            L2tpPhase.FAILED ->
+                "فشل نفق L2TP:\n${l2tpStatus.detail ?: "خطأ غير معروف"}"
+            else ->
+                "شغّل نفق L2TP أولًا من زر «تشغيل نفق L2TP» أعلاه."
+        }
+        return false
+    }
+
+    var lastAutoPeer by remember { mutableStateOf("") }
+    LaunchedEffect(connectionMode, l2tpStatus.phase, l2tpStatus.peerAddress) {
+        if (connectionMode == 3 && l2tpStatus.isConnected) {
+            val peer = l2tpStatus.peerAddress.orEmpty()
+            if (peer.isNotBlank() && (vpnServerLink.isBlank() || vpnServerLink == lastAutoPeer)) {
+                vpnServerLink = peer
+                lastAutoPeer = peer
+            }
+        }
+    }
+
+    // Resolves the active connection-mode inputs into (host, port) shared by
+    // the "اختبار الاتصال" and "تسجيل الدخول" buttons on both tabs.
+    fun resolveTarget(): Pair<String, Int> {
+        val targetRaw = when (connectionMode) {
+            0 -> routerHost.trim()
+            1 -> {
+                val raw = routerCloudDns.trim()
+                if (raw.isNotEmpty() && !raw.contains(".") && !raw.contains(":")) {
+                    "$raw.sn.mynetname.net"
+                } else {
+                    raw
+                }
+            }
+            3 -> vpnServerLink.trim().ifBlank { l2tpStatus.peerAddress.orEmpty() }
+            else -> routerDomain.trim()
+        }
+        val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
+        val portField = if (connectionMode == 3) vpnPort else routerPort
+        // The L2TP client runs in this app. Login still speaks RouterOS API
+        // through the active tunnel; the target is normally the tunnel peer.
+        val defaultPort = 8728
+        // An explicit port in the entered URL wins for every mode. If no
+        // port is embedded, use the selected field.
+        val resolvedPort = parsedPort ?: (portField.toIntOrNull() ?: defaultPort)
+        return Pair(cleanHostStr, resolvedPort)
+    }
+
+    fun connectionDisplayName(host: String): String = routerCustomName.ifBlank {
+        if (connectionMode == 3) "VPN $host" else "راوتر $host"
+    }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
@@ -151,7 +367,7 @@ fun LoginScreen(
 
                             // Center: App Title
                             Text(
-                                text = "ABO TALAL VIP",
+                                text = "NetCraft",
                                 color = Color.White,
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
@@ -233,7 +449,7 @@ fun LoginScreen(
                                 .weight(1f)
                                 .clickable { selectedTab = 0 },
                             shape = RoundedCornerShape(12.dp),
-                            color = if (selectedTab == 0) Color(0xFF0C5A60) else Color.Transparent,
+                            color = if (selectedTab == 0) MaterialTheme.colorScheme.primary else Color.Transparent,
                             shadowElevation = if (selectedTab == 0) 3.dp else 0.dp
                         ) {
                             Row(
@@ -243,15 +459,15 @@ fun LoginScreen(
                             ) {
                                 Text(
                                     text = "بيانات الدخول",
-                                    color = if (selectedTab == 0) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (selectedTab == 0) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 14.sp,
                                     fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Icon(
-                                    imageVector = Icons.Filled.Login,
+                                    imageVector = Icons.AutoMirrored.Filled.Login,
                                     contentDescription = null,
-                                    tint = if (selectedTab == 0) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint = if (selectedTab == 0) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -263,7 +479,7 @@ fun LoginScreen(
                                 .weight(1f)
                                 .clickable { selectedTab = 1 },
                             shape = RoundedCornerShape(12.dp),
-                            color = if (selectedTab == 1) Color(0xFF0C5A60) else Color.Transparent,
+                            color = if (selectedTab == 1) MaterialTheme.colorScheme.primary else Color.Transparent,
                             shadowElevation = if (selectedTab == 1) 3.dp else 0.dp
                         ) {
                             Row(
@@ -273,7 +489,7 @@ fun LoginScreen(
                             ) {
                                 Text(
                                     text = "الراوترات المسجلة",
-                                    color = if (selectedTab == 1) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (selectedTab == 1) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 14.sp,
                                     fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
                                 )
@@ -281,7 +497,7 @@ fun LoginScreen(
                                 Icon(
                                     imageVector = Icons.Filled.Wifi,
                                     contentDescription = null,
-                                    tint = if (selectedTab == 1) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint = if (selectedTab == 1) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -343,116 +559,76 @@ fun LoginScreen(
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                // طريقة الاتصال Header
+                                // Access layer: local network vs remote L2TP tunnel
                                 Text(
-                                    text = "طريقة الاتصال بالراوتر",
+                                    text = "نوع الوصول",
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                )
+                                Text(
+                                    text = "الإصدار المدعوم: RouterOS v6 (6.x) فقط — تم التحقق على 6.49.21",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(bottom = 8.dp)
                                 )
 
-                                // Three Connection Buttons Side-by-Side (جنب جنب متناسقة)
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // 1. عنوان IP
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { connectionMode = 0 },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (connectionMode == 0) Color(0xFF0C5A60) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = if (connectionMode == 0) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
-                                            horizontalArrangement = Arrangement.Center,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Language,
-                                                contentDescription = null,
-                                                tint = if (connectionMode == 0) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = "عنوان IP",
-                                                fontSize = 12.sp,
-                                                fontWeight = if (connectionMode == 0) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (connectionMode == 0) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-
-                                    // 2. كلاود Cloud
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { connectionMode = 1 },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (connectionMode == 1) Color(0xFF0C5A60) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = if (connectionMode == 1) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
-                                            horizontalArrangement = Arrangement.Center,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Cloud,
-                                                contentDescription = null,
-                                                tint = if (connectionMode == 1) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = "كلاود",
-                                                fontSize = 12.sp,
-                                                fontWeight = if (connectionMode == 1) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (connectionMode == 1) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-
-                                    // 3. رابط دومين Domain
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { connectionMode = 2 },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (connectionMode == 2) Color(0xFF0C5A60) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = if (connectionMode == 2) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
-                                            horizontalArrangement = Arrangement.Center,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Dns,
-                                                contentDescription = null,
-                                                tint = if (connectionMode == 2) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = "رابط دومين",
-                                                fontSize = 12.sp,
-                                                fontWeight = if (connectionMode == 2) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (connectionMode == 2) Color.White else MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
+                                    AccessModeOption(
+                                        selected = connectionMode != 3,
+                                        icon = Icons.Filled.Lan,
+                                        title = "دخول محلي",
+                                        subtitle = "IP / كلاود / دومين",
+                                        onClick = { connectionMode = lastLocalMode }
+                                    )
+                                    AccessModeOption(
+                                        selected = connectionMode == 3,
+                                        icon = Icons.Filled.VpnKey,
+                                        title = "L2TP عن بعد",
+                                        subtitle = "نفق L2TP داخل التطبيق",
+                                        onClick = { connectionMode = 3 }
+                                    )
                                 }
 
-                                Spacer(modifier = Modifier.height(14.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                if (connectionMode != 3) {
+                                    Text(
+                                        text = "عنوان الراوتر على الشبكة المحلية",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(bottom = 6.dp)
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        LocalModeChip(
+                                            selected = connectionMode == 0,
+                                            icon = Icons.Filled.Language,
+                                            label = "عنوان IP",
+                                            onClick = { connectionMode = 0; lastLocalMode = 0 }
+                                        )
+                                        LocalModeChip(
+                                            selected = connectionMode == 1,
+                                            icon = Icons.Filled.Cloud,
+                                            label = "كلاود",
+                                            onClick = { connectionMode = 1; lastLocalMode = 1 }
+                                        )
+                                        LocalModeChip(
+                                            selected = connectionMode == 2,
+                                            icon = Icons.Filled.Dns,
+                                            label = "رابط دومين",
+                                            onClick = { connectionMode = 2; lastLocalMode = 2 }
+                                        )
+                                    }
+                                }
 
                                 when (connectionMode) {
                                     0 -> {
@@ -593,7 +769,7 @@ fun LoginScreen(
                                             }
                                         }
                                     }
-                                    else -> {
+                                    2 -> {
                                         // 3. Domain Mode: Domain/URL Input + Port
                                         Column(modifier = Modifier.fillMaxWidth()) {
                                             Row(
@@ -636,6 +812,316 @@ fun LoginScreen(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.padding(top = 4.dp, start = 4.dp)
                                             )
+                                        }
+                                    }
+                                    3 -> {
+                                        // 4. L2TP client running inside this app
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.Top
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = l2tpServer,
+                                                    onValueChange = { l2tpServer = it },
+                                                    label = { Text("خادم L2TP") },
+                                                    placeholder = { Text("ath.vpnbersama.us") },
+                                                    supportingText = {
+                                                        Text("يمكن إضافة المنفذ: ath.vpnbersama.us:13196", fontSize = 9.sp)
+                                                    },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Filled.VpnKey,
+                                                            contentDescription = "L2TP",
+                                                            tint = Color(0xFF0C5A60)
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                                OutlinedTextField(
+                                                    value = l2tpPort,
+                                                    onValueChange = { value ->
+                                                        l2tpPort = value.filter { it.isDigit() }.take(5)
+                                                    },
+                                                    label = { Text("منفذ L2TP") },
+                                                    supportingText = { Text("داخل IPsec عادة 1701", fontSize = 9.sp) },
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                    modifier = Modifier.width(96.dp),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(8.dp))
+
+                                            OutlinedTextField(
+                                                value = l2tpPsk,
+                                                onValueChange = { l2tpPsk = it },
+                                                label = { Text("مفتاح IPsec PSK") },
+                                                placeholder = { Text("المفتاح المشترك من مزود VPN") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Lock,
+                                                        contentDescription = null,
+                                                        tint = Color(0xFF0C5A60)
+                                                    )
+                                                },
+                                                trailingIcon = {
+                                                    IconButton(onClick = { l2tpPskVisible = !l2tpPskVisible }) {
+                                                        Icon(
+                                                            imageVector = if (l2tpPskVisible) Icons.Filled.VisibilityOff
+                                                            else Icons.Filled.Visibility,
+                                                            contentDescription = "إظهار مفتاح PSK"
+                                                        )
+                                                    }
+                                                },
+                                                visualTransformation = if (l2tpPskVisible) VisualTransformation.None
+                                                else PasswordVisualTransformation(),
+                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp),
+                                                singleLine = true
+                                            )
+
+                                            Spacer(modifier = Modifier.height(8.dp))
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = l2tpUser,
+                                                    onValueChange = { l2tpUser = it },
+                                                    label = { Text("مستخدم VPN") },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Filled.Person,
+                                                            contentDescription = null,
+                                                            tint = Color(0xFF0C5A60)
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                                OutlinedTextField(
+                                                    value = l2tpPassword,
+                                                    onValueChange = { l2tpPassword = it },
+                                                    label = { Text("كلمة مرور VPN") },
+                                                    trailingIcon = {
+                                                        IconButton(onClick = { l2tpPasswordVisible = !l2tpPasswordVisible }) {
+                                                            Icon(
+                                                                imageVector = if (l2tpPasswordVisible) Icons.Filled.VisibilityOff
+                                                                else Icons.Filled.Visibility,
+                                                                contentDescription = "إظهار كلمة مرور VPN"
+                                                            )
+                                                        }
+                                                    },
+                                                    visualTransformation = if (l2tpPasswordVisible) VisualTransformation.None
+                                                    else PasswordVisualTransformation(),
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(10.dp))
+
+                                            L2tpStatusCard(l2tpStatus)
+
+                                            Spacer(modifier = Modifier.height(10.dp))
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Button(
+                                                    onClick = {
+                                                        if (l2tpStatus.isConnected || l2tpStatus.isBusy) {
+                                                            L2tpVpnService.stop(context)
+                                                        } else {
+                                                            buildL2tpConfig()?.let { beginL2tpTunnel(it) }
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .height(46.dp),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = if (l2tpStatus.isConnected || l2tpStatus.isBusy)
+                                                            Color(0xFFB91C1C) else MaterialTheme.colorScheme.primary,
+                                                        contentColor = Color.White
+                                                    )
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (l2tpStatus.isConnected || l2tpStatus.isBusy)
+                                                            Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = if (l2tpStatus.isConnected || l2tpStatus.isBusy)
+                                                            "إيقاف نفق L2TP" else "تشغيل نفق L2TP",
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { saveL2tpSettings() },
+                                                    modifier = Modifier
+                                                        .width(92.dp)
+                                                        .height(46.dp),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Save,
+                                                        contentDescription = "حفظ",
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(text = "حفظ", fontSize = 12.sp)
+                                                }
+                                            }
+
+                                            Text(
+                                                text = "التطبيق ينشئ النفق بنفسه عبر خدمة VPN في أندرويد، ثم يسجل الدخول إلى RouterOS من خلاله. يستخدم هذا الإصدار L2TP/IPsec PSK؛ إن كان حسابك L2TP بدون IPsec فلن يتصل.",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(top = 6.dp, start = 4.dp)
+                                            )
+
+                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                            Text(
+                                                text = "بعد نجاح النفق: عنوان RouterOS API",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.padding(top = 10.dp, bottom = 6.dp)
+                                            )
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.Top
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = vpnServerLink,
+                                                    onValueChange = { vpnServerLink = it },
+                                                    label = { Text("عنوان الراوتر داخل النفق (اختياري)") },
+                                                    placeholder = {
+                                                        Text(
+                                                            l2tpStatus.peerAddress
+                                                                ?: "يُملأ تلقائيًا من بوابة L2TP"
+                                                        )
+                                                    },
+                                                    supportingText = {
+                                                        val peer = l2tpStatus.peerAddress
+                                                        Text(
+                                                            if (l2tpStatus.isConnected && !peer.isNullOrBlank())
+                                                                "بوابة النفق: $peer — يمكنك تعديل العنوان يدويًا."
+                                                            else
+                                                                "اتركه فارغًا ليُستخدم عنوان بوابة L2TP بعد الاتصال.",
+                                                            fontSize = 10.sp
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                                OutlinedTextField(
+                                                    value = vpnPort,
+                                                    onValueChange = { value ->
+                                                        vpnPort = value.filter { it.isDigit() }.take(5)
+                                                        if (vpnPort == "8729") useSsl = true
+                                                        if (vpnPort == "8728") useSsl = false
+                                                    },
+                                                    label = { Text("منفذ API") },
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                    modifier = Modifier.width(82.dp),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+                                            }
+
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(top = 2.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                listOf("API 8728" to "8728", "API-SSL 8729" to "8729")
+                                                    .forEach { (chipLabel, chipPort) ->
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = if (vpnPort == chipPort) MaterialTheme.colorScheme.primary
+                                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                                        modifier = Modifier.clickable {
+                                                            vpnPort = chipPort
+                                                            useSsl = chipPort == "8729"
+                                                        }
+                                                    ) {
+                                                        Text(
+                                                            text = chipLabel,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = if (vpnPort == chipPort) MaterialTheme.colorScheme.onPrimary
+                                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            if (vpnPort == "13196" || vpnServerLink.contains(":13196")) {
+                                                Surface(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(top = 8.dp),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    color = Color(0xFFFFF7ED),
+                                                    border = BorderStroke(1.dp, Color(0xFFFDBA74))
+                                                ) {
+                                                    Text(
+                                                        text = "تنبيه: المنفذ 13196 على ath.vpnbersama.us هو WebFig (HTTP) وليس RouterOS API. استخدم 8728، أو 8729 مع SSL.",
+                                                        fontSize = 11.sp,
+                                                        color = Color(0xFF9A3412),
+                                                        modifier = Modifier.padding(10.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            if (!l2tpStatus.isConnected) {
+                                                Text(
+                                                    text = "شغّل نفق L2TP أولًا، ثم اضغط «اختبار الاتصال» أو «تسجيل الدخول». إذا تعذر الوصول إلى الراوتر، أدخل عنوانه داخل النفق يدويًا.",
+                                                    fontSize = 11.sp,
+                                                    color = Color(0xFF9A3412),
+                                                    modifier = Modifier.padding(top = 6.dp, start = 4.dp)
+                                                )
+                                            }
+
+                                            Surface(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(top = 8.dp),
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = Color(0xFFFFFBEB),
+                                                border = BorderStroke(1.dp, Color(0xFFFCD34D))
+                                            ) {
+                                                Text(
+                                                    text = "مهم: اسم المستخدم وكلمة المرور في الأسفل هما حساب RouterOS (مثل admin)، وليسا حساب خدمة VPN. حساب VPN يُدخل في الحقول أعلاه فقط.",
+                                                    fontSize = 11.sp,
+                                                    color = Color(0xFF92400E),
+                                                    modifier = Modifier.padding(10.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -708,22 +1194,20 @@ fun LoginScreen(
                                     // اختبار الاتصال
                                     OutlinedButton(
                                         onClick = {
-                                            isTestingConnection = true
-                                            val targetRaw = when (connectionMode) {
-                                                0 -> routerHost.trim()
-                                                1 -> {
-                                                    val raw = routerCloudDns.trim()
-                                                    if (raw.isNotEmpty() && !raw.contains(".") && !raw.contains(":")) {
-                                                        "$raw.sn.mynetname.net"
-                                                    } else {
-                                                        raw
-                                                    }
-                                                }
-                                                else -> routerDomain.trim()
+                                            if (!ensureL2tpReady()) return@OutlinedButton
+                                            val (cleanHostStr, p) = resolveTarget()
+                                            if (cleanHostStr.isBlank()) {
+                                                loginErrorDialog = "أدخل عنوان الراوتر داخل النفق في قسم «بعد نجاح النفق» أولًا."
+                                                return@OutlinedButton
                                             }
-                                            val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
-                                            val p = parsedPort ?: (routerPort.toIntOrNull() ?: 8728)
-                                            viewModel.testConnection(cleanHostStr, p) { ok, msg ->
+                                            isTestingConnection = true
+                                            viewModel.testConnection(
+                                                cleanHostStr,
+                                                p,
+                                                routerUser.trim(),
+                                                routerPassword,
+                                                if (connectionMode == 3) p == 8729 else useSsl
+                                            ) { ok, msg ->
                                                 isTestingConnection = false
                                                 testResultDialog = Pair(ok, msg)
                                             }
@@ -742,46 +1226,41 @@ fun LoginScreen(
                                     // تسجيل الدخول (Primary Teal Button)
                                     Button(
                                         onClick = {
-                                            val targetRaw = when (connectionMode) {
-                                                0 -> routerHost.trim()
-                                                1 -> {
-                                                    val raw = routerCloudDns.trim()
-                                                    if (raw.isNotEmpty() && !raw.contains(".") && !raw.contains(":")) {
-                                                        "$raw.sn.mynetname.net"
-                                                    } else {
-                                                        raw
-                                                    }
-                                                }
-                                                else -> routerDomain.trim()
+                                            if (!ensureL2tpReady()) return@Button
+                                            val (cleanHostStr, p) = resolveTarget()
+                                            if (cleanHostStr.isBlank()) {
+                                                loginErrorDialog = "أدخل عنوان الراوتر داخل النفق في قسم «بعد نجاح النفق» أولًا."
+                                                return@Button
                                             }
-                                            val (cleanHostStr, parsedPort) = NetworkUtils.cleanHost(targetRaw)
-                                            val p = parsedPort ?: (routerPort.toIntOrNull() ?: 8728)
-                                            val name = routerCustomName.ifBlank { "راوتر $cleanHostStr" }
+                                            val name = connectionDisplayName(cleanHostStr)
                                             viewModel.connectManualRouter(
                                                 name = name,
                                                 host = cleanHostStr,
                                                 port = p,
                                                 username = routerUser.trim(),
                                                 password = routerPassword,
-                                                useSsl = useSsl,
+                                                useSsl = if (connectionMode == 3) p == 8729 else useSsl,
                                                 onSuccess = { onLoginSuccess() }
                                             )
                                         },
                                         modifier = Modifier.weight(1.2f),
                                         shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        ),
                                         enabled = !isConnecting
                                     ) {
                                         if (isConnecting) {
                                             CircularProgressIndicator(
                                                 modifier = Modifier.size(16.dp),
-                                                color = Color.White,
+                                                color = MaterialTheme.colorScheme.onPrimary,
                                                 strokeWidth = 2.dp
                                             )
                                         } else {
                                             Text(
                                                 text = "تسجيل الدخول",
-                                                color = Color.White,
+                                                color = MaterialTheme.colorScheme.onPrimary,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 maxLines = 1
@@ -948,11 +1427,43 @@ fun LoginScreen(
                                                 modifier = Modifier.padding(top = 6.dp)
                                             ) {
                                                 Checkbox(
-                                                    checked = useSsl,
-                                                    onCheckedChange = { useSsl = it },
+                                                    checked = if (connectionMode == 3) vpnPort == "8729" else useSsl,
+                                                    onCheckedChange = { enabled ->
+                                                        useSsl = enabled
+                                                        // API-SSL (8729) and plain API (8728) are not
+                                                        // interchangeable; keep the port in sync.
+                                                        if (connectionMode == 3) {
+                                                            if (enabled && vpnPort == "8728") vpnPort = "8729"
+                                                            if (!enabled && vpnPort == "8729") vpnPort = "8728"
+                                                        } else {
+                                                            if (enabled && routerPort == "8728") routerPort = "8729"
+                                                            if (!enabled && routerPort == "8729") routerPort = "8728"
+                                                        }
+                                                    },
                                                     colors = CheckboxDefaults.colors(checkedColor = Color(0xFF0C5A60))
                                                 )
                                                 Text("تشفير SSL", fontSize = 12.sp)
+                                            }
+                                        }
+
+                                        if (useSsl || (connectionMode == 3 && vpnPort == "8729")) {
+                                            TextButton(
+                                                onClick = {
+                                                    val (sslHost, sslPort) = resolveTarget()
+                                                    if (sslHost.isBlank()) {
+                                                        loginErrorDialog = "أدخل عنوان الراوتر أولًا ثم امسح شهادة SSL."
+                                                    } else {
+                                                        RouterOsTls.clearPin(context, sslHost, sslPort)
+                                                        testResultDialog = Pair(
+                                                            true,
+                                                            "تم مسح شهادة SSL المحفوظة لـ $sslHost:$sslPort. " +
+                                                                "سيُحفظ استلام الشهادة من جديد عند الاتصال التالي."
+                                                        )
+                                                    }
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                            ) {
+                                                Text("مسح شهادة SSL المحفوظة", fontSize = 11.sp)
                                             }
                                         }
                                     }
@@ -984,7 +1495,7 @@ fun LoginScreen(
                                 // Add button (+)
                                 Surface(
                                     shape = CircleShape,
-                                    color = Color(0xFF0C5A60),
+                                    color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier
                                         .size(36.dp)
                                         .clickable { showAddRouterDialog = true }
@@ -993,7 +1504,7 @@ fun LoginScreen(
                                         Icon(
                                             imageVector = Icons.Filled.Add,
                                             contentDescription = "Add Router",
-                                            tint = Color.White,
+                                            tint = MaterialTheme.colorScheme.onPrimary,
                                             modifier = Modifier.size(20.dp)
                                         )
                                     }
@@ -1068,7 +1579,10 @@ fun LoginScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 5.dp)
-                                    .clickable { selectedSavedRouterId = conn.id },
+                                    .clickable {
+                                        selectedSavedRouterId = conn.id
+                                        syncFormFromSavedRouter = true
+                                    },
                                 shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.cardColors(
                                     containerColor = if (isSelected) Color(0xFFE0F2F1) else MaterialTheme.colorScheme.surface
@@ -1087,7 +1601,10 @@ fun LoginScreen(
                                     // Radio selector
                                     RadioButton(
                                         selected = isSelected,
-                                        onClick = { selectedSavedRouterId = conn.id },
+                                        onClick = {
+                                            selectedSavedRouterId = conn.id
+                                            syncFormFromSavedRouter = true
+                                        },
                                         colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF0C5A60))
                                     )
 
@@ -1175,7 +1692,13 @@ fun LoginScreen(
                                         // Quick Connect Lightning
                                         IconButton(
                                             onClick = {
-                                                viewModel.connectRouter(conn) { onLoginSuccess() }
+                                                // Saved routers store a direct host/port, so never
+                                                // route them through the L2TP/Cloud/Domain fields.
+                                                selectedSavedRouterId = conn.id
+                                                syncFormFromSavedRouter = true
+                                                viewModel.connectRouter(conn, conn.host, conn.port) {
+                                                    onLoginSuccess()
+                                                }
                                             },
                                             modifier = Modifier.size(32.dp)
                                         ) {
@@ -1195,56 +1718,38 @@ fun LoginScreen(
                     item {
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Bottom Actions: [تسجيل الدخول ➔] and [الدخول للبرنامج ➔]
+                        // Bottom Action: [تسجيل الدخول ➔]
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            // Left: الدخول للبرنامج ➔ (Enters app in offline / local cache review mode)
-                            OutlinedButton(
-                                onClick = {
-                                    viewModel.startOfflineProgramMode { onLoginSuccess() }
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp),
-                                shape = RoundedCornerShape(14.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Text(
-                                        text = "الدخول للبرنامج",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Icon(
-                                        imageVector = Icons.Filled.ArrowForward,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-
                             // Right: تسجيل الدخول ➔ (Connects to chosen router)
                             Button(
                                 onClick = {
-                                    val conn = savedConnections.firstOrNull { it.id == selectedSavedRouterId }
-                                        ?: savedConnections.firstOrNull()
-                                    if (conn != null) {
-                                        viewModel.connectRouter(conn) { onLoginSuccess() }
+                                    // On the saved-routers tab the selected card is the
+                                    // source of truth; on the credentials tab the form is.
+                                    // This keeps the auto-selected first card from silently
+                                    // overriding a manually entered L2TP/Cloud/Domain form.
+                                    val saved = savedConnections.firstOrNull { it.id == selectedSavedRouterId }
+                                    if (selectedTab == 1 && saved != null) {
+                                        viewModel.connectRouter(saved, saved.host, saved.port) {
+                                            onLoginSuccess()
+                                        }
                                     } else {
-                                        // Fallback manual connect
-                                        val p = routerPort.toIntOrNull() ?: 8728
+                                        if (!ensureL2tpReady()) return@Button
+                                        val (cleanHostStr, p) = resolveTarget()
+                                        if (cleanHostStr.isBlank()) {
+                                            loginErrorDialog = "أدخل عنوان الراوتر داخل النفق في قسم «بعد نجاح النفق» أولًا."
+                                            return@Button
+                                        }
+                                        val name = connectionDisplayName(cleanHostStr)
                                         viewModel.connectManualRouter(
-                                            name = "راوتر $routerHost",
-                                            host = routerHost.trim(),
+                                            name = name,
+                                            host = cleanHostStr,
                                             port = p,
                                             username = routerUser.trim(),
                                             password = routerPassword,
-                                            useSsl = useSsl,
+                                            useSsl = if (connectionMode == 3) p == 8729 else useSsl,
                                             onSuccess = { onLoginSuccess() }
                                         )
                                     }
@@ -1253,13 +1758,16 @@ fun LoginScreen(
                                     .weight(1f)
                                     .height(48.dp),
                                 shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
                                 enabled = !isConnecting
                             ) {
                                 if (isConnecting) {
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(18.dp),
-                                        color = Color.White,
+                                        color = MaterialTheme.colorScheme.onPrimary,
                                         strokeWidth = 2.dp
                                     )
                                 } else {
@@ -1269,15 +1777,15 @@ fun LoginScreen(
                                     ) {
                                         Text(
                                             text = "تسجيل الدخول",
-                                            color = Color.White,
+                                            color = MaterialTheme.colorScheme.onPrimary,
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Bold
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Icon(
-                                            imageVector = Icons.Filled.Login,
+                                            imageVector = Icons.AutoMirrored.Filled.Login,
                                             contentDescription = null,
-                                            tint = Color.White,
+                                            tint = MaterialTheme.colorScheme.onPrimary,
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
@@ -1328,14 +1836,14 @@ fun LoginScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "تطوير وبرمجة المهندس عبدالحميد داوؤد",
+                                text = "تطوير وبرمجة شركة الهيثم للبرمجيات",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "هاتف التواصل: 778215553 | ABO TALAL VIP v1.0.0",
+                                text = "هاتف التواصل: 773114243 | NetCraft v1.0.0",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                             )
@@ -1358,12 +1866,12 @@ fun LoginScreen(
                 Column {
                     Text("معرف الجهاز الحالي:")
                     Text(
-                        text = "ABO-TALAL-VIP-ID-778215553",
+                        text = "NETCRAFT-ID-773114243",
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF0C5A60)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("ABO TALAL VIP - ترخيص رقم #8472")
+                    Text("NetCraft - ترخيص رقم #8472")
                 }
             },
             confirmButton = {
@@ -1388,7 +1896,7 @@ fun LoginScreen(
             },
             title = {
                 Text(
-                    text = if (result.first) "الاتصال ناجح" else "فشل اختبار الاتصال",
+                    text = if (result.first) "نتيجة الاختبار" else "فشل اختبار الاتصال",
                     fontWeight = FontWeight.Bold
                 )
             },
@@ -1507,7 +2015,7 @@ fun LoginScreen(
             onDismissRequest = { showBackupRestoreDialog = false },
             title = { Text("استرجاع نسخة احتياطية", fontWeight = FontWeight.Bold) },
             text = {
-                Text("خاصية استرجاع واستيراد ملفات النسخ الاحتياطي المشفرة لليوزرمانجر وقواعد بيانات ABO TALAL VIP جاهزة ومجهزة بالكامل.")
+                Text("خاصية استرجاع واستيراد ملفات النسخ الاحتياطي المشفرة لليوزرمانجر وقواعد بيانات NetCraft جاهزة ومجهزة بالكامل.")
             },
             confirmButton = {
                 Button(
@@ -1520,11 +2028,42 @@ fun LoginScreen(
         )
     }
 
+    // Login failure dialog (always visible, even when the form is scrolled away
+    // from the inline error banner).
+    loginErrorDialog?.let { message ->
+        AlertDialog(
+            onDismissRequest = { loginErrorDialog = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Filled.ErrorOutline,
+                    contentDescription = null,
+                    tint = Color(0xFFDC2626),
+                    modifier = Modifier.size(40.dp)
+                )
+            },
+            title = { Text("تعذر تسجيل الدخول", fontWeight = FontWeight.Bold) },
+            text = { Text(message) },
+            confirmButton = {
+                Button(
+                    onClick = { loginErrorDialog = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
+                ) {
+                    Text("حسناً")
+                }
+            }
+        )
+    }
+
     // Animated Connection Overlay
     if (isConnecting) {
-        val activeConn = savedConnections.firstOrNull { it.id == selectedSavedRouterId }
-        val targetName = activeConn?.name ?: "راوتر ميكروتك"
-        val targetHost = activeConn?.host ?: routerHost.ifBlank { "192.168.88.1" }
+        // Match the overlay to the target the login button actually uses:
+        // the selected saved card on the saved-routers tab, otherwise the form.
+        val savedTarget = if (selectedTab == 1) {
+            savedConnections.firstOrNull { it.id == selectedSavedRouterId }
+        } else null
+        val (formHost, _) = resolveTarget()
+        val targetName = savedTarget?.name ?: connectionDisplayName(formHost)
+        val targetHost = savedTarget?.host ?: formHost
         com.example.ui.components.AnimatedConnectingDialog(
             routerName = targetName,
             host = targetHost,
@@ -1539,5 +2078,189 @@ fun LoginScreen(
         AppExitConfirmationDialog(
             onDismiss = { showExitAppDialog = false }
         )
+    }
+}
+
+@Composable
+private fun RowScope.AccessModeOption(
+    selected: Boolean,
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .weight(1f)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = if (selected) null
+        else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Column {
+                Text(
+                    text = title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 9.sp,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.LocalModeChip(
+    selected: Boolean,
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .weight(1f)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        border = if (selected) null
+        else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(3.dp))
+            Text(
+                text = label,
+                fontSize = 10.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun L2tpStatusCard(status: L2tpStatus) {
+    val container = when (status.phase) {
+        L2tpPhase.CONNECTED -> Color(0xFFDCFCE7)
+        L2tpPhase.CONNECTING, L2tpPhase.DISCONNECTING -> Color(0xFFFFF7ED)
+        L2tpPhase.FAILED -> Color(0xFFFEE2E2)
+        L2tpPhase.IDLE -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    }
+    val accent = when (status.phase) {
+        L2tpPhase.CONNECTED -> Color(0xFF15803D)
+        L2tpPhase.CONNECTING, L2tpPhase.DISCONNECTING -> Color(0xFF9A3412)
+        L2tpPhase.FAILED -> Color(0xFFB91C1C)
+        L2tpPhase.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val border = when (status.phase) {
+        L2tpPhase.CONNECTED -> Color(0xFF86EFAC)
+        L2tpPhase.CONNECTING, L2tpPhase.DISCONNECTING -> Color(0xFFFDBA74)
+        L2tpPhase.FAILED -> Color(0xFFFCA5A5)
+        L2tpPhase.IDLE -> MaterialTheme.colorScheme.outlineVariant
+    }
+    val title = when (status.phase) {
+        L2tpPhase.CONNECTED -> "نفق L2TP متصل"
+        L2tpPhase.CONNECTING -> "جارٍ الاتصال بنفق L2TP"
+        L2tpPhase.DISCONNECTING -> "جارٍ إيقاف نفق L2TP"
+        L2tpPhase.FAILED -> "تعذر إنشاء نفق L2TP"
+        L2tpPhase.IDLE -> "نفق L2TP غير متصل"
+    }
+    val body = when (status.phase) {
+        L2tpPhase.CONNECTED -> buildString {
+            append("عنوانك داخل النفق: ")
+            append(status.assignedAddress ?: "—")
+            val peer = status.peerAddress ?: status.serverAddress
+            if (!peer.isNullOrBlank()) {
+                append(" • بوابة الراوتر: ")
+                append(peer)
+            }
+        }
+        L2tpPhase.CONNECTING -> status.detail ?: "جارٍ تجهيز النفق ومصادقة IPsec..."
+        L2tpPhase.DISCONNECTING -> "جارٍ إغلاق النفق وإعادة المسار الطبيعي..."
+        L2tpPhase.FAILED -> status.detail
+            ?: "فشل الاتصال. تحقق من الخادم والمنفذ ومفتاح PSK وحساب VPN."
+        L2tpPhase.IDLE -> "أدخل بيانات حساب L2TP ثم اضغط «تشغيل نفق L2TP»."
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = container,
+        border = BorderStroke(1.dp, border)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            if (status.phase == L2tpPhase.CONNECTING || status.phase == L2tpPhase.DISCONNECTING) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .padding(top = 1.dp)
+                        .size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = accent
+                )
+            } else {
+                Icon(
+                    imageVector = when (status.phase) {
+                        L2tpPhase.CONNECTED -> Icons.Filled.CheckCircle
+                        L2tpPhase.FAILED -> Icons.Filled.Warning
+                        else -> Icons.Filled.Info
+                    },
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = accent
+                )
+                if (!body.isNullOrBlank()) {
+                    Text(
+                        text = body,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+        }
     }
 }

@@ -40,17 +40,56 @@ data class UserManagerUser(
     val uptimeUsed: String = "0s",
     val downloadLimit: String = "unlimited",
     val serialNumber: String = "-",
-    val comment: String = ""
-)
+    val comment: String = "",
+    // True when the router (RouterOS v6 /tool/user-manager) reports an assigned
+    // "profile" but an empty "actual-profile" — the router's real signal that the
+    // card's validity/limit has run out, even though it is still "active"
+    // (disabled == false). Defaults to false: unknown routers/paths never flag it.
+    val profileExpired: Boolean = false
+) {
+    /** Expiry confirmed by RouterOS after use; disabled cards are never swept automatically. */
+    val isConfirmedExpired: Boolean
+        get() = active && profileExpired && uptimeUsed.isNotBlank() && uptimeUsed != "0s"
+}
 
 data class UserManagerProfile(
     val name: String,
     val validity: String = "30d",
-    val price: Double = 0.0,
+    // Whole currency units (e.g. 10 = 10 ر.س) — matches GeneratedBatchEntity
+    // .pricePerCard and avoids float rounding drift in financial totals.
+    // Fractional pricing isn't used in this app's deployments.
+    val price: Int = 0,
     val sharedUsers: Int = 1,
     val downloadLimit: String = "unlimited",
     val uptimeLimit: String = "unlimited",
     val templateName: String = ""
+)
+
+/** A live user-manager session read from `$umBase/session/print` (v6 and v7). */
+data class UserManagerSession(
+    val id: String,
+    val user: String,
+    val address: String = "",
+    val uptime: String = "0s",
+    val bytesIn: Long = 0L,
+    val bytesOut: Long = 0L,
+    val started: String = ""
+)
+
+/** One local system backup file sitting on the router (/system/backup/save output,
+ *  read back via /file/print and filtered to names ending in ".backup"). */
+data class RouterBackupFile(
+    val name: String,
+    val sizeBytes: Long = 0L,
+    val time: String = ""
+)
+
+/** One row of the router's own log buffer (/log/print). */
+data class RouterLogEntry(
+    val id: String,
+    val time: String = "",
+    val topics: String = "",
+    val message: String = ""
 )
 
 data class InterfaceStats(
@@ -186,12 +225,12 @@ data class RouterGenericItem(
 )
 
 data class MikroTikCloudInfo(
-    val ddnsEnabled: Boolean = true,
-    val updateTime: Boolean = true,
-    val publicAddress: String = "185.120.45.10",
+    val ddnsEnabled: Boolean = false,
+    val updateTime: Boolean = false,
+    val publicAddress: String = "",
     val publicAddressIpv6: String = "",
-    val dnsName: String = "4f8205f2a1b3.sn.mynetname.net",
-    val status: String = "updated",
+    val dnsName: String = "",
+    val status: String = "",
     val warning: String = "",
     val updateInterval: String = "none"
 )
@@ -204,5 +243,3 @@ data class MikroTikCloudBackup(
     val time: String = "",
     val encrypted: Boolean = true
 )
-
-

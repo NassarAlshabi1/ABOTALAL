@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.LastPage
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -63,6 +65,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -74,7 +77,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -120,6 +124,27 @@ import java.nio.charset.StandardCharsets
  * - العرض الكامل والتفصيلي
  * - شريط الترقيم والتنقل بين الصفحات
  */
+private fun isExpiredCard(user: UserManagerUser): Boolean =
+    !user.active || (user.profileExpired && user.uptimeUsed.isNotBlank() && user.uptimeUsed != "0s")
+
+@Composable
+private fun CardStatPill(modifier: Modifier, label: String, value: Int, color: Color) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = color.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.20f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 9.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(value.toString(), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = color)
+            Text(label, fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF475569), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
 @Composable
 fun UserManagerCardsScreen(
     viewModel: MikroTikViewModel,
@@ -128,17 +153,38 @@ fun UserManagerCardsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val rawUsers by viewModel.userManagerUsers.collectAsState()
-    val profiles by viewModel.userManagerProfiles.collectAsState()
-    val isConnected by viewModel.isConnected.collectAsState()
+    val rawUsers by viewModel.userManagerUsers.collectAsStateWithLifecycle()
+    val profiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
+    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
 
-    // Filter states
+    // Filter states (declared first — the router-side search effect below observes them)
     var selectedScope by remember { mutableStateOf("جميع الكروت من الروتر") }
     var scopeMenuExpanded by remember { mutableStateOf(false) }
 
     var searchQuery by remember { mutableStateOf("") }
     var searchFieldType by remember { mutableStateOf("الاسم") }
     var searchMenuExpanded by remember { mutableStateOf(false) }
+
+    // Router-side search results (?name~ / ?profile~ executed on the router itself).
+    // When null, the locally synced list is used; a non-empty query while connected
+    // triggers a live router search so huge card databases need no full sync first.
+    var routerSearchResults by remember { mutableStateOf<List<UserManagerUser>?>(null) }
+    LaunchedEffect(searchQuery, searchFieldType, isConnected) {
+        val q = searchQuery.trim()
+        // Status is a local-only derived field; asking the router for it would
+        // always return no rows and block the local filter.
+        if (q.length < 2 || !isConnected || searchFieldType == "الحالة") {
+            routerSearchResults = null
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(500) // debounce
+        viewModel.searchUserManagerUsers(
+            query = q,
+            field = searchFieldType,
+            onSuccess = { routerSearchResults = it },
+            onError = { routerSearchResults = null } // fall back to local filter
+        )
+    }
 
     var isFullView by remember { mutableStateOf(false) }
     var overflowMenuExpanded by remember { mutableStateOf(false) }
@@ -155,19 +201,26 @@ fun UserManagerCardsScreen(
     var selectedCardForDetails by remember { mutableStateOf<UserManagerUser?>(null) }
     var cardToRenew by remember { mutableStateOf<UserManagerUser?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showCleanExpiredConfirmDialog by remember { mutableStateOf(false) }
+    var showExportCredentialsConfirmDialog by remember { mutableStateOf(false) }
     var userToDelete by remember { mutableStateOf<String?>(null) }
 
     // Rotation animation for refresh
     val rotationAnim = remember { Animatable(0f) }
 
-    // Filtered list computation
-    val filteredUsers = remember(rawUsers, selectedScope, searchQuery, searchFieldType) {
-        rawUsers.filter { user ->
+    // Filtered list computation — uses the router-side search results when a live
+    // search is active, otherwise the locally synced list.
+    val effectiveUsers = routerSearchResults ?: rawUsers
+    val filteredUsers = remember(effectiveUsers, selectedScope, searchQuery, searchFieldType) {
+        effectiveUsers.filter { user ->
             // 1. Scope filter
             val matchesScope = when (selectedScope) {
                 "الكروت المفعلة (النشطة)" -> user.active
                 "الكروت غير المفعلة" -> !user.active
-                "الكروت المنتهية" -> user.uptimeUsed.contains("expired", ignoreCase = true) || !user.active
+                // Same compound signal as cleanExpiredUserManagerUsers(): disabled, or the
+                // router cleared the active profile (profileExpired) on a card that was
+                // actually used at least once.
+                "الكروت المنتهية" -> isExpiredCard(user)
                 else -> true
             }
 
@@ -188,6 +241,9 @@ fun UserManagerCardsScreen(
         }
     }
 
+    val activeCount = rawUsers.count { it.active && !isExpiredCard(it) }
+    val expiredCount = rawUsers.count(::isExpiredCard)
+
     // Pagination calculations
     val effectivePageSize = if (pageSize <= 0) filteredUsers.size.coerceAtLeast(1) else pageSize
     val totalPages = if (filteredUsers.isEmpty()) 1 else Math.ceil(filteredUsers.size.toDouble() / effectivePageSize).toInt().coerceAtLeast(1)
@@ -196,6 +252,15 @@ fun UserManagerCardsScreen(
     val pagedUsers = remember(filteredUsers, safeCurrentPage, effectivePageSize) {
         val startIndex = (safeCurrentPage - 1) * effectivePageSize
         filteredUsers.drop(startIndex).take(effectivePageSize)
+    }
+
+    // Reset to the first page whenever the filters or result set change so the
+    // user never lands on an out-of-range page after narrowing the list.
+    LaunchedEffect(filteredUsers.size, selectedScope, searchQuery, searchFieldType) {
+        if (currentPage != 1) currentPage = 1
+        // Never keep a selection that was made under a different filter; bulk
+        // actions must only touch what the operator can currently see.
+        if (selectedUsernames.value.isNotEmpty()) selectedUsernames.value = emptySet()
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -378,6 +443,29 @@ fun UserManagerCardsScreen(
                     }
                 }
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CardStatPill(Modifier.weight(1f), "الإجمالي", rawUsers.size, Color(0xFF0C5A60))
+                    CardStatPill(Modifier.weight(1f), "النشطة", activeCount, Color(0xFF16A34A))
+                    CardStatPill(Modifier.weight(1f), "المنتهية", expiredCount, Color(0xFFDC2626))
+                }
+
+                if (searchQuery.isNotBlank() || selectedScope != "جميع الكروت من الروتر") {
+                    TextButton(
+                        onClick = {
+                            searchQuery = ""
+                            selectedScope = "جميع الكروت من الروتر"
+                            searchFieldType = "الاسم"
+                            currentPage = 1
+                        },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("مسح البحث والفلاتر", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFF0C5A60))
+                    }
+                }
+
                 // -------------------------------------------------------------
                 // 2. Search & Filter Bar (كما في لقطة الشاشة)
                 // -------------------------------------------------------------
@@ -537,10 +625,17 @@ fun UserManagerCardsScreen(
                                     if (selected.isEmpty()) {
                                         Toast.makeText(context, "يرجى تحديد كرت واحد على الأقل للتفعيل", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        viewModel.bulkToggleUserManagerUsers(selected.toList(), active = true) { count ->
-                                            Toast.makeText(context, "تم تفعيل $count كرت بنجاح", Toast.LENGTH_SHORT).show()
-                                            selectedUsernames.value = emptySet()
-                                        }
+                                        viewModel.bulkToggleUserManagerUsers(
+                                            selected.toList(),
+                                            active = true,
+                                            onSuccess = { count ->
+                                                Toast.makeText(context, "تم تفعيل $count كرت بنجاح", Toast.LENGTH_SHORT).show()
+                                                selectedUsernames.value = emptySet()
+                                            },
+                                            onError = { message ->
+                                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                            }
+                                        )
                                     }
                                 }
                                 .testTag("cards_activate_button")
@@ -657,6 +752,10 @@ fun UserManagerCardsScreen(
                                             animationSpec = tween(durationMillis = 600, easing = LinearEasing)
                                         )
                                     }
+                                    // Drop stale selections so a later bulk action cannot
+                                    // touch cards that are no longer visible/fresh.
+                                    selectedUsernames.value = emptySet()
+                                    viewModel.refreshAllData()
                                     Toast.makeText(context, "جاري تحديث الكروت من السيرفر...", Toast.LENGTH_SHORT).show()
                                 }
                                 .testTag("cards_refresh_button")
@@ -716,16 +815,14 @@ fun UserManagerCardsScreen(
                                 DropdownMenuItem(
                                     text = { Text("تنظيف الكروت المنتهية", fontFamily = CairoFontFamily, fontSize = 12.sp) },
                                     onClick = {
-                                        viewModel.cleanExpiredUserManagerUsers { count ->
-                                            Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
-                                        }
+                                        showCleanExpiredConfirmDialog = true
                                         overflowMenuExpanded = false
                                     }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("تصدير ملف إكسيل (.csv)", fontFamily = CairoFontFamily, fontSize = 12.sp) },
                                     onClick = {
-                                        exportCardsCsv(context, filteredUsers)
+                                        showExportCredentialsConfirmDialog = true
                                         overflowMenuExpanded = false
                                     }
                                 )
@@ -1200,7 +1297,7 @@ fun UserManagerCardsScreen(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Filled.LastPage,
+                                    imageVector = Icons.AutoMirrored.Filled.LastPage,
                                     contentDescription = "الصفحة الأخيرة",
                                     tint = if (safeCurrentPage < totalPages) Color(0xFF0C5A60) else Color(0xFF94A3B8),
                                     modifier = Modifier.size(18.dp)
@@ -1226,9 +1323,15 @@ fun UserManagerCardsScreen(
                 selectedCardForDetails = null
             },
             onToggleActive = {
-                viewModel.toggleUserManagerUser(user.username) {
-                    Toast.makeText(context, "تم تغيير حالة الكرت", Toast.LENGTH_SHORT).show()
-                }
+                viewModel.toggleUserManagerUser(
+                    username = user.username,
+                    onSuccess = {
+                        Toast.makeText(context, "تم تغيير حالة الكرت", Toast.LENGTH_SHORT).show()
+                    },
+                    onError = { err ->
+                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                    }
+                )
                 selectedCardForDetails = null
             },
             onDelete = {
@@ -1334,6 +1437,81 @@ fun UserManagerCardsScreen(
                         userToDelete = null
                     }
                 ) {
+                    Text("إلغاء", fontFamily = CairoFontFamily)
+                }
+            }
+        )
+    }
+
+    // -------------------------------------------------------------
+    // Dialog 4: Clean Expired Cards Confirmation
+    // -------------------------------------------------------------
+    if (showCleanExpiredConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showCleanExpiredConfirmDialog = false },
+            title = {
+                Text(
+                    text = "تأكيد تنظيف الكروت المنتهية",
+                    fontFamily = CairoFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "سيتم حذف جميع الكروت المنتهية نهائياً من اليوزرمانجر والراوتر. لا يمكن التراجع عن هذه العملية.",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCleanExpiredConfirmDialog = false
+                        viewModel.cleanExpiredUserManagerUsers(
+                            onSuccess = { count ->
+                                Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
+                            },
+                            onError = { err ->
+                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("نعم، نظّف", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCleanExpiredConfirmDialog = false }) {
+                    Text("إلغاء", fontFamily = CairoFontFamily)
+                }
+            }
+        )
+    }
+
+    if (showExportCredentialsConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportCredentialsConfirmDialog = false },
+            title = { Text("تصدير كلمات المرور", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "سيتم إنشاء ملف CSV يحتوي أسماء المستخدمين وكلمات المرور بشكل صريح ومشاركته. أي تطبيق تستخدمه لفتح الملف سيتمكن من قراءة كلمات المرور. هل تريد المتابعة؟",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showExportCredentialsConfirmDialog = false
+                        exportCardsCsv(context, filteredUsers)
+                    }
+                ) { Text("نعم، صدّر", fontFamily = CairoFontFamily) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportCredentialsConfirmDialog = false }) {
                     Text("إلغاء", fontFamily = CairoFontFamily)
                 }
             }
@@ -1638,7 +1816,7 @@ fun RenewCardDialog(
     onConfirmRenew: (targetProfile: String, resetUptime: Boolean) -> Unit
 ) {
     var selectedProfileName by remember {
-        mutableStateOf(if (profiles.any { it.name == user.profile }) user.profile else profiles.firstOrNull()?.name ?: "500RY")
+        mutableStateOf(if (profiles.any { it.name == user.profile }) user.profile else profiles.firstOrNull()?.name ?: "")
     }
     var resetUptime by remember { mutableStateOf(true) }
 
@@ -1717,11 +1895,15 @@ fun RenewCardDialog(
                     )
 
                     // Profile options list
-                    val displayProfiles = if (profiles.isNotEmpty()) profiles else listOf(
-                        UserManagerProfile(name = "500RY", validity = "10 ايام", price = 500.0, downloadLimit = "2GB"),
-                        UserManagerProfile(name = "300RY", validity = "1 اسبوع", price = 300.0, downloadLimit = "1.5GB"),
-                        UserManagerProfile(name = "3000RY", validity = "30 يوم", price = 3000.0, downloadLimit = "10GB")
-                    )
+                    if (profiles.isEmpty()) {
+                        Text(
+                            text = "لا توجد باقات على الراوتر — أنشئ باقة في User Manager أولاً",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = Color(0xFF94A3B8)
+                        )
+                    }
+                    val displayProfiles = profiles
 
                     Column(
                         modifier = Modifier.fillMaxWidth(),
@@ -1771,7 +1953,7 @@ fun RenewCardDialog(
                                     }
 
                                     Text(
-                                        text = "${profile.price.toInt()} د.ع",
+                                        text = "${profile.price} د.ع",
                                         fontFamily = CairoFontFamily,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp,
@@ -1818,8 +2000,11 @@ fun RenewCardDialog(
 
                         Button(
                             onClick = {
-                                onConfirmRenew(selectedProfileName, resetUptime)
+                                if (selectedProfileName.isNotBlank()) {
+                                    onConfirmRenew(selectedProfileName, resetUptime)
+                                }
                             },
+                            enabled = selectedProfileName.isNotBlank(),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.weight(1.5f)
@@ -1881,7 +2066,14 @@ private fun exportCardsCsv(context: Context, users: List<UserManagerUser>) {
 
 private fun sanitize(input: String?): String {
     if (input == null) return ""
-    var s = input.replace("\"", "\"\"")
+    var s = input
+    // Neutralize spreadsheet formula injection before CSV quoting.
+    if (s.startsWith("=") || s.startsWith("+") || s.startsWith("-") ||
+        s.startsWith("@") || s.startsWith("\t") || s.startsWith("\r")
+    ) {
+        s = "'$s"
+    }
+    s = s.replace("\"", "\"\"")
     if (s.contains(",") || s.contains("\n") || s.contains("\"")) {
         s = "\"$s\""
     }

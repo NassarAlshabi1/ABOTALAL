@@ -481,10 +481,10 @@ fun UserManagerProfilesDialog(
             title = "إضافة باقة يوزرمانجر جديدة",
             initialProfile = UserManagerProfile(
                 name = "",
-                validity = "1 اسبوع",
-                price = 500.0,
-                downloadLimit = "2 جيجابايت",
-                uptimeLimit = "72 ساعات",
+                validity = "",
+                price = 0,
+                downloadLimit = "",
+                uptimeLimit = "",
                 templateName = "",
                 sharedUsers = 1
             ),
@@ -719,7 +719,7 @@ fun ProfileDetailCard(
                     InfoPill(
                         icon = Icons.Outlined.MonetizationOn,
                         iconTint = Color(0xFFF59E0B),
-                        text = "${profile.price.toInt()} السعر",
+                        text = "${profile.price} السعر",
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -799,10 +799,10 @@ fun ProfileEditDialog(
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf(initialProfile.name) }
-    var price by remember { mutableStateOf(if (initialProfile.price > 0) initialProfile.price.toInt().toString() else "500") }
-    var downloadLimit by remember { mutableStateOf(initialProfile.downloadLimit.ifBlank { "2 جيجابايت" }) }
-    var uptimeLimit by remember { mutableStateOf(initialProfile.uptimeLimit.ifBlank { "72 ساعات" }) }
-    var validity by remember { mutableStateOf(initialProfile.validity.ifBlank { "10 ايام" }) }
+    var price by remember { mutableStateOf(if (initialProfile.price > 0) initialProfile.price.toString() else "") }
+    var downloadLimit by remember { mutableStateOf(initialProfile.downloadLimit) }
+    var uptimeLimit by remember { mutableStateOf(initialProfile.uptimeLimit) }
+    var validity by remember { mutableStateOf(initialProfile.validity) }
     var templateName by remember { mutableStateOf(initialProfile.templateName.ifBlank { initialProfile.name }) }
     var sharedUsers by remember { mutableIntStateOf(initialProfile.sharedUsers) }
 
@@ -870,7 +870,7 @@ fun ProfileEditDialog(
                     OutlinedTextField(
                         value = validity,
                         onValueChange = { validity = it },
-                        label = { Text("الصلاحية (مثال: 10 ايام)", fontFamily = CairoFontFamily) },
+                        label = { Text("الصلاحية (مثال: 10d أو 4w2d)", fontFamily = CairoFontFamily) },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
                         singleLine = true
@@ -878,7 +878,7 @@ fun ProfileEditDialog(
                     OutlinedTextField(
                         value = uptimeLimit,
                         onValueChange = { uptimeLimit = it },
-                        label = { Text("الوقت (مثال: 72 ساعات)", fontFamily = CairoFontFamily) },
+                        label = { Text("حد الاستخدام (مثال: 1h30m)", fontFamily = CairoFontFamily) },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
                         singleLine = true
@@ -901,11 +901,17 @@ fun ProfileEditDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf("4 ايام", "5 ايام", "10 ايام", "1 اسبوع", "4 اسبوع").forEach { opt ->
+                    listOf(
+                        "4d" to "4 أيام",
+                        "5d" to "5 أيام",
+                        "10d" to "10 أيام",
+                        "1w" to "أسبوع",
+                        "4w" to "4 أسابيع"
+                    ).forEach { (duration, label) ->
                         FilterChip(
-                            selected = validity == opt,
-                            onClick = { validity = opt },
-                            label = { Text(opt, fontFamily = CairoFontFamily, fontSize = 10.sp) }
+                            selected = validity == duration,
+                            onClick = { validity = duration },
+                            label = { Text(label, fontFamily = CairoFontFamily, fontSize = 10.sp) }
                         )
                     }
                 }
@@ -918,7 +924,7 @@ fun ProfileEditDialog(
                         val prof = UserManagerProfile(
                             name = name.trim(),
                             validity = validity.trim(),
-                            price = price.toDoubleOrNull() ?: 0.0,
+                            price = price.toDoubleOrNull()?.toInt() ?: 0,
                             sharedUsers = sharedUsers,
                             downloadLimit = downloadLimit.trim(),
                             uptimeLimit = uptimeLimit.trim(),

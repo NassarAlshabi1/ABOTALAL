@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,10 +38,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.local.GeneratedBatchEntity
+import com.example.data.local.fromCards
+import com.example.data.local.toCards
 import com.example.data.model.UserManagerProfile
+import com.example.data.model.UserManagerSession
 import com.example.data.model.UserManagerUser
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
+import com.example.util.CardPrintAndExportHelper
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -57,8 +66,23 @@ data class GeneratedBatchRecord(
     val profileName: String,
     val count: Int,
     val pricePerCard: Int,
-    val prefix: String
+    val prefix: String,
+    /** The exact cards created for this batch, in generation order. Printing/PDF/Excel use only these. */
+    val cards: List<UserManagerUser> = emptyList()
 )
+
+/**
+ * Returns exactly the cards that belong to [batch] — never every card that merely
+ * shares the same profile. Falls back to a prefix match (capped at the batch count)
+ * only for records created before cards were tracked.
+ */
+fun GeneratedBatchRecord.resolveCards(routerUsers: List<UserManagerUser>): List<UserManagerUser> {
+    if (cards.isNotEmpty()) return cards
+    if (prefix.isBlank()) return emptyList()
+    return routerUsers
+        .filter { it.username.startsWith(prefix) && (profileName.isBlank() || it.profile == profileName) }
+        .take(count.coerceAtLeast(0))
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,6 +94,7 @@ fun UserManagerScreen(
     val conn by viewModel.currentConnection.collectAsState()
     val userManagerUsers by viewModel.userManagerUsers.collectAsState()
     val userManagerProfiles by viewModel.userManagerProfiles.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // Dialog & Screen states
     var showAddCardsDialog by remember { mutableStateOf(false) }
@@ -87,20 +112,51 @@ fun UserManagerScreen(
     var showExitDialog by remember { mutableStateOf(false) }
     var feedbackMessage by remember { mutableStateOf<String?>(null) }
 
-    // Batch records tracking
-    var batchRecords by remember {
-        mutableStateOf(
-            listOf(
-                GeneratedBatchRecord(
-                    batchId = "BATCH-01",
-                    date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
-                    profileName = "باقة 500 د.ع",
-                    count = 25,
-                    pricePerCard = 500,
-                    prefix = "VIP"
-                )
+    // Batch records — persisted in Room (generated_batches) so history and the
+    // exact created cards survive app restarts. The dialog keeps its list-based
+    // contract; changes are diffed into Room below.
+    val batchHistory by viewModel.batchHistory.collectAsState()
+    val batchRecords = remember(batchHistory) {
+        batchHistory.map { e ->
+            GeneratedBatchRecord(
+                batchId = e.batchId,
+                date = e.date,
+                profileName = e.profileName,
+                count = e.count,
+                pricePerCard = e.pricePerCard,
+                prefix = e.prefix,
+                cards = e.toCards()
             )
-        )
+        }
+    }
+
+    /** Diffs an updated batch list against Room and persists adds/updates/removals. */
+    fun persistBatchUpdate(updated: List<GeneratedBatchRecord>) {
+        val persisted = batchHistory.associateBy { it.batchId }
+        val updatedIds = updated.map { it.batchId }.toSet()
+        // Removals
+        persisted.values.forEach { entity ->
+            if (entity.batchId !in updatedIds) viewModel.deleteGeneratedBatch(entity.batchId)
+        }
+        // Additions / updates (upsert)
+        val host = conn?.host ?: ""
+        updated.forEach { rec ->
+            val entity = GeneratedBatchEntity.fromCards(
+                batchId = rec.batchId,
+                date = rec.date,
+                profileName = rec.profileName,
+                pricePerCard = rec.pricePerCard,
+                prefix = rec.prefix,
+                routerHost = host,
+                cards = rec.cards
+            )
+            val old = persisted[rec.batchId]
+            if (old == null || old.cardsJson != entity.cardsJson || old.count != entity.count ||
+                old.profileName != entity.profileName || old.pricePerCard != entity.pricePerCard
+            ) {
+                viewModel.saveGeneratedBatch(entity)
+            }
+        }
     }
 
     // 10 Cards strictly mapped to the screenshot
@@ -123,7 +179,7 @@ fun UserManagerScreen(
             UserManagerMenuItem(
                 id = 3,
                 title = "إدارة الباقات",
-                icon = Icons.Filled.Assignment,
+                icon = Icons.AutoMirrored.Filled.Assignment,
                 gradientColors = listOf(Color(0xFFD6EFE5), Color(0xFFB6E3D1)),
                 iconTint = Color(0xFF059669)
             ),
@@ -218,7 +274,7 @@ fun UserManagerScreen(
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
-                                            imageVector = Icons.Filled.ArrowForward,
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                                             contentDescription = "الرجوع",
                                             tint = Color(0xFF0C5A60),
                                             modifier = Modifier.size(18.dp)
@@ -298,7 +354,7 @@ fun UserManagerScreen(
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
-                                            imageVector = Icons.Filled.ExitToApp,
+                                            imageVector = Icons.AutoMirrored.Filled.ExitToApp,
                                             contentDescription = "تسجيل الخروج",
                                             tint = Color(0xFFEA580C),
                                             modifier = Modifier.size(18.dp)
@@ -448,7 +504,7 @@ fun UserManagerScreen(
             viewModel = viewModel,
             batchRecords = batchRecords,
             onUpdateBatches = { updated ->
-                batchRecords = updated
+                persistBatchUpdate(updated)
             },
             onDismiss = { showAddCardsDialog = false }
         )
@@ -520,7 +576,29 @@ fun UserManagerScreen(
                                         shape = RoundedCornerShape(8.dp),
                                         color = Color(0xFF0C5A60),
                                         modifier = Modifier.clickable {
-                                            feedbackMessage = "تم تجهيز ملف طباعة الدفعة ${batch.batchId}"
+                                            // REAL print: resolve the batch's actual cards and
+                                            // send them to the printer — no fake "prepared file" message.
+                                            val cardsToPrint = batch.resolveCards(userManagerUsers)
+                                            if (cardsToPrint.isEmpty()) {
+                                                feedbackMessage = "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر"
+                                            } else {
+                                                feedbackMessage = "جاري إرسال ${cardsToPrint.size} كرت إلى الطباعة..."
+                                                val printBatch = GeneratedBatchRecord(
+                                                    batchId = batch.batchId,
+                                                    date = batch.date,
+                                                    profileName = batch.profileName,
+                                                    count = cardsToPrint.size,
+                                                    pricePerCard = batch.pricePerCard,
+                                                    prefix = batch.prefix,
+                                                    cards = cardsToPrint
+                                                )
+                                                CardPrintAndExportHelper.printVoucherBatchDirectly(
+                                                    context = context,
+                                                    batch = printBatch,
+                                                    users = cardsToPrint,
+                                                    config = CardPrintAndExportHelper.loadTemplateConfig(context, "Default_Design")
+                                                )
+                                            }
                                         }
                                     ) {
                                         Row(
@@ -564,43 +642,80 @@ fun UserManagerScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "الجلسات النشطة المتصلة عبر اليوزرمانجر:",
+                        text = "الجلسات النشطة المتصلة عبر اليوزرمانجر (من الراوتر مباشرة):",
                         fontFamily = CairoFontFamily,
                         fontSize = 12.sp,
                         color = Color(0xFF64748B)
                     )
 
-                    val activeUsers = userManagerUsers.filter { it.active }.take(6)
-                    if (activeUsers.isEmpty()) {
-                        Text("لا توجد أجهزة متصلة حالياً.", fontFamily = CairoFontFamily)
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(activeUsers) { user ->
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = Color(0xFFF1F5F9),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(10.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                    // Real live sessions from $umBase/session/print — refreshed on open
+                    var liveSessions by remember { mutableStateOf<List<UserManagerSession>?>(null) }
+                    var sessionsError by remember { mutableStateOf<String?>(null) }
+                    LaunchedEffect(Unit) {
+                        viewModel.fetchUserManagerSessions(
+                            onSuccess = { liveSessions = it },
+                            onError = { sessionsError = it }
+                        )
+                    }
+
+                    when {
+                        sessionsError != null -> {
+                            Text(
+                                sessionsError ?: "",
+                                fontFamily = CairoFontFamily,
+                                fontSize = 12.sp,
+                                color = Color(0xFFEF4444)
+                            )
+                        }
+                        liveSessions == null -> {
+                            Text("جاري تحميل الجلسات من الراوتر...", fontFamily = CairoFontFamily, fontSize = 12.sp, color = Color(0xFF64748B))
+                        }
+                        liveSessions!!.isEmpty() -> {
+                            Text("لا توجد أجهزة متصلة حالياً.", fontFamily = CairoFontFamily)
+                        }
+                        else -> {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(liveSessions!!) { session ->
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = Color(0xFFF1F5F9),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Column {
-                                            Text(text = "المستخدم: ${user.username}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            Text(text = "الباقة: ${user.profile} | مدة الاتصال: ${user.uptimeUsed}", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFF64748B))
-                                        }
-                                        Button(
-                                            onClick = {
-                                                viewModel.deleteUserManagerUser(user.username, onSuccess = {}, onError = {})
-                                                feedbackMessage = "تم قطع اتصال المستخدم ${user.username}"
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(10.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("قطع", fontFamily = CairoFontFamily, fontSize = 11.sp)
+                                            Column {
+                                                Text(text = "المستخدم: ${session.user}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                Text(
+                                                    text = buildString {
+                                                        append("المدة: ${session.uptime}")
+                                                        if (session.address.isNotBlank()) append("  |  IP: ${session.address}")
+                                                    },
+                                                    fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFF64748B)
+                                                )
+                                            }
+                                            Button(
+                                                onClick = {
+                                                    // Cut the LIVE session (session/remove) — the card
+                                                    // itself is NOT deleted, unlike the old behavior.
+                                                    viewModel.disconnectUserManagerUser(
+                                                        username = session.user,
+                                                        onSuccess = {
+                                                            feedbackMessage = "تم قطع جلسة المستخدم ${session.user}"
+                                                            liveSessions = liveSessions?.filter { it.id != session.id }
+                                                        },
+                                                        onError = { err -> feedbackMessage = err }
+                                                    )
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("قطع", fontFamily = CairoFontFamily, fontSize = 11.sp)
+                                            }
                                         }
                                     }
                                 }
@@ -682,8 +797,19 @@ fun UserManagerScreen(
                 Button(
                     onClick = {
                         if (bindingMac.isNotBlank()) {
-                            feedbackMessage = "تم إضافة قيد الحظر بنجاح للجهاز $bindingMac"
-                            showIpBindingsDialog = false
+                            // REAL router write: /ip/hotspot/ip-binding/add
+                            viewModel.addHotspotIpBinding(
+                                macAddress = bindingMac,
+                                address = bindingIp,
+                                type = bindingType,
+                                onSuccess = {
+                                    feedbackMessage = "تم إضافة قيد الـ IP Binding ($bindingType) للجهاز $bindingMac على الراوتر"
+                                    showIpBindingsDialog = false
+                                },
+                                onError = { err ->
+                                    feedbackMessage = "فشل إضافة القيد: $err"
+                                }
+                            )
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
@@ -699,110 +825,32 @@ fun UserManagerScreen(
         )
     }
 
-    // --- 7. Dialog: متقدم (Advanced Settings) ---
+    // --- 7. Dialog: متقدم (Advanced) — honest read-only info. RouterOS does not
+    // expose the user-manager's internal RADIUS listener ports through the API
+    // in a version-stable way, so instead of faking a "save" we tell the truth.
     if (showAdvancedDialog) {
-        var radiusPort by remember { mutableStateOf("1812") }
-        var radiusAcctPort by remember { mutableStateOf("1813") }
-        var sharedSecret by remember { mutableStateOf("123456") }
-        var interimUpdate by remember { mutableStateOf("5m") }
-
         AlertDialog(
             onDismissRequest = { showAdvancedDialog = false },
             title = {
                 Text("إعدادات اليوزرمانجر المتقدمة", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
             },
             text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "إعدادات RADIUS وبروتوكولات الربط الداخلي:",
-                        fontFamily = CairoFontFamily,
-                        fontSize = 12.sp,
-                        color = Color(0xFF64748B)
-                    )
-
-                    OutlinedTextField(
-                        value = radiusPort,
-                        onValueChange = { radiusPort = it },
-                        label = { Text("بورت المصادقة (Auth Port)", fontFamily = CairoFontFamily) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-
-                    OutlinedTextField(
-                        value = radiusAcctPort,
-                        onValueChange = { radiusAcctPort = it },
-                        label = { Text("بورت المحاسبة (Acct Port)", fontFamily = CairoFontFamily) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-
-                    OutlinedTextField(
-                        value = sharedSecret,
-                        onValueChange = { sharedSecret = it },
-                        label = { Text("المفتاح المشترك (Shared Secret)", fontFamily = CairoFontFamily) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-
-                    OutlinedTextField(
-                        value = interimUpdate,
-                        onValueChange = { interimUpdate = it },
-                        label = { Text("فاصل التحديث الدوري (Interim-Update)", fontFamily = CairoFontFamily) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        feedbackMessage = "تم حفظ إعدادات اليوزرمانجر المتقدمة بنجاح!"
-                        showAdvancedDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
-                ) {
-                    Text("حفظ الإعدادات", fontFamily = CairoFontFamily)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAdvancedDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
-    }
-
-    // --- 8. Dialog: صيانة الكروت المنتهية (Maintenance) ---
-    if (showMaintenanceDialog) {
-        val expiredCount = userManagerUsers.count { !it.active || it.uptimeUsed == "expired" }
-
-        AlertDialog(
-            onDismissRequest = { showMaintenanceDialog = false },
-            title = {
-                Text("صيانة الكروت المنتهية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "تقوم هذه الأداة بفحص وتنظيف الكروت التي انتهت صلاحيتها أو رصيدها، لتسريع قاعدة بيانات الراوتر.",
+                        text = "إعدادات RADIUS الداخلية لليوزرمانجر (منافذ المصادقة والمحاسبة والمفتاح المشترك) لا يمكن تعديلها عبر تطبيق الهاتف لأن RouterOS لا يوفر أوامر API موحدة لها بين الإصدارات.",
                         fontFamily = CairoFontFamily,
                         fontSize = 13.sp
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFFEF3C7),
+                        color = Color(0xFFEFF6FF),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "تم العثور على $expiredCount كرت منتهي أو غير نشط في قاعدة البيانات.",
+                            text = "لتعديل هذه الإعدادات استخدم WinBox أو WebFig:\n\n• RouterOS v6: Tool ← User Manager ← Config",
                             fontFamily = CairoFontFamily,
-                            color = Color(0xFFB45309),
+                            color = Color(0xFF1D4ED8),
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(10.dp)
                         )
                     }
@@ -810,23 +858,28 @@ fun UserManagerScreen(
             },
             confirmButton = {
                 Button(
-                    onClick = {
-                        viewModel.cleanExpiredUserManagerUsers { count ->
-                            feedbackMessage = "تمت إزالة وتنظيف $count كرت منتهي بنجاح!"
-                            showMaintenanceDialog = false
-                        }
-                    },
+                    onClick = { showAdvancedDialog = false },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
                 ) {
-                    Text("تنظيف الكروت الآن", fontFamily = CairoFontFamily)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showMaintenanceDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
+                    Text("فهمت", fontFamily = CairoFontFamily)
                 }
             }
         )
+    }
+
+    // --- 8. Full-screen: صيانة الكروت المنتهية (9-step maintenance wizard,
+    // mirrors the reference MkCards flow — replaces the old single-dialog
+    // "clean now" tool with a step-by-step, individually-triggered sequence). ---
+    if (showMaintenanceDialog) {
+        Dialog(
+            onDismissRequest = { showMaintenanceDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            UserManagerMaintenanceWizardScreen(
+                viewModel = viewModel,
+                onBack = { showMaintenanceDialog = false }
+            )
+        }
     }
 
     // --- 9. Dialog: النسخ الاحتياطية (Backups) ---
@@ -850,10 +903,16 @@ fun UserManagerScreen(
                     Button(
                         onClick = {
                             isGeneratingBackup = true
-                            viewModel.backupUserManagerDatabase { filename ->
-                                isGeneratingBackup = false
-                                feedbackMessage = "تم إنشاء النسخة الاحتياطية: $filename"
-                            }
+                            viewModel.backupUserManagerDatabase(
+                                onSuccess = { filename ->
+                                    isGeneratingBackup = false
+                                    feedbackMessage = "تم إنشاء النسخة الاحتياطية: $filename"
+                                },
+                                onError = { err ->
+                                    isGeneratingBackup = false
+                                    feedbackMessage = "فشل النسخ الاحتياطي: $err"
+                                }
+                            )
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),

@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.core.content.edit
+
+import java.util.Locale
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -39,6 +42,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
@@ -47,12 +52,13 @@ import com.example.data.model.UserManagerUser
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.CardPrintAndExportHelper
+import com.example.viewmodel.DesignsViewModel
 import com.example.util.toAsciiDigits
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.random.Random
+import kotlin.math.pow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,28 +69,34 @@ fun UserManagerBatchFullDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val designsViewModel: DesignsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        factory = DesignsViewModel.Factory(context)
+    )
+    val savedDesigns by designsViewModel.designs.collectAsStateWithLifecycle()
     val sharedPrefs = remember { context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE) }
-    val userManagerProfiles by viewModel.userManagerProfiles.collectAsState()
-    val userManagerUsers by viewModel.userManagerUsers.collectAsState()
+    val userManagerProfiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
+    val userManagerUsers by viewModel.userManagerUsers.collectAsStateWithLifecycle()
 
     // Top Tabs: 0 -> إنشاء دفعة (Create Batch), 1 -> استيراد دفعة (Import Batch)
-    var selectedTopTab by remember { mutableIntStateOf(0) }
+    var selectedTopTab by rememberSaveable { mutableIntStateOf(0) }
 
     // Section 1: خيارات الباقة
-    var selectedProfileName by remember {
-        mutableStateOf(
-            if (userManagerProfiles.isNotEmpty()) userManagerProfiles.first().name else "باقة 500 د.ع"
-        )
+    var selectedProfileName by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(userManagerProfiles) {
+        val names = userManagerProfiles.map { it.name }
+        if (names.isNotEmpty() && selectedProfileName !in names) {
+            selectedProfileName = names.first()
+        }
     }
     var profileDropdownExpanded by remember { mutableStateOf(false) }
     var showAddProfileDialog by remember { mutableStateOf(false) }
     var newProfileNameInput by remember { mutableStateOf("") }
-    var newProfilePriceInput by remember { mutableStateOf("500") }
+    var newProfilePriceInput by remember { mutableStateOf("") }
 
     // POS / نقطة البيع
     var posList by remember {
         mutableStateOf(
-            listOf("بدون نقطة بيع", "المركز الرئيسي", "كشك رقم 1", "متجر الأمل", "بقالة النور", "نقطة بيع رقم 2")
+            listOf("بدون نقطة بيع")
         )
     }
     var selectedPos by remember { mutableStateOf("بدون نقطة بيع") }
@@ -95,46 +107,62 @@ fun UserManagerBatchFullDialog(
 
     // Template Binding
     var linkedTemplateName by remember {
-        mutableStateOf(sharedPrefs.getString("${selectedProfileName}_template", "كروت_فئة_100") ?: "كروت_فئة_100")
+        mutableStateOf(sharedPrefs.getString("${selectedProfileName}_template", "") ?: "")
     }
     var showLinkTemplateDialog by remember { mutableStateOf(false) }
 
     // Section 2: مواصفات الكروت
     val cardTypeOptions = listOf("كلمة سر فارغة", "اسم المستخدم = كلمة السر", "كلمة سر عشوائية منفصلة", "أرقام وحروف مدمجة")
-    var selectedCardType by remember { mutableStateOf("كلمة سر فارغة") }
+    var selectedCardType by rememberSaveable { mutableStateOf("كلمة سر فارغة") }
     var cardTypeDropdownExpanded by remember { mutableStateOf(false) }
 
     val namePatternOptions = listOf("ارقام فقط", "احرف وارقام", "احرف صغيرة فقط", "احرف كبيرة فقط")
-    var selectedNamePattern by remember { mutableStateOf("ارقام فقط") }
+    var selectedNamePattern by rememberSaveable { mutableStateOf("ارقام فقط") }
     var namePatternDropdownExpanded by remember { mutableStateOf(false) }
-    var nameLengthInput by remember { mutableStateOf("9") }
+    var nameLengthInput by rememberSaveable { mutableStateOf("9") }
 
-    // Page Calculation
-    val templateCols = remember(linkedTemplateName) { sharedPrefs.getInt("${linkedTemplateName}_columns", 3).coerceAtLeast(1) }
-    val templateRows = remember(linkedTemplateName) { sharedPrefs.getInt("${linkedTemplateName}_rows", 17).coerceAtLeast(1) }
-    val cardsPerPage = remember(templateCols, templateRows) { templateCols * templateRows }
+    // Page count is derived from the selected saved design; only cardCountInput is user-editable.
+    val linkedDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
+    // Same clamps the PDF renderer applies, so the displayed page count equals the printed one.
+    // Key sanitized exactly like CardPrintAndExportHelper.prefKey() so names with
+    // spaces/dots read the same template the renderer writes.
+    val templatePrefKey = linkedTemplateName.trim().replace(Regex("[^A-Za-z0-9_-]"), "_")
+    val templateCols = (linkedDesign?.columns
+        ?: sharedPrefs.getInt("${templatePrefKey}_columns", 3))
+        .coerceIn(1, CardPrintAndExportHelper.MAX_COLUMNS)
+    val templateRows = (linkedDesign?.rows
+        ?: sharedPrefs.getInt("${templatePrefKey}_rows", 17))
+        .coerceIn(1, CardPrintAndExportHelper.MAX_ROWS)
+    val cardsPerPage = templateCols * templateRows
+    var cardCountInput by rememberSaveable { mutableStateOf("1") }
+    val pageCountDisplay = cardCountInput.toAsciiDigits().toIntOrNull()
+        ?.takeIf { it > 0 }
+        ?.let { CardPrintAndExportHelper.pageCountFor(it, templateCols, templateRows).toString() }
+        .orEmpty()
+    var cardPrefixInput by rememberSaveable { mutableStateOf("") }
+    var cardSuffixInput by rememberSaveable { mutableStateOf("") }
 
-    var pageCountInput by remember { mutableStateOf("1") }
-    var cardCountInput by remember { mutableStateOf("51") }
-    var cardPrefixInput by remember { mutableStateOf("") }
-    var cardSuffixInput by remember { mutableStateOf("") }
-
-    var excludeCharEnabled by remember { mutableStateOf(false) }
-    var excludedCharInput by remember { mutableStateOf("0") }
+    var excludeCharEnabled by rememberSaveable { mutableStateOf(false) }
+    var excludedCharInput by rememberSaveable { mutableStateOf("0") }
 
     // UI Feedback & Dialogs
     var isGenerating by remember { mutableStateOf(false) }
+    var isImporting by remember { mutableStateOf(false) }
     var successNotification by remember { mutableStateOf<String?>(null) }
     var previewBatchForPrint by remember { mutableStateOf<GeneratedBatchRecord?>(null) }
     var previewBatchUsers by remember { mutableStateOf<List<UserManagerUser>>(emptyList()) }
     var showInAppPrintPreview by remember { mutableStateOf(false) }
+    // Deleting a batch record is permanent (it's the only local record linking
+    // these cards/price/profile together for exports and financial tracking) —
+    // require confirmation instead of deleting on the first tap.
+    var pendingDeleteBatch by remember { mutableStateOf<GeneratedBatchRecord?>(null) }
 
     // Import Batch State
     var importRawText by remember { mutableStateOf("") }
 
     // Update template link when profile changes
     LaunchedEffect(selectedProfileName) {
-        linkedTemplateName = sharedPrefs.getString("${selectedProfileName}_template", "كروت_فئة_100") ?: "كروت_فئة_100"
+        linkedTemplateName = sharedPrefs.getString("${selectedProfileName}_template", "") ?: ""
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -150,7 +178,7 @@ fun UserManagerBatchFullDialog(
             ) {
                 Scaffold(
                     topBar = {
-                        // Top Luxury Header with ABO TALAL TK Branding
+                        // Top Luxury Header with NetCraft TK Branding
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -207,7 +235,7 @@ fun UserManagerBatchFullDialog(
                                         color = Color(0xFFE0F2FE)
                                     ) {
                                         Text(
-                                            text = "ABO TALAL VIP",
+                                            text = "NetCraft",
                                             fontFamily = CairoFontFamily,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.ExtraBold,
@@ -355,11 +383,21 @@ fun UserManagerBatchFullDialog(
                                                     color = Color(0xFF166534)
                                                 )
                                             }
+                                            if (previewBatchForPrint != null && previewBatchUsers.isNotEmpty()) {
+                                                TextButton(
+                                                    onClick = { showInAppPrintPreview = true },
+                                                    modifier = Modifier.heightIn(min = 48.dp)
+                                                ) {
+                                                    Icon(Icons.Filled.Print, contentDescription = null, tint = Color(0xFF166534))
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text("معاينة وطباعة", fontFamily = CairoFontFamily, color = Color(0xFF166534))
+                                                }
+                                            }
                                             IconButton(
                                                 onClick = { successNotification = null },
-                                                modifier = Modifier.size(24.dp)
+                                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                                             ) {
-                                                Icon(Icons.Filled.Close, contentDescription = "إغلاق", tint = Color(0xFF166534), modifier = Modifier.size(16.dp))
+                                                Icon(Icons.Filled.Close, contentDescription = "إغلاق إشعار النجاح", tint = Color(0xFF166534), modifier = Modifier.size(16.dp))
                                             }
                                         }
                                     }
@@ -477,15 +515,11 @@ fun UserManagerBatchFullDialog(
                                                     onDismissRequest = { profileDropdownExpanded = false }
                                                 ) {
                                                     if (userManagerProfiles.isEmpty()) {
-                                                        listOf("باقة 100 د.ع", "باقة 200 د.ع", "باقة 500 د.ع", "باقة 1000 د.ع", "باقة VIP غير محدودة").forEach { prof ->
-                                                            DropdownMenuItem(
-                                                                text = { Text(prof, fontFamily = CairoFontFamily) },
-                                                                onClick = {
-                                                                    selectedProfileName = prof
-                                                                    profileDropdownExpanded = false
-                                                                }
-                                                            )
-                                                        }
+                                                        DropdownMenuItem(
+                                                            text = { Text("لا توجد باقات على الراوتر — أنشئ باقة في User Manager", fontFamily = CairoFontFamily, fontSize = 12.sp) },
+                                                            enabled = false,
+                                                            onClick = {}
+                                                        )
                                                     } else {
                                                         userManagerProfiles.forEach { prof ->
                                                             DropdownMenuItem(
@@ -877,19 +911,16 @@ fun UserManagerBatchFullDialog(
 
                                         // عدد الصفحات (Pages Count)
                                         Text(
-                                            text = "عدد الصفحات",
+                                            text = "عدد الصفحات (محسوب من عدد الكروت)",
                                             fontFamily = CairoFontFamily,
                                             fontSize = 12.sp,
                                             color = Color(0xFF475569),
                                             fontWeight = FontWeight.Medium
                                         )
                                         OutlinedTextField(
-                                            value = pageCountInput,
-                                            onValueChange = {
-                                                pageCountInput = it
-                                                val p = it.toIntOrNull() ?: 1
-                                                cardCountInput = "${p * cardsPerPage}"
-                                            },
+                                            value = pageCountDisplay,
+                                            onValueChange = {},
+                                            readOnly = true,
                                             singleLine = true,
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                             modifier = Modifier.fillMaxWidth(),
@@ -907,11 +938,7 @@ fun UserManagerBatchFullDialog(
                                         )
                                         OutlinedTextField(
                                             value = cardCountInput,
-                                            onValueChange = {
-                                                cardCountInput = it
-                                                val c = it.toIntOrNull() ?: 51
-                                                pageCountInput = "${Math.ceil(c.toDouble() / cardsPerPage).toInt().coerceAtLeast(1)}"
-                                            },
+                                            onValueChange = { cardCountInput = it },
                                             singleLine = true,
                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                             modifier = Modifier.fillMaxWidth(),
@@ -995,17 +1022,57 @@ fun UserManagerBatchFullDialog(
                             item {
                                 Button(
                                     onClick = {
-                                        val count = cardCountInput.toAsciiDigits().toIntOrNull()?.coerceIn(1, 5000) ?: 50
-                                        val len = nameLengthInput.toAsciiDigits().toIntOrNull()?.coerceIn(4, 30) ?: 9
+                                        if (selectedProfileName.isBlank() || userManagerProfiles.none { it.name == selectedProfileName }) {
+                                            Toast.makeText(context, "يرجى اختيار باقة User Manager موجودة أولاً", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
+                                        val count = cardCountInput.toAsciiDigits().toIntOrNull()
+                                        if (count == null || count !in 1..5000) {
+                                            Toast.makeText(context, "أدخل عددًا صحيحًا من 1 إلى 5000 كرت", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
+                                        val len = nameLengthInput.toAsciiDigits().toIntOrNull()
+                                        if (len == null || len !in 4..30) {
+                                            Toast.makeText(context, "طول اسم المستخدم يجب أن يكون من 4 إلى 30 حرفًا", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
                                         val cleanPrefix = cardPrefixInput.toAsciiDigits()
                                         val cleanSuffix = cardSuffixInput.toAsciiDigits()
-                                        val price = 500 // or derived from profile
+                                        if (cleanPrefix.length + cleanSuffix.length + 3 > len) {
+                                            Toast.makeText(context, "البادئة واللاحقة يجب أن تتركا مساحة لثلاثة أحرف عشوائية على الأقل ضمن الطول المحدد", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
+                                        val price = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price ?: 0
                                         val excluded = if (excludeCharEnabled) excludedCharInput.toAsciiDigits().toSet() else emptySet()
+                                        val allowedChars = cardCodeCharacterPool(selectedNamePattern, excluded)
+                                        if (allowedChars.isEmpty()) {
+                                            Toast.makeText(context, "لا توجد أحرف متاحة بعد تطبيق الاستثناءات", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
+
+                                        val coreLength = (len - cleanPrefix.length - cleanSuffix.length).coerceAtLeast(3)
+                                        val possibleCodes = allowedChars.length.toDouble().pow(coreLength)
+                                        val usedUsernames = userManagerUsers.mapTo(mutableSetOf()) { it.username }
+                                        val alreadyUsedCodes = usedUsernames.count { username ->
+                                            username.startsWith(cleanPrefix) && username.endsWith(cleanSuffix) &&
+                                                username.length == cleanPrefix.length + coreLength + cleanSuffix.length &&
+                                                username.substring(cleanPrefix.length, username.length - cleanSuffix.length.coerceAtMost(username.length))
+                                                    .all { it in allowedChars }
+                                        }
+                                        if (possibleCodes - alreadyUsedCodes < count.toDouble()) {
+                                            Toast.makeText(context, "عدد التركيبات المتاحة لا يكفي لإنشاء $count اسمًا فريدًا. زد طول الاسم أو غيّر نمطه.", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
 
                                         isGenerating = true
 
-                                        // Generate Users with pure ASCII characters
-                                        val generatedUsers = (1..count).map {
+                                        // Build exactly the requested number of unique usernames.
+                                        val uniqueUsernames = usedUsernames
+                                        val generatedUsers = ArrayList<UserManagerUser>(count)
+                                        var attempts = 0
+                                        val maxAttempts = count * 100
+                                        while (generatedUsers.size < count && attempts < maxAttempts) {
+                                            attempts++
                                             val uname = generateCardCode(
                                                 prefix = cleanPrefix,
                                                 suffix = cleanSuffix,
@@ -1013,47 +1080,67 @@ fun UserManagerBatchFullDialog(
                                                 pattern = selectedNamePattern,
                                                 excludedChars = excluded
                                             )
-
+                                            if (!uniqueUsernames.add(uname)) continue
                                             val pwd = when (selectedCardType) {
                                                 "كلمة سر فارغة" -> ""
                                                 "اسم المستخدم = كلمة السر" -> uname
                                                 "أرقام وحروف مدمجة" -> generateRandomAlphaNumeric(6, excluded)
-                                                else -> String.format(Locale.US, "%04d", Random.nextInt(1000, 9999))
+                                                else -> String.format(Locale.US, "%04d", 1000 + secureRandom.nextInt(9000))
                                             }
-
-                                            UserManagerUser(
-                                                username = uname,
-                                                password = pwd,
-                                                profile = selectedProfileName,
-                                                active = true,
-                                                uptimeUsed = "0s",
-                                                downloadLimit = "unlimited"
+                                            generatedUsers.add(
+                                                UserManagerUser(
+                                                    username = uname,
+                                                    password = pwd,
+                                                    profile = selectedProfileName,
+                                                    active = true,
+                                                    uptimeUsed = "0s",
+                                                    downloadLimit = "unlimited"
+                                                )
                                             )
                                         }
+                                        if (generatedUsers.size != count) {
+                                            isGenerating = false
+                                            Toast.makeText(context, "تعذر إنشاء $count اسمًا فريدًا؛ زد طول الاسم أو غيّر نمطه.", Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
 
-                                        val batchCode = if (cleanPrefix.isNotEmpty()) "${cleanPrefix}-x$count" else "BATCH-${System.currentTimeMillis() % 10000}"
+                                        val batchCode = "BATCH-${UUID.randomUUID()}"
 
                                         // Send to router via ViewModel
                                         viewModel.batchAddUserManagerUsers(
                                             users = generatedUsers,
                                             batchName = batchCode,
-                                            onSuccess = {
+                                            onSuccess = { created ->
                                                 val newRecord = GeneratedBatchRecord(
                                                     batchId = batchCode,
                                                     date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date()),
                                                     profileName = selectedProfileName,
-                                                    count = count,
+                                                    count = created.size,
                                                     pricePerCard = price,
-                                                    prefix = cleanPrefix
+                                                    prefix = cleanPrefix,
+                                                    cards = created
                                                 )
                                                 onUpdateBatches(listOf(newRecord) + batchRecords)
                                                 isGenerating = false
-                                                successNotification = "تم توليد وإضافة $count كرت بنجاح في راوتر المايكروتيك!"
+                                                successNotification = "تم توليد وإضافة ${created.size} كرت بنجاح في راوتر المايكروتيك!"
                                                 previewBatchForPrint = newRecord
-                                                previewBatchUsers = generatedUsers
+                                                previewBatchUsers = created
                                             },
-                                            onError = { err ->
+                                            onError = { err, created ->
                                                 isGenerating = false
+                                                if (created.isNotEmpty()) {
+                                                    // Keep the cards the router did accept so they can still be printed.
+                                                    val partialRecord = GeneratedBatchRecord(
+                                                        batchId = batchCode,
+                                                        date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date()),
+                                                        profileName = selectedProfileName,
+                                                        count = created.size,
+                                                        pricePerCard = price,
+                                                        prefix = cleanPrefix,
+                                                        cards = created
+                                                    )
+                                                    onUpdateBatches(listOf(partialRecord) + batchRecords)
+                                                }
                                                 Toast.makeText(context, "خطأ في التوليد: $err", Toast.LENGTH_LONG).show()
                                             }
                                         )
@@ -1316,20 +1403,17 @@ fun UserManagerBatchFullDialog(
                                                             TextButton(
                                                                 onClick = {
                                                                     // Get users for this batch
-                                                                    val usersForBatch = userManagerUsers.filter { it.profile == batch.profileName || it.username.startsWith(batch.prefix) }
-                                                                        .ifEmpty {
-                                                                            // Fallback mock representation for printing
-                                                                            (1..batch.count).map {
-                                                                                UserManagerUser(
-                                                                                    username = "${batch.prefix}${1000 + it}",
-                                                                                    password = "${5000 + it}",
-                                                                                    profile = batch.profileName,
-                                                                                    active = true,
-                                                                                    uptimeUsed = "0s",
-                                                                                    downloadLimit = "unlimited"
-                                                                                )
-                                                                            }
-                                                                        }
+                                                                    val usersForBatch = batch.resolveCards(userManagerUsers)
+                                                                    if (usersForBatch.isEmpty()) {
+                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
+                                                                    val printDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
+                                                                    if (printDesign == null) {
+                                                                        Toast.makeText(context, "اختر تصميمًا محفوظًا من شاشة تصاميم الكروت أولًا", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
+                                                                    CardPrintAndExportHelper.saveDesignAsTemplate(context, printDesign)
                                                                     val templateCfg = CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName)
                                                                     CardPrintAndExportHelper.printVoucherBatchDirectly(
                                                                         context = context,
@@ -1348,19 +1432,17 @@ fun UserManagerBatchFullDialog(
                                                             // 2. Export to PDF
                                                             TextButton(
                                                                 onClick = {
-                                                                    val usersForBatch = userManagerUsers.filter { it.profile == batch.profileName || it.username.startsWith(batch.prefix) }
-                                                                        .ifEmpty {
-                                                                            (1..batch.count).map {
-                                                                                UserManagerUser(
-                                                                                    username = "${batch.prefix}${1000 + it}",
-                                                                                    password = "${5000 + it}",
-                                                                                    profile = batch.profileName,
-                                                                                    active = true,
-                                                                                    uptimeUsed = "0s",
-                                                                                    downloadLimit = "unlimited"
-                                                                                )
-                                                                            }
-                                                                        }
+                                                                    val usersForBatch = batch.resolveCards(userManagerUsers)
+                                                                    if (usersForBatch.isEmpty()) {
+                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
+                                                                    val printDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
+                                                                    if (printDesign == null) {
+                                                                        Toast.makeText(context, "اختر تصميمًا محفوظًا من شاشة تصاميم الكروت أولًا", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
+                                                                    CardPrintAndExportHelper.saveDesignAsTemplate(context, printDesign)
                                                                     val templateCfg = CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName)
                                                                     CardPrintAndExportHelper.saveBatchAsPdf(
                                                                         context = context,
@@ -1380,19 +1462,11 @@ fun UserManagerBatchFullDialog(
                                                             // 3. Export to Excel
                                                             TextButton(
                                                                 onClick = {
-                                                                    val usersForBatch = userManagerUsers.filter { it.profile == batch.profileName || it.username.startsWith(batch.prefix) }
-                                                                        .ifEmpty {
-                                                                            (1..batch.count).map {
-                                                                                UserManagerUser(
-                                                                                    username = "${batch.prefix}${1000 + it}",
-                                                                                    password = "${5000 + it}",
-                                                                                    profile = batch.profileName,
-                                                                                    active = true,
-                                                                                    uptimeUsed = "0s",
-                                                                                    downloadLimit = "unlimited"
-                                                                                )
-                                                                            }
-                                                                        }
+                                                                    val usersForBatch = batch.resolveCards(userManagerUsers)
+                                                                    if (usersForBatch.isEmpty()) {
+                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        return@TextButton
+                                                                    }
                                                                     CardPrintAndExportHelper.exportBatchToExcel(
                                                                         context = context,
                                                                         batch = batch,
@@ -1404,15 +1478,12 @@ fun UserManagerBatchFullDialog(
                                                             ) {
                                                                 Icon(Icons.Filled.FileDownload, contentDescription = null, tint = Color(0xFF0284C7), modifier = Modifier.size(16.dp))
                                                                 Spacer(modifier = Modifier.width(4.dp))
-                                                                Text("تصدير Excel", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0284C7))
+                                                                Text("تصدير CSV", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0284C7))
                                                             }
 
                                                             // 3. Delete Batch
                                                             IconButton(
-                                                                onClick = {
-                                                                    onUpdateBatches(batchRecords.filter { it.batchId != batch.batchId })
-                                                                    Toast.makeText(context, "تم حذف الدفعة ${batch.batchId}", Toast.LENGTH_SHORT).show()
-                                                                },
+                                                                onClick = { pendingDeleteBatch = batch },
                                                                 modifier = Modifier.size(28.dp)
                                                             ) {
                                                                 Icon(Icons.Filled.DeleteOutline, contentDescription = "حذف", tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
@@ -1485,16 +1556,39 @@ fun UserManagerBatchFullDialog(
 
                                         Button(
                                             onClick = {
-                                                val lines = importRawText.lines().filter { it.isNotBlank() }
-                                                if (lines.isEmpty()) {
+                                                if (selectedProfileName.isBlank()) {
+                                                    Toast.makeText(context, "يرجى اختيار باقة User Manager أولاً", Toast.LENGTH_LONG).show()
+                                                    return@Button
+                                                }
+
+                                                // RouterOS v6 exports User Manager rows as username,password.
+                                                // Accept comma/semicolon/tab separators, tolerate a UTF-8 BOM and
+                                                // quoted values, and split only once so passwords may contain spaces.
+                                                val importedUsers = importRawText
+                                                    .lineSequence()
+                                                    .map { it.trim().removePrefix("\uFEFF") }
+                                                    .filter { it.isNotBlank() && !it.startsWith("#") }
+                                                    .mapNotNull { line ->
+                                                        val fields = if (line.any { it == ',' || it == ';' || it == '\t' }) {
+                                                            line.split(Regex("[,;\\t]"), limit = 2)
+                                                        } else {
+                                                            line.split(Regex("\\s+"), limit = 2)
+                                                        }
+                                                        val username = fields.getOrNull(0)?.trim()?.trim('"', '\'').orEmpty()
+                                                        val password = fields.getOrNull(1)?.trim()?.trim('"', '\'')
+                                                            ?.takeIf { it.isNotEmpty() } ?: username
+                                                        if (username.isBlank() || username.equals("username", ignoreCase = true)) null
+                                                        else username to password
+                                                    }
+                                                    .distinctBy { it.first }
+                                                    .toList()
+
+                                                if (importedUsers.isEmpty()) {
                                                     Toast.makeText(context, "يرجى إدخال بيانات الكروت أولاً", Toast.LENGTH_SHORT).show()
                                                     return@Button
                                                 }
 
-                                                val importedUsers = lines.map { line ->
-                                                    val parts = line.split(",", " ", "\t").map { it.trim() }
-                                                    val u = parts[0]
-                                                    val p = if (parts.size > 1) parts[1] else u
+                                                val users = importedUsers.map { (u, p) ->
                                                     UserManagerUser(
                                                         username = u,
                                                         password = p,
@@ -1504,36 +1598,57 @@ fun UserManagerBatchFullDialog(
                                                         downloadLimit = "unlimited"
                                                     )
                                                 }
+                                                if (isImporting) return@Button
+                                                val batchId = "IMPORT-${UUID.randomUUID()}"
 
+                                                isImporting = true
                                                 viewModel.batchAddUserManagerUsers(
-                                                    users = importedUsers,
-                                                    batchName = "IMPORT-${System.currentTimeMillis() % 1000}",
-                                                    onSuccess = {
+                                                    users = users,
+                                                    batchName = batchId,
+                                                    onSuccess = { created ->
                                                         val record = GeneratedBatchRecord(
-                                                            batchId = "IMPORT-${System.currentTimeMillis() % 1000}",
+                                                            batchId = batchId,
                                                             date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
                                                             profileName = selectedProfileName,
-                                                            count = importedUsers.size,
-                                                            pricePerCard = 500,
-                                                            prefix = "IMP"
+                                                            count = created.size,
+                                                            pricePerCard = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price?.toInt() ?: 0,
+                                                            prefix = "IMP",
+                                                            cards = created
                                                         )
                                                         onUpdateBatches(listOf(record) + batchRecords)
                                                         importRawText = ""
                                                         selectedTopTab = 0
-                                                        successNotification = "تم استيراد ${importedUsers.size} كرت وإضافتها للراوتر بنجاح!"
+                                                        successNotification = "تم استيراد ${created.size} كرت وإضافتها للراوتر بنجاح!"
+                                                        previewBatchForPrint = record
+                                                        previewBatchUsers = created
+                                                        isImporting = false
                                                     },
-                                                    onError = {
-                                                        Toast.makeText(context, "خطأ أثناء الاستيراد: $it", Toast.LENGTH_LONG).show()
+                                                    onError = { err, created ->
+                                                        isImporting = false
+                                                        if (created.isNotEmpty()) {
+                                                            onUpdateBatches(listOf(GeneratedBatchRecord(
+                                                                batchId = batchId,
+                                                                date = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date()),
+                                                                profileName = selectedProfileName,
+                                                                count = created.size,
+                                                                pricePerCard = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price?.toInt() ?: 0,
+                                                                prefix = "IMP",
+                                                                cards = created
+                                                            )) + batchRecords)
+                                                        }
+                                                        Toast.makeText(context, "خطأ أثناء الاستيراد: $err", Toast.LENGTH_LONG).show()
                                                     }
                                                 )
                                             },
                                             modifier = Modifier.fillMaxWidth(),
+                                            enabled = !isImporting,
                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
                                             shape = RoundedCornerShape(10.dp)
                                         ) {
-                                            Icon(Icons.Filled.CloudUpload, contentDescription = null)
+                                            if (isImporting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+                                            else Icon(Icons.Filled.CloudUpload, contentDescription = null)
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text("استيراد وإضافة للراوتر الآن", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                                            Text(if (isImporting) "جارٍ استيراد الكروت..." else "استيراد وإضافة للراوتر الآن", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }
@@ -1547,7 +1662,7 @@ fun UserManagerBatchFullDialog(
 
     // --- DIALOG: Link Template Dialog (ربط الباقة بقالب الطباعة المحفوظ) ---
     if (showLinkTemplateDialog) {
-        val availableTemplates = remember { CardPrintAndExportHelper.getTemplatesList(context) }
+        val availableTemplates = savedDesigns.map { it.name }.filter { it.isNotBlank() }.distinct()
 
         AlertDialog(
             onDismissRequest = { showLinkTemplateDialog = false },
@@ -1569,55 +1684,49 @@ fun UserManagerBatchFullDialog(
                         color = Color(0xFF64748B)
                     )
 
-                    availableTemplates.forEach { tmpl ->
-                        val isSelected = linkedTemplateName == tmpl
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    linkedTemplateName = tmpl
-                                    sharedPrefs.edit().putString("${selectedProfileName}_template", tmpl).apply()
-                                    showLinkTemplateDialog = false
-                                    Toast.makeText(context, "تم ربط الباقة $selectedProfileName بقالب $tmpl بنجاح!", Toast.LENGTH_SHORT).show()
-                                },
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(
-                                width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) Color(0xFF0C5A60) else Color(0xFFE2E8F0)
-                            ),
-                            colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFFF0FDF4) else Color.White)
-                        ) {
-                            Row(
+                    if (availableTemplates.isEmpty()) {
+                        Text(
+                            text = "لا توجد تصاميم محفوظة. أنشئ قالبًا واحفظه أولًا من شاشة تصاميم الكروت.",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = Color(0xFF64748B)
+                        )
+                    } else {
+                        availableTemplates.forEach { tmpl ->
+                            val isSelected = linkedTemplateName == tmpl
+                            Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                    .clickable {
+                                        savedDesigns.firstOrNull { it.name == tmpl }?.let { design ->
+                                            CardPrintAndExportHelper.saveDesignAsTemplate(context, design)
+                                        }
+                                        linkedTemplateName = tmpl
+                                        sharedPrefs.edit { putString("${selectedProfileName}_template", tmpl) }
+                                        showLinkTemplateDialog = false
+                                        Toast.makeText(context, "تم ربط الباقة $selectedProfileName بقالب التصميم $tmpl", Toast.LENGTH_SHORT).show()
+                                    },
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) Color(0xFF0C5A60) else Color(0xFFE2E8F0)
+                                ),
+                                colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFFF0FDF4) else Color.White)
                             ) {
                                 Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    val bgRes = when (tmpl) {
-                                        "كروت_فئة_200" -> R.drawable.bg_card_200
-                                        "كروت_فئة_500" -> R.drawable.bg_card_500
-                                        else -> R.drawable.bg_card_100
-                                    }
-                                    Image(
-                                        painter = painterResource(id = bgRes),
-                                        contentDescription = null,
-                                        modifier = Modifier
-                                            .size(50.dp, 32.dp)
-                                            .clip(RoundedCornerShape(6.dp)),
-                                        contentScale = ContentScale.FillBounds
-                                    )
                                     Column {
                                         Text(text = tmpl, fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF0F172A))
-                                        Text(text = "جاهز ومتزامن مع قسم التصاميم", fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF64748B))
+                                        Text(text = "تصميم محفوظ في شاشة تصاميم الكروت", fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF64748B))
                                     }
-                                }
-                                if (isSelected) {
-                                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(20.dp))
+                                    if (isSelected) {
+                                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(20.dp))
+                                    }
                                 }
                             }
                         }
@@ -1704,12 +1813,12 @@ fun UserManagerBatchFullDialog(
                     onClick = {
                         if (newProfileNameInput.isNotBlank()) {
                             val profName = newProfileNameInput.trim()
-                            val price = newProfilePriceInput.toIntOrNull() ?: 500
+                            val price = newProfilePriceInput.toIntOrNull() ?: 0
                             viewModel.addUserManagerProfile(
                                 profile = UserManagerProfile(
                                     name = profName,
                                     validity = "30d",
-                                    price = price.toDouble(),
+                                    price = price,
                                     sharedUsers = 1
                                 ),
                                 onSuccess = {
@@ -1736,10 +1845,42 @@ fun UserManagerBatchFullDialog(
         )
     }
 
+    // --- Confirm batch-record deletion (permanent local record, not just a toggle) ---
+    pendingDeleteBatch?.let { batch ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteBatch = null },
+            title = { Text("تأكيد حذف الدفعة", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "سيتم حذف سجل الدفعة '${batch.batchId}' نهائيًا من التطبيق (لا يحذف الكروت من الراوتر). لا يمكن التراجع عن هذا الإجراء. هل تريد المتابعة؟",
+                    fontFamily = CairoFontFamily
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onUpdateBatches(batchRecords.filter { it.batchId != batch.batchId })
+                    Toast.makeText(context, "تم حذف الدفعة ${batch.batchId}", Toast.LENGTH_SHORT).show()
+                    pendingDeleteBatch = null
+                }) {
+                    Text("حذف", color = Color(0xFFEF4444), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteBatch = null }) {
+                    Text("إلغاء", fontFamily = CairoFontFamily)
+                }
+            }
+        )
+    }
+
     // --- NATIVE PRINT PREVIEW TRIGGER ---
     if (showInAppPrintPreview && previewBatchForPrint != null) {
-        val cfg = remember(linkedTemplateName) { CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName) }
         LaunchedEffect(previewBatchForPrint) {
+            // Sync the saved design into the print template first so columns/rows match the design.
+            savedDesigns.firstOrNull { it.name == linkedTemplateName }?.let {
+                CardPrintAndExportHelper.saveDesignAsTemplate(context, it)
+            }
+            val cfg = CardPrintAndExportHelper.loadTemplateConfig(context, linkedTemplateName)
             CardPrintAndExportHelper.printVoucherBatchDirectly(
                 context = context,
                 batch = previewBatchForPrint!!,
@@ -1752,8 +1893,18 @@ fun UserManagerBatchFullDialog(
 }
 
 // -------------------------------------------------------------
-// Generator Helpers
+// Generator Helpers — card codes use a cryptographically secure
+// SecureRandom so voucher credentials cannot be predicted.
 // -------------------------------------------------------------
+private val secureRandom = java.security.SecureRandom()
+
+private fun cardCodeCharacterPool(pattern: String, excludedChars: Set<Char>): String = when (pattern) {
+    "احرف وارقام" -> "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    "احرف صغيرة فقط" -> "abcdefghijkmnopqrstuvwxyz"
+    "احرف كبيرة فقط" -> "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    else -> "0123456789"
+}.filter { it !in excludedChars }
+
 private fun generateCardCode(
     prefix: String,
     suffix: String,
@@ -1764,21 +1915,14 @@ private fun generateCardCode(
     val cleanPrefix = prefix.toAsciiDigits()
     val cleanSuffix = suffix.toAsciiDigits()
     val allowedLength = (length - cleanPrefix.length - cleanSuffix.length).coerceAtLeast(3)
-    val pool = when (pattern) {
-        "احرف وارقام" -> "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-        "احرف صغيرة فقط" -> "abcdefghijkmnopqrstuvwxyz"
-        "احرف كبيرة فقط" -> "ABCDEFGHJKLMNPQRSTUVWXYZ"
-        else -> "0123456789"
-    }.filter { it !in excludedChars }
-
-    val core = (1..allowedLength).map {
-        pool.random()
-    }.joinToString("")
-
+    val pool = cardCodeCharacterPool(pattern, excludedChars)
+    require(pool.isNotEmpty()) { "No available username characters" }
+    val core = (1..allowedLength).map { pool[secureRandom.nextInt(pool.length)] }.joinToString("")
     return "$cleanPrefix$core$cleanSuffix"
 }
 
 private fun generateRandomAlphaNumeric(length: Int, excludedChars: Set<Char>): String {
     val pool = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".filter { it !in excludedChars }
-    return (1..length).map { pool.random() }.joinToString("")
+    require(pool.isNotEmpty()) { "No available password characters" }
+    return (1..length).map { pool[secureRandom.nextInt(pool.length)] }.joinToString("")
 }

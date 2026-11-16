@@ -127,7 +127,7 @@ fun SplashScreen(
                         // App Logo (صورة الشعار المرفوعة رسمياً من المستخدم)
                         Surface(
                             shape = RoundedCornerShape(26.dp),
-                            color = Color.White,
+                            color = Color(0xFF03142E),
                             shadowElevation = 12.dp,
                             modifier = Modifier
                                 .size(120.dp)
@@ -135,7 +135,7 @@ fun SplashScreen(
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxSize().padding(10.dp)
+                                modifier = Modifier.fillMaxSize()
                             ) {
                                 Image(
                                     painter = painterResource(id = R.drawable.app_logo),
@@ -150,7 +150,7 @@ fun SplashScreen(
 
                         // App Title
                         Text(
-                            text = "ABO TALAL VIP",
+                            text = "NetCraft",
                             fontSize = 28.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = Color.White,
@@ -235,7 +235,7 @@ fun SplashScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // حقوق المبرمج والمهندس عبدالحميد داوؤد ورقم التواصل كما طلب المستخدم صراحة
+                // حقوق المطوّر ورقم التواصل
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = Color.Black.copy(alpha = 0.35f),
@@ -264,7 +264,7 @@ fun SplashScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "تطوير وبرمجة: المهندس عبدالحميد داوؤد",
+                                text = "تطوير وبرمجة: شركة الهيثم للبرمجيات",
                                 color = Color.White,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold
@@ -282,7 +282,7 @@ fun SplashScreen(
                                 modifier = Modifier.size(15.dp)
                             )
                             Text(
-                                text = "هاتف التواصل: 778215553",
+                                text = "هاتف التواصل: 773114243",
                                 color = Color(0xFFE2E8F0),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,

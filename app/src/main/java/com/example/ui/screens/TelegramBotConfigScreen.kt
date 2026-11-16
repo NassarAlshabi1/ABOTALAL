@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -27,6 +30,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -69,6 +74,7 @@ fun TelegramBotConfigScreen(
     var isInstallingScript by remember { mutableStateOf(false) }
 
     var testResultDialogText by remember { mutableStateOf<String?>(null) }
+    var secretStorageWarning by remember { mutableStateOf(false) }
     var showAddBotDialog by remember { mutableStateOf(false) }
     var showScriptPreviewDialog by remember { mutableStateOf(false) }
 
@@ -78,7 +84,7 @@ fun TelegramBotConfigScreen(
         if (idx in updatedList.indices) {
             updatedList[idx] = currentBot.copy(name = botName, token = botToken, chatId = chatId)
             savedBots = updatedList
-            TelegramHelper.saveBots(context, updatedList)
+            secretStorageWarning = !TelegramHelper.saveBots(context, updatedList)
         }
     }
 
@@ -191,6 +197,14 @@ fun TelegramBotConfigScreen(
                     .padding(padding)
                     .background(Color(0xFFF4F6F9))
             ) {
+                if (secretStorageWarning) {
+                    Text(
+                        text = "تعذر تشفير توكن البوت بأمان؛ لن يُحفظ على الجهاز حتى يتوفر Android Keystore.",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        fontFamily = CairoFontFamily
+                    )
+                }
                 // Tab Selection Row
                 TabRow(
                     selectedTabIndex = selectedTab,
@@ -267,7 +281,7 @@ fun TelegramBotConfigScreen(
                                     val list = savedBots.toMutableList()
                                     list[selectedBotIndex] = list[selectedBotIndex].copy(isConnected = true)
                                     savedBots = list
-                                    TelegramHelper.saveBots(context, list)
+                                    secretStorageWarning = !TelegramHelper.saveBots(context, list)
                                 }
                             }
                         },
@@ -292,7 +306,7 @@ fun TelegramBotConfigScreen(
                             scope.launch {
                                 isSendingTestMsg = true
                                 val testMsg = """
-                                    🚀 <b>[ABO TALAL VIP] - تجربة الاتصال بالبوت</b>
+                                    🚀 <b>[NetCraft] - تجربة الاتصال بالبوت</b>
                                     ━━━━━━━━━━━━━━━━━━━━
                                     ✅ تم ربط تطبيق إدارة شبكات المايكروتك مع البوت بنجاح!
                                     📡 <b>السيرفر:</b> متصل ومستقر
@@ -390,11 +404,16 @@ fun TelegramBotConfigScreen(
                                 chatId = newChatId.trim()
                             )
                             val updated = savedBots + newBot
-                            savedBots = updated
-                            selectedBotIndex = updated.lastIndex
-                            TelegramHelper.saveBots(context, updated)
-                            showAddBotDialog = false
-                            Toast.makeText(context, "تمت إضافة البوت بنجاح!", Toast.LENGTH_SHORT).show()
+                            if (TelegramHelper.saveBots(context, updated)) {
+                                savedBots = updated
+                                selectedBotIndex = updated.lastIndex
+                                secretStorageWarning = false
+                                showAddBotDialog = false
+                                Toast.makeText(context, "تمت إضافة البوت بنجاح!", Toast.LENGTH_SHORT).show()
+                            } else {
+                                secretStorageWarning = true
+                                Toast.makeText(context, "تعذر حفظ البوت لأن التشفير الآمن غير متاح", Toast.LENGTH_LONG).show()
+                            }
                         } else {
                             Toast.makeText(context, "يرجى ملء الاسم والتوكن", Toast.LENGTH_SHORT).show()
                         }
@@ -509,6 +528,7 @@ private fun BotConnectionTab(
     onInstallScriptOnRouter: () -> Unit,
     onAddNewBot: () -> Unit
 ) {
+    var tokenVisible by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -606,12 +626,22 @@ private fun BotConnectionTab(
                         label = { Text("توكن البوت (API Token)", fontFamily = CairoFontFamily) },
                         placeholder = { Text("1234567890:AAHq...") },
                         leadingIcon = { Icon(Icons.Filled.Key, contentDescription = null) },
+                        visualTransformation = if (tokenVisible) VisualTransformation.None
+                        else PasswordVisualTransformation(),
                         trailingIcon = {
-                            IconButton(onClick = onTestConnection) {
-                                if (isTestingConnection) {
-                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                } else {
-                                    Icon(Icons.Filled.NetworkCheck, contentDescription = "فحص التوكن", tint = Color(0xFF0088CC))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { tokenVisible = !tokenVisible }) {
+                                    Icon(
+                                        imageVector = if (tokenVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        contentDescription = if (tokenVisible) "إخفاء التوكن" else "إظهار التوكن"
+                                    )
+                                }
+                                IconButton(onClick = onTestConnection) {
+                                    if (isTestingConnection) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(Icons.Filled.NetworkCheck, contentDescription = "فحص التوكن", tint = Color(0xFF0088CC))
+                                    }
                                 }
                             }
                         },
@@ -623,7 +653,7 @@ private fun BotConnectionTab(
                         onValueChange = onChatIdChange,
                         label = { Text("معرف المحادثة أو القناة (Chat ID)", fontFamily = CairoFontFamily) },
                         placeholder = { Text("مثال: 987654321 أو @channel_name") },
-                        leadingIcon = { Icon(Icons.Filled.Chat, contentDescription = null) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
                         trailingIcon = {
                             IconButton(onClick = onFetchChatId) {
                                 if (isFetchingChatId) {
@@ -685,7 +715,7 @@ private fun BotConnectionTab(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Icon(Icons.Filled.OpenInNew, contentDescription = null, tint = Color(0xFF0088CC))
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color(0xFF0088CC))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("فتح المحادثة في تطبيق تيليجرام", fontFamily = CairoFontFamily, color = Color(0xFF0088CC), fontWeight = FontWeight.Bold)
                     }

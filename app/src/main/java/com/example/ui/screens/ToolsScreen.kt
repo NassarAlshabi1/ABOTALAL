@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.ListAlt
+import androidx.compose.material.icons.automirrored.filled.AltRoute
+import androidx.compose.material.icons.automirrored.filled.Rule
+
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
@@ -18,6 +23,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +46,7 @@ sealed class ToolsActiveView {
     object TelegramConfig : ToolsActiveView()
     object PppoeManager : ToolsActiveView()
     object CloudManager : ToolsActiveView()
+    object AiDoctor : ToolsActiveView()
     data class GenericTool(val key: String, val title: String, val subtitle: String) : ToolsActiveView()
 }
 
@@ -60,16 +67,12 @@ fun ToolsScreen(
     val context = LocalContext.current
     var activeSubView by remember { mutableStateOf<ToolsActiveView>(ToolsActiveView.MainList) }
 
-    // Dialog states for Quick Services
-    var showHtmlDirDialog by remember { mutableStateOf(false) }
-    var showFreeHotspotDialog by remember { mutableStateOf(false) }
-    var isFreeHotspotEnabled by remember { mutableStateOf(false) }
-
-    var showAntiShareDialog by remember { mutableStateOf(false) }
-    var isAntiShareEnabled by remember { mutableStateOf(false) }
-
     var showRebootDialog by remember { mutableStateOf(false) }
     var isOperating by remember { mutableStateOf(false) }
+
+    // Dark-mode aware background for the main tools list
+    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+    val toolsScreenBg = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
 
     // Back button handling
     BackHandler(enabled = activeSubView !is ToolsActiveView.MainList) {
@@ -103,6 +106,10 @@ fun ToolsScreen(
                 viewModel = viewModel,
                 onBack = { activeSubView = ToolsActiveView.MainList }
             )
+        }
+
+        is ToolsActiveView.AiDoctor -> {
+            AiDoctorScreen(viewModel = viewModel, onBack = { activeSubView = ToolsActiveView.MainList })
         }
 
         is ToolsActiveView.GenericTool -> {
@@ -220,88 +227,33 @@ fun ToolsScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(padding)
-                            .background(Color(0xFFF8FAFC))
+                            .background(toolsScreenBg)
                             .padding(horizontal = 14.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         item { Spacer(modifier = Modifier.height(6.dp)) }
 
-                        /* ========================================================
-                           SECTION 1: HERO SERVICES & CARDS (SCREENSHOT 1)
-                           ======================================================== */
                         item {
-                            Text(
-                                text = "الخدمات السريعة والمتقدمة",
-                                fontFamily = CairoFontFamily,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = Color(0xFF0F172A)
-                            )
-                        }
-
-                        // Row 1: PPPoE & HTML Directory
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0C5A60)),
+                                elevation = CardDefaults.cardElevation(4.dp),
+                                modifier = Modifier.fillMaxWidth().clickable { activeSubView = ToolsActiveView.AiDoctor }
                             ) {
-                                // 1. PPPoE Card
-                                HeroServiceCard(
-                                    modifier = Modifier.weight(1f),
-                                    title = "حسابات البروباند",
-                                    subtitle = "إدارة مشتركي PPPoE والاشتراكات المنزلية",
-                                    actionButtonText = "اضغط للدخول",
-                                    headerBgColor = Color(0xFF1E3A8A),
-                                    accentColor = Color(0xFF2563EB),
-                                    icon = Icons.Filled.Dns,
-                                    onClick = { activeSubView = ToolsActiveView.PppoeManager }
-                                )
-
-                                // 2. HTML Directory Card
-                                HeroServiceCard(
-                                    modifier = Modifier.weight(1f),
-                                    title = "تغيير مجلد HTML",
-                                    subtitle = "تبديل صفحة تسجيل الدخول لهوتسبوت المايكروتك",
-                                    actionButtonText = "تغيير المجلد",
-                                    headerBgColor = Color(0xFF0C5A60),
-                                    accentColor = Color(0xFF0284C7),
-                                    icon = Icons.Filled.FolderSpecial,
-                                    onClick = { showHtmlDirDialog = true }
-                                )
-                            }
-                        }
-
-                        // Row 2: Free Network & Anti-Share (TTL)
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                // 3. Free Hotspot
-                                HeroServiceCard(
-                                    modifier = Modifier.weight(1f),
-                                    title = "تفعيل الشبكة مجاناً",
-                                    subtitle = if (isFreeHotspotEnabled) "الشبكة مفتوحة مجاناً" else "مقفلة بنظام الكروت",
-                                    actionButtonText = if (isFreeHotspotEnabled) "إعادة القفل" else "تفعيل مجاناً",
-                                    badgeText = "FREE",
-                                    headerBgColor = Color(0xFF6B21A8),
-                                    accentColor = Color(0xFF9333EA),
-                                    icon = Icons.Filled.WifiTethering,
-                                    onClick = { showFreeHotspotDialog = true }
-                                )
-
-                                // 4. Anti-Share / Bluetooth Net Share (TTL=1)
-                                HeroServiceCard(
-                                    modifier = Modifier.weight(1f),
-                                    title = "إيقاف مشاركة النت",
-                                    subtitle = if (isAntiShareEnabled) "الحظر مفعل (TTL=1)" else "المشاركة مسموحة",
-                                    actionButtonText = if (isAntiShareEnabled) "إلغاء الحظر" else "تفعيل الحظر",
-                                    badgeText = "TTL=1",
-                                    headerBgColor = Color(0xFF9F1239),
-                                    accentColor = Color(0xFFE11D48),
-                                    icon = Icons.Filled.BluetoothDisabled,
-                                    onClick = { showAntiShareDialog = true }
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().background(
+                                        Brush.horizontalGradient(listOf(Color(0xFF063B40), Color(0xFF0C5A60), Color(0xFF0284C7)))
+                                    ).padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(Icons.Filled.HealthAndSafety, contentDescription = null, tint = Color.White, modifier = Modifier.size(34.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("AI Doctor", fontFamily = CairoFontFamily, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                        Text("فحص قراءة فقط وتشخيص RouterOS v6", fontFamily = CairoFontFamily, fontSize = 11.sp, color = Color(0xFFBAE6FD))
+                                    }
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "فتح", tint = Color.White)
+                                }
                             }
                         }
 
@@ -409,7 +361,7 @@ fun ToolsScreen(
                                             ) {
                                                 Box(contentAlignment = Alignment.Center) {
                                                     Icon(
-                                                        Icons.Filled.Send,
+                                                        Icons.AutoMirrored.Filled.Send,
                                                         contentDescription = null,
                                                         tint = Color(0xFF0088CC),
                                                         modifier = Modifier.size(24.dp)
@@ -493,7 +445,7 @@ fun ToolsScreen(
                         item {
                             ToolsGrid(
                                 items = listOf(
-                                    ToolGridItem("logs", "سجلات النظام (Log)", Icons.Filled.ListAlt, Color(0xFF0284C7)),
+                                    ToolGridItem("logs", "سجلات النظام (Log)", Icons.AutoMirrored.Filled.ListAlt, Color(0xFF0284C7)),
                                     ToolGridItem("users", "المستخدمين والصلاحيات", Icons.Filled.AdminPanelSettings, Color(0xFF10B981)),
                                     ToolGridItem("reboot", "إعادة تشغيل (Reboot)", Icons.Filled.RestartAlt, Color(0xFFEF4444)),
                                     ToolGridItem("backup", "نسخ احتياطي (Backup)", Icons.Filled.CloudUpload, Color(0xFF8B5CF6))
@@ -521,7 +473,7 @@ fun ToolsScreen(
                                     ToolGridItem("dhcp_server", "خادم DHCP", Icons.Filled.Router, Color(0xFF0C5A60)),
                                     ToolGridItem("ip_addresses", "IP Addresses", Icons.Filled.PinDrop, Color(0xFF2563EB)),
                                     ToolGridItem("dhcp_leases", "DHCP (Leases)", Icons.Filled.Devices, Color(0xFF10B981)),
-                                    ToolGridItem("dhcp_relay", "المزود للخدمه DHCP", Icons.Filled.AltRoute, Color(0xFF6366F1)),
+                                    ToolGridItem("dhcp_relay", "المزود للخدمه DHCP", Icons.AutoMirrored.Filled.AltRoute, Color(0xFF6366F1)),
                                     ToolGridItem("nat", "NAT", Icons.Filled.SwapHoriz, Color(0xFFF59E0B)),
                                     ToolGridItem("dns", "خادم DNS", Icons.Filled.Language, Color(0xFF06B6D4)),
                                     ToolGridItem("address_lists", "مجموعات العناوين", Icons.Filled.Ballot, Color(0xFFEC4899)),
@@ -544,7 +496,7 @@ fun ToolsScreen(
                         item {
                             ToolsGrid(
                                 items = listOf(
-                                    ToolGridItem("nat", "قواعد NAT", Icons.Filled.Rule, Color(0xFFD97706)),
+                                    ToolGridItem("nat", "قواعد NAT", Icons.AutoMirrored.Filled.Rule, Color(0xFFD97706)),
                                     ToolGridItem("firewall_filter", "قواعد التصفية", Icons.Filled.FilterList, Color(0xFFDC2626)),
                                     ToolGridItem("blocked_sites", "المواقع المحجوبة", Icons.Filled.Block, Color(0xFFB91C1C)),
                                     ToolGridItem("mangle", "قواعد Mangle", Icons.Filled.Tune, Color(0xFF7C3AED)),
@@ -633,11 +585,10 @@ fun ToolsScreen(
                                 items = listOf(
                                     ToolGridItem("cloud", "سحابة مايكروتيك", Icons.Filled.Cloud, Color(0xFF0C5A60)),
                                     ToolGridItem("resources", "ذاكرة / CPU", Icons.Filled.Memory, Color(0xFF0C5A60)),
-                                    ToolGridItem("resources", "مراقبة المرور", Icons.Filled.Insights, Color(0xFF0284C7)),
+                                    ToolGridItem("graphing_interface", "مراقبة المرور", Icons.Filled.Insights, Color(0xFF0284C7)),
                                     ToolGridItem("routerboard", "RouterBOARD", Icons.Filled.DeveloperBoard, Color(0xFF7C3AED)),
-                                    ToolGridItem("connections", "اتصالات نشطة", Icons.Filled.OnlinePrediction, Color(0xFF10B981)),
-                                    ToolGridItem("health", "صحة الجهاز (Health)", Icons.Filled.Favorite, Color(0xFFEF4444)),
-                                    ToolGridItem("resources", "الموارد (Resources)", Icons.Filled.Widgets, Color(0xFFF59E0B))
+                                    ToolGridItem("ppp_active", "اتصالات PPP نشطة", Icons.Filled.OnlinePrediction, Color(0xFF10B981)),
+                                    ToolGridItem("health", "صحة الجهاز (Health)", Icons.Filled.Favorite, Color(0xFFEF4444))
                                 ),
                                 onItemClick = { item ->
                                     if (item.id == "cloud") {
@@ -654,199 +605,6 @@ fun ToolsScreen(
                 }
             }
         }
-    }
-
-    // Dialog: Change HTML Directory
-    if (showHtmlDirDialog) {
-        var selectedDir by remember { mutableStateOf("hotspot") }
-        var customDir by remember { mutableStateOf("") }
-        val presets = listOf("hotspot", "login_v2", "modern_dark", "hotspot_pro", "default")
-
-        AlertDialog(
-            onDismissRequest = { showHtmlDirDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Filled.FolderSpecial, contentDescription = null, tint = Color(0xFF0C5A60))
-                    Text("تغيير مجلد صفحة تسجيل الدخول", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "اختر مجلد صفحة الهوتسبوت أو أدخل اسم المجلد المحفوظ داخل ذاكرة الراوتر:",
-                        fontFamily = CairoFontFamily,
-                        fontSize = 12.sp,
-                        color = Color.DarkGray
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        presets.take(3).forEach { p ->
-                            FilterChip(
-                                selected = selectedDir == p && customDir.isBlank(),
-                                onClick = {
-                                    selectedDir = p
-                                    customDir = ""
-                                },
-                                label = { Text(p, fontSize = 11.sp) }
-                            )
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = customDir,
-                        onValueChange = { customDir = it },
-                        label = { Text("أو اسم مجلد مخصص") },
-                        placeholder = { Text("مثال: modern_page") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val finalDir = customDir.trim().ifBlank { selectedDir }
-                        isOperating = true
-                        viewModel.setHtmlDirectory(
-                            dirName = finalDir,
-                            onSuccess = {
-                                isOperating = false
-                                showHtmlDirDialog = false
-                                Toast.makeText(context, "✅ تم ضبط مجلد الهوتسبوت إلى ($finalDir) على الراوتر", Toast.LENGTH_LONG).show()
-                            },
-                            onError = { err ->
-                                isOperating = false
-                                Toast.makeText(context, "فشل التطبيق: $err", Toast.LENGTH_LONG).show()
-                            }
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
-                ) {
-                    if (isOperating) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("تطبيق على الراوتر", fontFamily = CairoFontFamily)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showHtmlDirDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
-    }
-
-    // Dialog: Free Hotspot Toggle
-    if (showFreeHotspotDialog) {
-        AlertDialog(
-            onDismissRequest = { showFreeHotspotDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Filled.WifiTethering, contentDescription = null, tint = Color(0xFF9333EA))
-                    Text(if (isFreeHotspotEnabled) "إعادة قفل الشبكة بنظام الكروت" else "تفعيل الشبكة مجاناً", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Text(
-                    text = if (isFreeHotspotEnabled) {
-                        "سيتم إعادة تشغيل نظام كروت الهوتسبوت ولن يتمكن المستخدمون من التصفح إلا بعد إدخال كرت صالح."
-                    } else {
-                        "سيتم فتح الشبكة لجميع المتصلين بالواي فاي بدون طلب تسجيل دخول أو كروت (وضع الطوارئ أو المناسبات)."
-                    },
-                    fontFamily = CairoFontFamily,
-                    fontSize = 13.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val newStatus = !isFreeHotspotEnabled
-                        isOperating = true
-                        viewModel.toggleFreeHotspot(
-                            enableFree = newStatus,
-                            onSuccess = {
-                                isOperating = false
-                                isFreeHotspotEnabled = newStatus
-                                showFreeHotspotDialog = false
-                                Toast.makeText(context, if (newStatus) "تم فتح الشبكة مجاناً" else "تمت إعادة نظام الكروت", Toast.LENGTH_SHORT).show()
-                            },
-                            onError = { err ->
-                                isOperating = false
-                                Toast.makeText(context, "فشل: $err", Toast.LENGTH_LONG).show()
-                            }
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isFreeHotspotEnabled) Color(0xFF0C5A60) else Color(0xFF9333EA)
-                    )
-                ) {
-                    Text(if (isFreeHotspotEnabled) "قفل وتفعيل الكروت" else "فتح الشبكة مجاناً", fontFamily = CairoFontFamily)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showFreeHotspotDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
-    }
-
-    // Dialog: Anti-Share (TTL=1)
-    if (showAntiShareDialog) {
-        AlertDialog(
-            onDismissRequest = { showAntiShareDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Filled.BluetoothDisabled, contentDescription = null, tint = Color(0xFFE11D48))
-                    Text("حظر مشاركة النت والبلوتوث", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Text(
-                    text = if (isAntiShareEnabled) {
-                        "هل تود إلغاء حظر مشاركة الإنترنت؟ سيتمكن العملاء من إعادة بث الإنترنت عبر هواتفهم."
-                    } else {
-                        "سيقوم الراوتر بتطبيق قاعدة Mangle وضبط (TTL=1) لمنع المستخدمين من إعادة بث النت عبر نقطة اتصال الهواتف أو البلوتوث."
-                    },
-                    fontFamily = CairoFontFamily,
-                    fontSize = 13.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val newStatus = !isAntiShareEnabled
-                        isOperating = true
-                        viewModel.toggleTtlBypass(
-                            blockSharing = newStatus,
-                            onSuccess = {
-                                isOperating = false
-                                isAntiShareEnabled = newStatus
-                                showAntiShareDialog = false
-                                Toast.makeText(context, if (newStatus) "تم تفعيل حظر المشاركة" else "تم إلغاء حظر المشاركة", Toast.LENGTH_SHORT).show()
-                            },
-                            onError = { err ->
-                                isOperating = false
-                                Toast.makeText(context, "فشل: $err", Toast.LENGTH_LONG).show()
-                            }
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isAntiShareEnabled) Color(0xFF0C5A60) else Color(0xFFE11D48)
-                    )
-                ) {
-                    Text(if (isAntiShareEnabled) "إلغاء الحظر" else "تفعيل الحظر الفوري", fontFamily = CairoFontFamily)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAntiShareDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
     }
 
     // Dialog: Router Reboot Confirmation
@@ -917,7 +675,7 @@ private fun HeroServiceCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(headerBgColor)
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -928,12 +686,12 @@ private fun HeroServiceCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
                         Text(
                             text = title,
                             fontFamily = CairoFontFamily,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
+                            fontSize = 12.sp,
                             color = Color.White
                         )
                     }
@@ -956,29 +714,30 @@ private fun HeroServiceCard(
             }
 
             // Body
-            Column(modifier = Modifier.padding(12.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                 Text(
                     text = subtitle,
                     fontFamily = CairoFontFamily,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     color = Color.Gray,
                     minLines = 2,
-                    maxLines = 2
+                    maxLines = 2,
+                    lineHeight = 13.sp
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(7.dp))
 
                 Button(
                     onClick = onClick,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = accentColor),
-                    contentPadding = PaddingValues(vertical = 6.dp)
+                    contentPadding = PaddingValues(vertical = 3.dp)
                 ) {
                     Text(
                         text = actionButtonText,
                         fontFamily = CairoFontFamily,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -1024,16 +783,16 @@ private fun ToolsGrid(
     items: List<ToolGridItem>,
     onItemClick: (ToolGridItem) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // Chunk into pairs for 2-column layout in LazyColumn
         items.chunked(2).forEach { rowItems ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 rowItems.forEach { item ->
                     Card(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(10.dp),
                         colors = CardDefaults.cardColors(containerColor = Color.White),
                         elevation = CardDefaults.cardElevation(1.5.dp),
                         modifier = Modifier
@@ -1043,21 +802,21 @@ private fun ToolsGrid(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(12.dp),
+                                .padding(horizontal = 9.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Surface(
                                 shape = CircleShape,
                                 color = item.iconColor.copy(alpha = 0.12f),
-                                modifier = Modifier.size(38.dp)
+                                modifier = Modifier.size(30.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = item.icon,
                                         contentDescription = null,
                                         tint = item.iconColor,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
@@ -1066,7 +825,7 @@ private fun ToolsGrid(
                                 text = item.title,
                                 fontFamily = CairoFontFamily,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
                                 color = Color(0xFF1E293B),
                                 modifier = Modifier.weight(1f)
                             )

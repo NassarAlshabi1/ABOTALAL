@@ -1,5 +1,6 @@
 plugins {
   alias(libs.plugins.android.application)
+  alias(libs.plugins.gms.google.services)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
@@ -11,13 +12,20 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.alameer.app"
+    applicationId = "com.marina.flutter"
     minSdk = 24
     targetSdk = 36
-    versionCode = 15
-    versionName = "1.0.15"
+    versionCode = 16
+    versionName = "1.0.16"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Provider key is injected at build time (never committed). Empty means the
+    // user must enter their own key in AI Doctor.
+    val kiyaraApiKey = (System.getenv("KIYARA_API_KEY") ?: "")
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+    buildConfigField("String", "KIYARA_KEY", "\"$kiyaraApiKey\"")
   }
 
   signingConfigs {
@@ -25,7 +33,7 @@ android {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
       storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
+      keyAlias = System.getenv("KEY_ALIAS") ?: "my-upload-key"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {
@@ -39,7 +47,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
@@ -55,7 +64,15 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all {
+        it.systemProperty("robolectric.dependency.repo.id", "central")
+        it.systemProperty("robolectric.dependency.repo.url", "https://artifacts-caching-proxy.aws.intellij.net/maven-central")
+      }
+    }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
@@ -69,7 +86,7 @@ secrets {
 // This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  // implementation(platform(libs.firebase.bom))
+  implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -87,19 +104,24 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
-  implementation(libs.androidx.navigation.compose)
+  // implementation(libs.androidx.navigation.compose) // unused: screens are switched by a plain tab index, no NavHost
+  implementation(project(":l2tp-core"))
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
-  // implementation(libs.firebase.ai)
+  // implementation(libs.converter.moshi) // unused: no Retrofit client in the app
+  // implementation(libs.firebase.ai) // unused: no Gemini/generative calls anywhere
+  implementation(libs.firebase.appcheck.playintegrity)
+  debugImplementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
+  // implementation(libs.logging.interceptor) // unused: no OkHttp logging interceptor wired up
+  // implementation(libs.moshi.kotlin) // unused: router JSON is parsed by hand with org.json
   implementation(libs.okhttp)
+  // Real scannable QR (QR_CODE) and barcode (Code128) rendering for printed vouchers
+  implementation(libs.zxing.core)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
+  // implementation(libs.retrofit) // unused: all router calls go through MikroTikNativeApi/OkHttp directly
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -117,5 +139,5 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
+  // "ksp"(libs.moshi.kotlin.codegen) // unused: moshi.kotlin is commented out above
 }

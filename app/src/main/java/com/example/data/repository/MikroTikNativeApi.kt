@@ -1,14 +1,17 @@
 package com.example.data.repository
 
-import android.util.Log
+import com.example.util.OperationTelemetry
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 /**
@@ -20,7 +23,8 @@ class MikroTikNativeApi(
     val port: Int = 8728,
     private val connectTimeoutMs: Int = 12000,
     private val commandTimeoutMs: Int = 25000,
-    private val useSsl: Boolean = false
+    private val useSsl: Boolean = false,
+    private val sslSocketFactory: SSLSocketFactory? = null,
 ) {
     private var socket: Socket? = null
     private var inStream: InputStream? = null
@@ -31,16 +35,32 @@ class MikroTikNativeApi(
     private var savedPassword: String = ""
 
     companion object {
-        private const val TAG = "MikroTikNativeApi"
-
         fun testSocket(host: String, port: Int, timeoutMs: Int = 5000): Pair<Boolean, String> {
+            val operationId = OperationTelemetry.newOperationId()
+            val startedAt = OperationTelemetry.elapsedRealtime()
             return try {
                 val s = Socket()
                 s.connect(InetSocketAddress(host, port), timeoutMs)
                 s.close()
-                Pair(true, "✅ الاتصال ناجح ومكتمل!\n\nتم الوصول إلى الراوتر ($host) على المنفذ ($port) بنجاح، ومنفذ الخدمة جاهز لاستقبال الأوامر.")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
+                Pair(true, "✅ تم الوصول إلى ($host) على المنفذ ($port) عبر TCP.\n\nهذا اختبار وصول للمنفذ فقط، وليس اختبار تسجيل دخول.")
             } catch (e: Exception) {
-                Log.w(TAG, "Test socket failed to $host:$port", e)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = if (OperationTelemetry.classify(e) == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                    errorClass = OperationTelemetry.classify(e),
+                    transport = OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 val rawMsg = e.localizedMessage ?: ""
 
                 // Diagnose alternative common ports on same host to help the user
@@ -103,24 +123,58 @@ class MikroTikNativeApi(
     }
 
     fun connect(): Boolean {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
         synchronized(socketLock) {
+            lastConnectError = null
             return try {
                 val s = if (useSsl) {
-                    SSLSocketFactory.getDefault().createSocket()
+                    // Explicit SSL: connect the unconnected socket with our own timeout,
+                    // then force the handshake immediately so certificate problems surface
+                    // here (with a clear log) instead of corrupting the first command read.
+                    val ssl = (sslSocketFactory ?: SSLSocketFactory.getDefault()).createSocket() as SSLSocket
+                    ssl.tcpNoDelay = true
+                    ssl.keepAlive = true
+                    ssl.soTimeout = commandTimeoutMs
+                    ssl.connect(InetSocketAddress(host, port), connectTimeoutMs)
+                    try {
+                        ssl.startHandshake()
+                    } catch (h: SSLHandshakeException) {
+                        throw h
+                    }
+                    ssl
                 } else {
                     Socket()
                 }
                 s.tcpNoDelay = true
                 s.keepAlive = true
                 s.soTimeout = commandTimeoutMs
-                s.connect(InetSocketAddress(host, port), connectTimeoutMs)
+                if (!useSsl) s.connect(InetSocketAddress(host, port), connectTimeoutMs)
                 socket = s
                 inStream = s.getInputStream()
                 outStream = s.getOutputStream()
-                Log.d(TAG, "Socket connected to $host:$port (tcpNoDelay=true, keepAlive=true)")
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = OperationTelemetry.Outcome.SUCCESS,
+                    transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 true
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to connect socket to $host:$port", e)
+                lastConnectError = e.localizedMessage?.takeIf { it.isNotBlank() }
+                    ?: e.javaClass.simpleName
+                val errorClass = OperationTelemetry.classify(e)
+                OperationTelemetry.record(
+                    event = OperationTelemetry.Event.CONNECTION_RESULT,
+                    operation = OperationTelemetry.Operation.ROUTER_CONNECT,
+                    operationId = operationId,
+                    outcome = if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                    errorClass = errorClass,
+                    transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                    durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+                )
                 closeInternal()
                 false
             }
@@ -131,15 +185,11 @@ class MikroTikNativeApi(
         synchronized(socketLock) {
             if (isConnected()) return true
             if (savedUsername.isBlank()) return false
-            Log.w(TAG, "Socket disconnected, attempting auto-reconnect to $host:$port...")
             closeInternal()
             if (connect()) {
-                val (ok, msg) = performLogin(savedUsername, savedPassword)
+                val (ok, _) = performLogin(savedUsername, savedPassword)
                 if (ok) {
-                    Log.i(TAG, "Auto-reconnect & re-login succeeded!")
                     return true
-                } else {
-                    Log.e(TAG, "Auto-reconnect login failed: $msg")
                 }
             }
             return false
@@ -152,7 +202,13 @@ class MikroTikNativeApi(
             savedPassword = pass
             if (!isConnected()) {
                 if (!connect()) {
-                    return Pair(false, "تعذر إنشاء اتصال Socket بالراوتر على المنفذ $port. تأكد من فتح خدمة api في الراوتر والاتصال بنفس شبكة الراوتر.")
+                    val reason = lastConnectError?.takeIf { it.isNotBlank() }
+                    return Pair(
+                        false,
+                        "تعذر إنشاء اتصال Socket بالراوتر على المنفذ $port" +
+                            (if (reason != null) " (${reason})" else "") +
+                            ". تأكد من فتح خدمة api في الراوتر والوصول إلى المنفذ الصحيح."
+                    )
                 }
             }
             return performLogin(user, pass)
@@ -160,6 +216,20 @@ class MikroTikNativeApi(
     }
 
     private fun performLogin(user: String, pass: String): Pair<Boolean, String> {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
+        fun finish(result: Pair<Boolean, String>, errorClass: OperationTelemetry.ErrorClass? = null): Pair<Boolean, String> {
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.AUTH_RESULT,
+                operation = OperationTelemetry.Operation.ROUTER_AUTH,
+                operationId = operationId,
+                outcome = if (result.first) OperationTelemetry.Outcome.SUCCESS else OperationTelemetry.Outcome.FAILURE,
+                errorClass = errorClass,
+                transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
+            return result
+        }
         try {
             // First attempt: Modern ROS v6.43+ and v7 direct login
             writeSentence(listOf("/login", "=name=$user", "=password=$pass"))
@@ -167,7 +237,7 @@ class MikroTikNativeApi(
 
             val status = response.firstOrNull() ?: ""
             if (status == "!done") {
-                // Check if challenge response was requested (Older ROS v6)
+                // Check if challenge response was requested (Older ROS v6 pre-6.43)
                 val ret = response.firstOrNull { it.startsWith("=ret=") }
                 if (ret != null) {
                     val challengeHex = ret.removePrefix("=ret=")
@@ -175,120 +245,315 @@ class MikroTikNativeApi(
                     writeSentence(listOf("/login", "=name=$user", "=response=00$challengeHash"))
                     val resp2 = readSentence()
                     if (resp2.firstOrNull() == "!done") {
-                        return Pair(true, "تم تسجيل الدخول بنجاح")
-                    } else {
-                        val trap = resp2.firstOrNull { it.startsWith("=message=") }?.removePrefix("=message=")
-                        return Pair(false, trap ?: "اسم المستخدم أو كلمة المرور غير صحيحة")
+                        return finish(Pair(true, "تم تسجيل الدخول بنجاح"))
                     }
+                    val trap2 = resp2.firstOrNull { it.startsWith("=message=") }?.removePrefix("=message=")
+                    return finish(Pair(false, trap2 ?: "اسم المستخدم أو كلمة المرور غير صحيحة"), OperationTelemetry.ErrorClass.AUTHENTICATION)
                 }
-                return Pair(true, "تم تسجيل الدخول بنجاح")
-            } else if (status.startsWith("!trap")) {
+                return finish(Pair(true, "تم تسجيل الدخول بنجاح"))
+            }
+            if (status.startsWith("!trap") || status.startsWith("!fatal")) {
                 val trap = response.firstOrNull { it.startsWith("=message=") }?.removePrefix("=message=")
-                return Pair(false, trap ?: "اسم المستخدم أو كلمة المرور غير صحيحة")
+                    ?: "اسم المستخدم أو كلمة المرور غير صحيحة"
+                if (status.startsWith("!fatal")) closeInternal()
+                return finish(Pair(false, trap), OperationTelemetry.ErrorClass.AUTHENTICATION)
             }
 
-            return Pair(true, "تم تسجيل الدخول بنجاح")
-        } catch (e: Exception) {
-            Log.e(TAG, "Login error", e)
+            // Anything else (empty reply, EOF, unknown sentence) is a FAILED login —
+            // never report success without the router's explicit !done.
             closeInternal()
-            return Pair(false, "خطأ أثناء محاولة تسجيل الدخول: ${e.localizedMessage ?: "انتهت المهلة"}")
+            return finish(Pair(false, "استجابة غير متوقعة من الراوتر أثناء تسجيل الدخول — تأكد أن المنفذ $port مخصص لخدمة api وليس لخدمة أخرى"), OperationTelemetry.ErrorClass.PARSE)
+        } catch (e: Exception) {
+            closeInternal()
+            return finish(Pair(false, "خطأ أثناء محاولة تسجيل الدخول: ${e.localizedMessage ?: "انتهت المهلة"}"), OperationTelemetry.classify(e))
         }
     }
+
+    @Volatile
+    private var lastConnectError: String? = null
+
+    @Volatile
+    private var lastCommandError: String? = null
+    @Volatile
+    private var lastErrorIsTrap = false
+    @Volatile
+    private var lastCommandErrorClass: OperationTelemetry.ErrorClass? = null
+
+    /** Last !trap/!fatal/socket message recorded by [execute]; null when the last
+     *  command succeeded or never ran. */
+    val lastError: String?
+        get() = synchronized(socketLock) { lastCommandError }
 
     fun execute(command: String, params: Map<String, String>): List<Map<String, String>> {
         val arr = params.map { "${it.key}=${it.value}" }.toTypedArray()
         return execute(command, *arr)
     }
 
-    fun execute(command: String, vararg params: String): List<Map<String, String>> {
-        val results = mutableListOf<Map<String, String>>()
+    /** Like [execute] but reports !trap/!fatal/socket failures instead of silently
+     *  returning partial results — use it for mutations where the caller must know
+     *  whether the router actually applied the command. */
+    fun executeStrict(command: String, vararg params: String): List<Map<String, String>> {
         synchronized(socketLock) {
-            if (!isConnected()) {
-                if (!ensureConnected()) {
-                    return results
+            val res = executeInternal(command, *params)
+            val err = lastCommandError
+            if (err != null) throw java.io.IOException(err)
+            return res
+        }
+    }
+
+    fun executeStrict(command: String, params: Map<String, String>): List<Map<String, String>> {
+        val arr = params.map { "${it.key}=${it.value}" }.toTypedArray()
+        return executeStrict(command, *arr)
+    }
+
+    fun execute(command: String, vararg params: String): List<Map<String, String>> {
+        synchronized(socketLock) { return executeInternal(command, *params) }
+    }
+
+    /** Body of [execute]; MUST be called while holding socketLock so that
+     *  [lastCommandError] is observed atomically with the command's own reply. */
+    private fun executeInternal(command: String, vararg params: String): List<Map<String, String>> {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
+        lastCommandError = null
+        lastErrorIsTrap = false
+        lastCommandErrorClass = null
+        if (!isConnected()) {
+            if (!ensureConnected()) {
+                lastCommandError = "تعذر الاتصال بالراوتر لتنفيذ: $command"
+                lastCommandErrorClass = OperationTelemetry.ErrorClass.NETWORK
+                recordCommandResult(command, operationId, startedAt)
+                return mutableListOf()
+            }
+        }
+
+        val words = mutableListOf(command)
+        for (p in params) {
+            words.add(when {
+                // Pre-formed attribute (=key=value) and query (?key=value) words pass through
+                p.startsWith("=") || p.startsWith("?") -> p
+                else -> "=$p"
+            })
+        }
+
+        try {
+            val result = writeAndCollect(command, words)
+            recordCommandResult(command, operationId, startedAt)
+            return result
+        } catch (e: SocketTimeoutException) {
+            // A one-shot retry: reconnect + re-login, resend the command once.
+            closeInternal()
+            lastCommandError = null
+            lastCommandErrorClass = null
+            if (savedUsername.isNotBlank() && connect() &&
+                performLogin(savedUsername, savedPassword).first
+            ) {
+                try {
+                    val result = writeAndCollect(command, words)
+                    recordCommandResult(command, operationId, startedAt, retryCount = 1)
+                    return result
+                } catch (e2: Exception) {
+                    lastCommandError = "خطأ في تنفيذ $command: ${e2.message}"
+                    lastCommandErrorClass = OperationTelemetry.classify(e2)
+                    closeInternal()
+                    recordCommandResult(command, operationId, startedAt, retryCount = 1)
+                    return mutableListOf()
                 }
             }
+            lastCommandError = "انتهت مهلة الاتصال أثناء تنفيذ: $command (تعذرت إعادة المحاولة)"
+            lastCommandErrorClass = OperationTelemetry.ErrorClass.TIMEOUT
+            recordCommandResult(command, operationId, startedAt, retryCount = 1)
+            return mutableListOf()
+        } catch (e: Exception) {
+            lastCommandError = "خطأ في تنفيذ $command: ${e.message}"
+            lastCommandErrorClass = OperationTelemetry.classify(e)
+            // Socket error: close internal socket to trigger reconnect next time
+            closeInternal()
+            recordCommandResult(command, operationId, startedAt)
+            return mutableListOf()
+        }
+    }
 
-            try {
-                val words = mutableListOf(command)
-                for (p in params) {
-                    words.add("=$p")
-                }
-                writeSentence(words)
+    private fun recordCommandResult(command: String, operationId: String, startedAt: Long, retryCount: Int = 0) {
+        val errorClass = lastCommandErrorClass
+        if (errorClass == null && !OperationTelemetry.isMutationCommand(command)) return
+        val outcome = when (errorClass) {
+            OperationTelemetry.ErrorClass.TIMEOUT -> OperationTelemetry.Outcome.TIMEOUT
+            null -> OperationTelemetry.Outcome.SUCCESS
+            else -> OperationTelemetry.Outcome.FAILURE
+        }
+        OperationTelemetry.record(
+            event = OperationTelemetry.Event.COMMAND_RESULT,
+            operation = OperationTelemetry.Operation.ROUTER_COMMAND,
+            operationId = operationId,
+            outcome = outcome,
+            errorClass = errorClass,
+            transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+            commandFamily = OperationTelemetry.commandFamily(command),
+            durationMs = OperationTelemetry.elapsedRealtime() - startedAt,
+            retryCount = retryCount
+        )
+    }
 
-                var currentRecord = mutableMapOf<String, String>()
-                while (true) {
-                    val reply = readSentence()
-                    if (reply.isEmpty()) break
-                    val replyType = reply.firstOrNull() ?: ""
+    /** Sends [words] and collects !re records until !done. Throws socket/I-O errors;
+     *  records !trap/!fatal into [lastCommandError] and returns what arrived so far. */
+    private fun writeAndCollect(command: String, words: List<String>): List<Map<String, String>> {
+        val results = mutableListOf<Map<String, String>>()
+        writeSentence(words)
 
-                    if (replyType == "!re") {
-                        currentRecord = mutableMapOf()
-                        for (word in reply.drop(1)) {
-                            if (word.startsWith("=")) {
-                                val parts = word.substring(1).split("=", limit = 2)
-                                if (parts.size == 2) {
-                                    currentRecord[parts[0]] = parts[1]
-                                }
-                            }
+        var currentRecord = mutableMapOf<String, String>()
+        while (true) {
+            val reply = readSentence()
+            if (reply.isEmpty()) break
+            val replyType = reply.firstOrNull() ?: ""
+
+            if (replyType == "!re") {
+                currentRecord = mutableMapOf()
+                for (word in reply.drop(1)) {
+                    if (word.startsWith("=")) {
+                        val parts = word.substring(1).split("=", limit = 2)
+                        if (parts.size == 2) {
+                            currentRecord[parts[0]] = parts[1]
                         }
-                        results.add(currentRecord)
-                    } else if (replyType == "!done") {
-                        val doneMap = mutableMapOf<String, String>()
-                        for (word in reply.drop(1)) {
-                            if (word.startsWith("=")) {
-                                val parts = word.substring(1).split("=", limit = 2)
-                                if (parts.size == 2) {
-                                    doneMap[parts[0]] = parts[1]
-                                }
-                            }
-                        }
-                        if (doneMap.isNotEmpty() && results.isEmpty()) {
-                            results.add(doneMap)
-                        }
-                        break
-                    } else if (replyType == "!trap") {
-                        Log.w(TAG, "Command trap response for $command: $reply")
-                        break
-                    } else if (replyType == "!fatal") {
-                        Log.e(TAG, "Command fatal response for $command: $reply")
-                        closeInternal()
-                        break
                     }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Execute command error for $command", e)
-                // Socket error: close internal socket to trigger reconnect next time
+                results.add(currentRecord)
+            } else if (replyType == "!done") {
+                val doneMap = mutableMapOf<String, String>()
+                for (word in reply.drop(1)) {
+                    if (word.startsWith("=")) {
+                        val parts = word.substring(1).split("=", limit = 2)
+                        if (parts.size == 2) {
+                            doneMap[parts[0]] = parts[1]
+                        }
+                    }
+                }
+                if (doneMap.isNotEmpty() && results.isEmpty()) {
+                    results.add(doneMap)
+                }
+                break
+            } else if (replyType == "!trap") {
+                val msg = reply.firstOrNull { it.startsWith("=message=") }
+                    ?.removePrefix("=message=") ?: "رفض الراوتر الأمر"
+                lastCommandError = "فشل $command: $msg"
+                lastErrorIsTrap = true
+                lastCommandErrorClass = OperationTelemetry.ErrorClass.ROUTER_REJECTED
+                // Drain the !done sentence that always follows !trap — otherwise the
+                // next command reads it as its own reply and wrongly returns empty.
+                while (true) {
+                    val drain = readSentence()
+                    if (drain.isEmpty() || drain.firstOrNull() == "!done") break
+                }
+                break
+            } else if (replyType == "!fatal") {
+                lastCommandError = "انقطع اتصال الراوتر أثناء: $command"
+                lastCommandErrorClass = OperationTelemetry.ErrorClass.NETWORK
                 closeInternal()
+                break
             }
-            return results
         }
+        return results
+    }
+
+    /** True when the last command failed with !trap (router refused) rather than a
+     *  transport problem. Useful for callers deciding whether to fall back. */
+    fun lastErrorWasTrap(): Boolean {
+        return synchronized(socketLock) { lastErrorIsTrap }
     }
 
     fun ping(): Boolean {
         return try {
             val res = execute("/system/identity/print")
-            res.isNotEmpty()
+            // Success requires BOTH a real reply and no trap/fatal recorded for it.
+            val ok = res.isNotEmpty() && synchronized(socketLock) { lastCommandError } == null
+            ok
         } catch (_: Exception) {
             false
         }
     }
 
-    fun reboot(): Boolean {
-        return try {
-            execute("/system/reboot")
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    fun reboot(): Boolean = sendSystemCommand("/system/reboot")
 
-    fun shutdown(): Boolean {
-        return try {
-            execute("/system/shutdown")
-            true
-        } catch (e: Exception) {
-            false
+    fun shutdown(): Boolean = sendSystemCommand("/system/shutdown")
+
+    /** Sends a system-halting command (/system/reboot, /system/shutdown) and reports
+     *  honestly: a !trap (e.g. missing permission) is a failure; a !done, an EOF or a
+     *  connection reset right after sending means the router accepted the command and
+     *  is going down. */
+    private fun sendSystemCommand(command: String): Boolean {
+        val operationId = OperationTelemetry.newOperationId()
+        val startedAt = OperationTelemetry.elapsedRealtime()
+        fun finish(accepted: Boolean): Boolean {
+            val errorClass = lastCommandErrorClass
+            OperationTelemetry.record(
+                event = OperationTelemetry.Event.COMMAND_RESULT,
+                operation = OperationTelemetry.Operation.ROUTER_COMMAND,
+                operationId = operationId,
+                outcome = if (accepted) OperationTelemetry.Outcome.SUCCESS else if (errorClass == OperationTelemetry.ErrorClass.TIMEOUT) OperationTelemetry.Outcome.TIMEOUT else OperationTelemetry.Outcome.FAILURE,
+                errorClass = if (accepted) null else errorClass,
+                transport = if (useSsl) OperationTelemetry.Transport.NATIVE_API_SSL else OperationTelemetry.Transport.NATIVE_API,
+                commandFamily = OperationTelemetry.commandFamily(command),
+                durationMs = OperationTelemetry.elapsedRealtime() - startedAt
+            )
+            return accepted
+        }
+        synchronized(socketLock) {
+            lastCommandError = null
+            lastCommandErrorClass = null
+            if (!isConnected()) {
+                if (!ensureConnected()) {
+                    lastCommandError = "تعذر الاتصال بالراوتر لإرسال: $command"
+                    lastCommandErrorClass = OperationTelemetry.ErrorClass.NETWORK
+                    return finish(false)
+                }
+            }
+            return try {
+                writeSentence(listOf(command))
+                val reply = readSentence()
+                val first = reply.firstOrNull() ?: ""
+                when {
+                    first.startsWith("!trap") -> {
+                        val msg = reply.firstOrNull { it.startsWith("=message=") }
+                            ?.removePrefix("=message=") ?: "رفض الراوتر الأمر"
+                        lastCommandError = "فشل $command: $msg"
+                        lastCommandErrorClass = OperationTelemetry.ErrorClass.ROUTER_REJECTED
+                        // drain trailing !done so the socket stays usable if we survived
+                        try {
+                            while (true) {
+                                val drain = readSentence()
+                                if (drain.isEmpty() || drain.firstOrNull() == "!done") break
+                            }
+                        } catch (_: Exception) {}
+                        finish(false)
+                    }
+                    first == "!done" -> finish(true)
+                    // Empty reply / EOF after send: the router tore the connection down
+                    // while executing — treat as accepted, it is going down.
+                    else -> {
+                        closeInternal()
+                        finish(true)
+                    }
+                }
+            } catch (e: Exception) {
+                val msg = (e.message ?: "").lowercase()
+                if (e is EOFException || msg.contains("reset") || msg.contains("econnreset") ||
+                    msg.contains("end of stream") || msg.contains("broken pipe")
+                ) {
+                    // Router dropped the socket while going down — command was accepted.
+                    closeInternal()
+                    finish(true)
+                } else if (e is SocketTimeoutException) {
+                    // No reply and no close within the timeout — the command was sent and
+                    // the router often reboots without answering. Report accepted.
+                    lastCommandErrorClass = OperationTelemetry.ErrorClass.TIMEOUT
+                    finish(true)
+                } else {
+                    lastCommandError = "خطأ في إرسال $command: ${e.message}"
+                    lastCommandErrorClass = OperationTelemetry.classify(e)
+                    closeInternal()
+                    finish(false)
+                }
+            }
         }
     }
 
@@ -335,7 +600,10 @@ class MikroTikNativeApi(
                 out.write(len and 0xFF)
             }
             else -> {
-                out.write((len shr 24) or 0xE0)
+                // 5-byte form: 0xF0 marker followed by 4 length bytes (len >= 0x200000).
+                // The old 4-byte 0xE0 variant is NOT part of the RouterOS protocol.
+                out.write(0xF0)
+                out.write((len shr 24) and 0xFF)
                 out.write((len shr 16) and 0xFF)
                 out.write((len shr 8) and 0xFF)
                 out.write(len and 0xFF)
@@ -373,11 +641,13 @@ class MikroTikNativeApi(
                 val b3 = input.read()
                 ((firstByte and 0x1F) shl 16) or (b2 shl 8) or b3
             }
-            (firstByte and 0xF0) == 0xE0 -> {
+            (firstByte and 0xF0) == 0xF0 -> {
+                // 5-byte form: 0xF0 marker + 4 length bytes (len >= 0x200000)
                 val b2 = input.read()
                 val b3 = input.read()
                 val b4 = input.read()
-                ((firstByte and 0x0F) shl 24) or (b2 shl 16) or (b3 shl 8) or b4
+                val b5 = input.read()
+                (b2 shl 24) or (b3 shl 16) or (b4 shl 8) or b5
             }
             else -> return ""
         }

@@ -3,7 +3,6 @@ package com.example.utils
 import com.example.data.CardsCharset
 import com.example.data.Design
 import com.example.data.ElementStyle
-import kotlin.random.Random
 
 object A4 {
     const val WIDTH = 210f
@@ -23,13 +22,6 @@ fun cardSize(design: Design): Pair<Float, Float> {
     }
 }
 
-fun sampleCode(design: Design): String {
-    val digits = "0123456789"
-    val alnum = "abcdefghijkmnpqrstuvwxyz23456789"
-    val chars = if (design.charset == CardsCharset.NUMBERS_ONLY) digits else alnum
-    val length = maxOf(1, design.digits)
-    return (1..length).map { chars[Random.nextInt(chars.length)] }.joinToString("")
-}
 
 fun defaultDesign(id: String, name: String = "Default_Design"): Design {
     return Design(
@@ -45,7 +37,7 @@ fun defaultDesign(id: String, name: String = "Default_Design"): Design {
         cardHeight = 15f,
         showUsername = true,
         username = ElementStyle(show = true, x = 4f, y = 4f, fontSize = 11f, bold = true),
-        title = ElementStyle(show = false, y = 2f, fontSize = 8f, text = "MK ALAMEER"),
+        title = ElementStyle(show = false, y = 2f, fontSize = 8f, text = "MK NETCRAFT"),
         password = ElementStyle(show = false, x = 34f, y = 4f, fontSize = 10f),
         borderOn = true,
         borderSize = 0.35f,

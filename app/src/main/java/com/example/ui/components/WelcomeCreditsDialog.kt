@@ -1,5 +1,10 @@
 package com.example.ui.components
 
+import androidx.compose.material.icons.automirrored.filled.Chat
+
+import androidx.core.net.toUri
+import androidx.core.content.edit
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -43,7 +48,7 @@ fun WelcomeCreditsDialog(
     Dialog(
         onDismissRequest = {
             if (dontShowAgain) {
-                sharedPrefs.edit().putBoolean("pref_dont_show_credits", true).apply()
+                sharedPrefs.edit { putBoolean("pref_dont_show_credits", true) }
             }
             onDismiss()
         },
@@ -100,7 +105,7 @@ fun WelcomeCreditsDialog(
                         }
 
                         Text(
-                            text = "ABO TALAL VIP",
+                            text = "NetCraft",
                             fontFamily = CairoFontFamily,
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Black,
@@ -183,7 +188,7 @@ fun WelcomeCreditsDialog(
                                         color = Color(0xFF0D9488)
                                     )
                                     Text(
-                                        text = "عبدالحميد داوؤد (أبو طلال)",
+                                        text = "شركة الهيثم للبرمجيات",
                                         fontFamily = CairoFontFamily,
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.ExtraBold,
@@ -202,15 +207,15 @@ fun WelcomeCreditsDialog(
                                 color = Color(0xFF334155)
                             )
 
-                            // Contact 1: 778215553
+                            // Contact 1: 773114243
                             ContactRow(
-                                phone = "778215553",
+                                phone = "773114243",
                                 context = context
                             )
 
-                            // Contact 2: 700897775
+                            // Contact 2: 734587456
                             ContactRow(
-                                phone = "700897775",
+                                phone = "734587456",
                                 context = context
                             )
                         }
@@ -248,7 +253,7 @@ fun WelcomeCreditsDialog(
                                     color = Color(0xFF92400E)
                                 )
                                 Text(
-                                    text = "كل الشكر والتقدير لمن قام بالدعم والمساندة وتوفير بيئة ومتطلبات العمل.. الأخ أحمد حزام داوؤد.. ولا أنسى والداي وإخواني هم سبب نجاحي بعد الله عزوجل.",
+                                    text = "كل الشكر والتقدير لمن قام بالدعم والمساندة وتوفير بيئة ومتطلبات العمل.. ولا أنسى والداي وإخواني هم سبب نجاحي بعد الله عزوجل.",
                                     fontFamily = CairoFontFamily,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
@@ -289,7 +294,7 @@ fun WelcomeCreditsDialog(
                     Button(
                         onClick = {
                             if (dontShowAgain) {
-                                sharedPrefs.edit().putBoolean("pref_dont_show_credits", true).apply()
+                                sharedPrefs.edit { putBoolean("pref_dont_show_credits", true) }
                             }
                             onDismiss()
                         },
@@ -358,7 +363,7 @@ private fun ContactRow(
                         .clickable {
                             try {
                                 val intent = Intent(Intent.ACTION_DIAL).apply {
-                                    data = Uri.parse("tel:$phone")
+                                    data = ("tel:$phone").toUri()
                                 }
                                 context.startActivity(intent)
                             } catch (e: Exception) {
@@ -397,7 +402,7 @@ private fun ContactRow(
                             try {
                                 val url = "https://wa.me/967$phone"
                                 val intent = Intent(Intent.ACTION_VIEW).apply {
-                                    data = Uri.parse(url)
+                                    data = (url).toUri()
                                 }
                                 context.startActivity(intent)
                             } catch (e: Exception) {
@@ -411,7 +416,7 @@ private fun ContactRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Chat,
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "واتساب",
                             tint = Color(0xFF16A34A),
                             modifier = Modifier.size(16.dp)

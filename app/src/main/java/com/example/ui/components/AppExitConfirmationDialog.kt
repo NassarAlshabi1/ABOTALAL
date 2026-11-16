@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+
 import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -73,7 +75,7 @@ fun AppExitConfirmationDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.ExitToApp,
+                            imageVector = Icons.AutoMirrored.Filled.ExitToApp,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier.size(34.dp)

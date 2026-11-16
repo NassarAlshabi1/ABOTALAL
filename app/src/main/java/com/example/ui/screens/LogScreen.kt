@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.ActivityLog
+import com.example.data.model.RouterLogEntry
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import java.text.SimpleDateFormat
@@ -38,14 +40,47 @@ fun LogScreen(
     onBack: () -> Unit = {}
 ) {
     val logs by viewModel.activityLogs.collectAsState()
-    
+
     var searchQuery by remember { mutableStateOf("") }
     var showClearConfirm by remember { mutableStateOf(false) }
+
+    // Tab: local activity log vs the router's own log buffer (/log/print)
+    var selectedTab by remember { mutableStateOf(0) }
+    var routerLogs by remember { mutableStateOf<List<RouterLogEntry>?>(null) }
+    var routerLogsError by remember { mutableStateOf<String?>(null) }
+    var routerLogsLoading by remember { mutableStateOf(false) }
+    var routerTopicFilter by remember { mutableStateOf("الكل") }
+    val routerTopics = remember(routerLogs) {
+        (routerLogs ?: emptyList()).map { it.topics }.filter { it.isNotBlank() }.distinct().take(12)
+    }
+    val isConnected by viewModel.isConnected.collectAsState()
+
+    fun loadRouterLogs() {
+        routerLogsLoading = true
+        routerLogsError = null
+        viewModel.fetchRouterLogs(
+            onSuccess = { routerLogs = it; routerLogsLoading = false },
+            onError = { routerLogsError = it; routerLogsLoading = false; routerLogs = null }
+        )
+    }
+
+    LaunchedEffect(selectedTab, isConnected) {
+        if (selectedTab == 1 && routerLogs == null && isConnected && !routerLogsLoading) {
+            loadRouterLogs()
+        }
+    }
 
     val filteredLogs = remember(logs, searchQuery) {
         logs.filter {
             it.action.contains(searchQuery, ignoreCase = true) ||
                     it.details.contains(searchQuery, ignoreCase = true)
+        }
+    }
+    val filteredRouterLogs = remember(routerLogs, routerTopicFilter, searchQuery) {
+        (routerLogs ?: emptyList()).filter { entry ->
+            (routerTopicFilter == "الكل" || entry.topics == routerTopicFilter) &&
+                (searchQuery.isBlank() || entry.message.contains(searchQuery, ignoreCase = true) ||
+                    entry.topics.contains(searchQuery, ignoreCase = true))
         }
     }
 
@@ -141,11 +176,36 @@ fun LogScreen(
             ) {
                 Spacer(modifier = Modifier.height(10.dp))
 
+                // Tab selector: local activity log | router log buffer
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("سجل العمليات", "سجلات الراوتر").forEachIndexed { idx, label ->
+                        FilterChip(
+                            selected = selectedTab == idx,
+                            onClick = { selectedTab = idx },
+                            label = { Text(label, fontFamily = CairoFontFamily, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFF0C5A60),
+                                selectedLabelColor = Color.White
+                            )
+                        )
+                    }
+                }
+
                 // Search Bar
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("ابحث في سجل العمليات والتحكم...") },
+                    placeholder = {
+                        Text(
+                            if (selectedTab == 0) "ابحث في سجل العمليات والتحكم..."
+                            else "ابحث في سجلات الراوتر..."
+                        )
+                    },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     singleLine = true,
                     modifier = Modifier
@@ -154,7 +214,115 @@ fun LogScreen(
                     shape = RoundedCornerShape(12.dp)
                 )
 
-                if (filteredLogs.isEmpty()) {
+                if (selectedTab == 1) {
+                    // Router log buffer section
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (routerLogs != null) "${filteredRouterLogs.size} سجل من الراوتر" else "سجلات الراوتر (/log)",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                        )
+                        TextButton(
+                            onClick = { loadRouterLogs() },
+                            enabled = isConnected && !routerLogsLoading
+                        ) {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (routerLogsLoading) Color.Gray else Color(0xFF0C5A60)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                if (routerLogsLoading) "جاري التحميل..." else "تحديث",
+                                fontFamily = CairoFontFamily,
+                                fontSize = 12.sp,
+                                color = if (routerLogsLoading) Color.Gray else Color(0xFF0C5A60)
+                            )
+                        }
+                    }
+
+                    // Topic filter chips (error / system / info / ... as reported by the router)
+                    if (routerTopics.isNotEmpty()) {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 4.dp)
+                        ) {
+                            items(listOf("الكل") + routerTopics) { topic ->
+                                FilterChip(
+                                    selected = routerTopicFilter == topic,
+                                    onClick = { routerTopicFilter = topic },
+                                    label = { Text(topic, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                    }
+
+                    when {
+                        routerLogsError != null -> {
+                            Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.padding(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.CloudOff,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f),
+                                        modifier = Modifier.size(56.dp)
+                                    )
+                                    Text(
+                                        routerLogsError ?: "",
+                                        fontFamily = CairoFontFamily,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                        routerLogs == null && routerLogsLoading -> {
+                            Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                        filteredRouterLogs.isEmpty() -> {
+                            Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                                Text(
+                                    "لا توجد سجلات من الراوتر تطابق البحث",
+                                    fontFamily = CairoFontFamily,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                        else -> {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .weight(1f)
+                                    .padding(horizontal = 24.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(filteredRouterLogs) { entry ->
+                                    RouterLogItemCard(entry)
+                                }
+                                item { Spacer(modifier = Modifier.height(100.dp)) }
+                            }
+                        }
+                    }
+                } else if (filteredLogs.isEmpty()) {
                     Box(
                         modifier = Modifier.fillMaxSize().weight(1f),
                         contentAlignment = Alignment.Center
@@ -227,6 +395,62 @@ fun LogScreen(
                             Text("تراجع", style = MaterialTheme.typography.titleMedium)
                         }
                     }
+                )
+            }
+        }
+    }
+}
+
+/** One row of the router's own log buffer — time, topics and the raw message. */
+@Composable
+fun RouterLogItemCard(entry: RouterLogEntry) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .background(
+                        color = when {
+                            entry.topics.contains("error", ignoreCase = true) -> MaterialTheme.colorScheme.error
+                            entry.topics.contains("warning", ignoreCase = true) -> Color(0xFFF59E0B)
+                            entry.topics.contains("critical", ignoreCase = true) -> Color(0xFFDC2626)
+                            else -> MaterialTheme.colorScheme.secondary
+                        },
+                        shape = CircleShape
+                    )
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = entry.topics.ifBlank { "log" },
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = entry.time,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = entry.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

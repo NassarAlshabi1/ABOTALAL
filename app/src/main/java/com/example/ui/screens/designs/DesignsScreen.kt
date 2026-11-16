@@ -1,9 +1,15 @@
 package com.example.ui.screens.designs
 
+import androidx.core.graphics.toColorInt
+import androidx.core.net.toUri
+
+import java.util.Locale
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.widget.Toast
@@ -13,8 +19,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -23,6 +31,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -64,6 +73,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +82,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -87,12 +99,18 @@ import com.example.data.Design
 import com.example.data.ElementStyle
 import com.example.utils.A4
 import com.example.utils.cardSize
-import com.example.utils.sampleCode
 import com.example.viewmodel.DesignsViewModel
+import com.example.util.CardPrintAndExportHelper
+import com.example.util.OperationTelemetry
 import java.io.File
 import java.io.FileOutputStream
+import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,10 +119,11 @@ fun DesignsScreen(
     viewModel: DesignsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         factory = DesignsViewModel.Factory(context)
     ),
-    availableUmPackages: List<String> = listOf("1_Hour", "3_Hours", "Daily_500MB", "Weekly_2GB", "Monthly_10GB", "VIP_Unlimited"),
-    availableHotspotProfiles: List<String> = listOf("default", "1Hour_500MB", "Daily_Unlimited", "Weekly_Super", "Monthly_Fast"),
+    availableUmPackages: List<String> = emptyList(),
+    availableHotspotProfiles: List<String> = emptyList(),
     onBack: () -> Unit = {}
 ) {
+    val coroutineScope = rememberCoroutineScope()
     val designs by viewModel.designs.collectAsState()
     val selectedDesign by viewModel.selectedDesign.collectAsState()
     val draftDesign by viewModel.draftDesign.collectAsState()
@@ -117,12 +136,31 @@ fun DesignsScreen(
     var onColorSelectedCallback by remember { mutableStateOf<(String) -> Unit>({}) }
     
     var showBuiltInBgDialog by remember { mutableStateOf(false) }
+    var showDeleteDesignConfirm by remember { mutableStateOf(false) }
 
     // Launchers for image picking
     val bgImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
             activeDesign?.let { d ->
-                viewModel.updateDraft(d.copy(bgOn = true, bgUrl = it.toString(), bgType = BackgroundType.CUSTOM))
+                try {
+                    val storedImage = copyBackgroundToAppStorage(context, it, d.id)
+                    if (storedImage != null) {
+                        deleteStoredBackgroundIfOwned(context, d.bgUrl)
+                        val updatedDesign = d.copy(
+                            bgOn = true,
+                            bgUrl = storedImage,
+                            bgType = BackgroundType.CUSTOM
+                        )
+                        // الحفظ الفوري يضمن بقاء الصورة مع الباقة المختارة حتى لو أُغلقت الشاشة.
+                        viewModel.saveDesign(updatedDesign)
+                        CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
+                        Toast.makeText(context, "تم حفظ الخلفية مع التصميم والباقة المختارة", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "تعذر قراءة صورة الخلفية", Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "فشل حفظ الخلفية: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -431,7 +469,14 @@ fun DesignsScreen(
                                 }
                                 
                                 OutlinedButton(
-                                    onClick = { bgImagePicker.launch("image/*") },
+                                    onClick = {
+                                        val design = activeDesign
+                                        if (design.userManagerPackageId.isNullOrBlank() && design.hotspotPackageId.isNullOrBlank()) {
+                                            Toast.makeText(context, "اختر باقة User Manager أو Hotspot قبل إضافة الخلفية", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            bgImagePicker.launch("image/*")
+                                        }
+                                    },
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
@@ -463,7 +508,10 @@ fun DesignsScreen(
                                     IconButton(
                                         onClick = {
                                             activeDesign.let {
-                                                viewModel.updateDraft(it.copy(bgUrl = null, bgOn = false))
+                                                deleteStoredBackgroundIfOwned(context, it.bgUrl)
+                                                val updatedDesign = it.copy(bgUrl = null, bgOn = false)
+                                                viewModel.saveDesign(updatedDesign)
+                                                CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
                                             }
                                         }
                                     ) {
@@ -955,6 +1003,7 @@ fun DesignsScreen(
                                 onClick = {
                                     activeDesign?.let {
                                         viewModel.saveDesign(it)
+                                        CardPrintAndExportHelper.saveDesignAsTemplate(context, it)
                                         Toast.makeText(context, "تم حفظ التصميم بنجاح ✅", Toast.LENGTH_SHORT).show()
                                     }
                                 },
@@ -969,10 +1018,7 @@ fun DesignsScreen(
                             
                             Button(
                                 onClick = {
-                                    selectedDesign?.id?.let {
-                                        viewModel.deleteDesign(it)
-                                        Toast.makeText(context, "تم حذف التصميم", Toast.LENGTH_SHORT).show()
-                                    }
+                                    if (selectedDesign != null) showDeleteDesignConfirm = true
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp),
@@ -1036,7 +1082,7 @@ fun DesignsScreen(
                         activeDesign?.let { d ->
                             val (wMm, hMm) = cardSize(d)
                             Text(
-                                text = "${String.format("%.1f", wMm)} × ${String.format("%.1f", hMm)} مم",
+                                text = "${String.format(Locale.US, "%.1f", wMm)} × ${String.format(Locale.US, "%.1f", hMm)} مم",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1046,18 +1092,34 @@ fun DesignsScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     
                     activeDesign?.let { design ->
-                        Box(
+                        BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
+                            val (wMm, hMm) = cardSize(design)
+                            val fitWidth = if (wMm <= 0f || hMm <= 0f) {
+                                maxWidth.value
+                            } else {
+                                min(maxWidth.value, maxHeight.value * (wMm / hMm))
+                            }
                             CardPreview(
                                 design = design,
-                                width = 280f
+                                width = fitWidth,
+                                onUsernamePositionChange = { x, y ->
+                                    viewModel.updateDraft(
+                                        design.copy(username = design.username.copy(x = x, y = y))
+                                    )
+                                }
                             )
                         }
                     }
+                    Text(
+                        text = "اسحب داخل المعاينة لتحريك رقم الكرت",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -1081,10 +1143,72 @@ fun DesignsScreen(
         BuiltInBackgroundsDialog(
             onDismiss = { showBuiltInBgDialog = false },
             onSelect = { bgStyle ->
-                activeDesign?.let { d ->
-                    viewModel.updateDraft(d.copy(bgOn = true, bgType = BackgroundType.BUILT_IN, bgUrl = bgStyle))
+                val design = activeDesign
+                if (design != null) {
+                    coroutineScope.launch {
+                        try {
+                            val storedImage = withContext(Dispatchers.IO) {
+                                copyBackgroundToAppStorage(context, (bgStyle).toUri(), design.id)
+                            }
+                            if (storedImage != null) {
+                                deleteStoredBackgroundIfOwned(context, design.bgUrl)
+                                val updatedDesign = design.copy(
+                                    bgOn = true,
+                                    bgType = BackgroundType.BUILT_IN,
+                                    bgUrl = storedImage
+                                )
+                                viewModel.saveDesign(updatedDesign)
+                                CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
+                                Toast.makeText(context, "تم حفظ الخلفية الجاهزة مع التصميم", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "تعذر تنزيل الخلفية الجاهزة", Toast.LENGTH_LONG).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "فشل حفظ الخلفية: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
                 showBuiltInBgDialog = false
+            }
+        )
+    }
+
+    if (showDeleteDesignConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDesignConfirm = false },
+            title = {
+                Text(
+                    text = "حذف التصميم",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "هل تريد حذف التصميم \"${selectedDesign?.name.orEmpty()}\" نهائياً؟ لا يمكن التراجع عن هذه العملية.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteDesignConfirm = false
+                        selectedDesign?.let { design ->
+                            deleteStoredBackgroundIfOwned(context, design.bgUrl)
+                            viewModel.deleteDesign(design.id)
+                            Toast.makeText(context, "تم حذف التصميم", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("نعم، احذف", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDesignConfirm = false }) {
+                    Text("إلغاء")
+                }
             }
         )
     }
@@ -1093,6 +1217,38 @@ fun DesignsScreen(
 // ============================================================
 // 🧩 المكونات المساعدة (Dropdowns, Cards, Fields, Pad, Preview)
 // ============================================================
+
+private fun copyBackgroundToAppStorage(context: Context, source: Uri, designId: String): String? {
+    val directory = File(context.filesDir, "card_backgrounds").apply { mkdirs() }
+    val target = File(directory, "${designId}_${System.currentTimeMillis()}.img")
+    return try {
+        val inputStream = when (source.scheme?.lowercase(Locale.ROOT)) {
+            "http", "https" -> URL(source.toString()).openStream()
+            else -> context.contentResolver.openInputStream(source)
+        }
+        inputStream?.use { input ->
+            FileOutputStream(target).use { output -> input.copyTo(output) }
+        } ?: return null
+        Uri.fromFile(target).toString()
+    } catch (e: Exception) {
+        target.delete()
+        throw e
+    }
+}
+
+private fun deleteStoredBackgroundIfOwned(context: Context, url: String?) {
+    if (url.isNullOrBlank()) return
+    try {
+        val uri = (url).toUri()
+        val file = if (uri.scheme == "file") File(uri.path ?: "") else null
+        val ownedDirectory = File(context.filesDir, "card_backgrounds").canonicalFile
+        if (file != null && file.exists() && file.canonicalFile.parentFile == ownedDirectory) {
+            file.delete()
+        }
+    } catch (_: Exception) {
+        // A remote/built-in URL or an already removed file needs no cleanup.
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1238,7 +1394,7 @@ fun NumField(
             }
             
             OutlinedTextField(
-                value = String.format("%.${decimals}f", value),
+                value = String.format(Locale.US, "%.${decimals}f", value),
                 onValueChange = { newValue ->
                     val parsed = newValue.toFloatOrNull()
                     if (parsed != null) onValueChange(clamp(parsed))
@@ -1270,7 +1426,7 @@ fun ColorField(
     modifier: Modifier = Modifier
 ) {
     val color = try {
-        Color(android.graphics.Color.parseColor(value))
+        Color((value).toColorInt())
     } catch (_: Exception) {
         Color.Black
     }
@@ -1346,8 +1502,8 @@ fun ElementEditorCard(
                     val newY = maxOf(0f, element.y + dy)
                     onElementChange(
                         element.copy(
-                            x = String.format("%.1f", newX).toFloat(),
-                            y = String.format("%.1f", newY).toFloat()
+                            x = String.format(Locale.US, "%.1f", newX).toFloat(),
+                            y = String.format(Locale.US, "%.1f", newY).toFloat()
                         )
                     )
                 }
@@ -1583,23 +1739,27 @@ fun MovePad(
 // 🎴 CardPreview - معاينة الكرت الثابتة في الأسفل
 // ============================================================
 
+private const val PREVIEW_CARD_NUMBER = "1234567890"
+
 @Composable
 fun CardPreview(
     design: Design,
-    width: Float = 280f
+    width: Float = 280f,
+    onUsernamePositionChange: ((Float, Float) -> Unit)? = null
 ) {
     val density = LocalDensity.current
     val (cardWidthMm, cardHeightMm) = cardSize(design)
+    val dpPerMm = width / maxOf(10f, cardWidthMm)
     val scale = with(density) { width.dp.toPx() / maxOf(10f, cardWidthMm) }
-    val code = remember(design.digits, design.charset) {
-        sampleCode(design)
-    }
+    val previewHeightDp = cardHeightMm * dpPerMm
+    val latestUsername by rememberUpdatedState(design.username)
+    val latestPositionChange by rememberUpdatedState(onUsernamePositionChange)
     
     Box(
         modifier = Modifier
             .size(
-                width = with(density) { width.dp },
-                height = with(density) { (cardHeightMm * scale).dp }
+                width = width.dp,
+                height = previewHeightDp.dp
             )
             .border(
                 width = 1.dp,
@@ -1614,6 +1774,28 @@ fun CardPreview(
                     Color.White
                 }
             )
+            .pointerInput(dpPerMm) {
+                if (latestPositionChange == null) return@pointerInput
+                var startPointer = Offset.Zero
+                var startMm = Offset.Zero
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        startPointer = offset
+                        startMm = Offset(latestUsername.x, latestUsername.y)
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        val x = (startMm.x + (change.position.x - startPointer.x) / scale)
+                            .coerceIn(0f, cardWidthMm)
+                        val y = (startMm.y + (change.position.y - startPointer.y) / scale)
+                            .coerceIn(0f, cardHeightMm)
+                        latestPositionChange?.invoke(
+                            (x * 10f).roundToInt() / 10f,
+                            (y * 10f).roundToInt() / 10f
+                        )
+                    }
+                )
+            }
     ) {
         // الخلفية
         if (design.bgOn && design.bgUrl != null) {
@@ -1632,7 +1814,7 @@ fun CardPreview(
         Canvas(modifier = Modifier.fillMaxSize()) {
             if (design.borderOn) {
                 val borderColor = try {
-                    Color(android.graphics.Color.parseColor(design.borderColor))
+                    Color((design.borderColor).toColorInt())
                 } catch (_: Exception) {
                     Color.Black
                 }
@@ -1645,33 +1827,37 @@ fun CardPreview(
             }
         }
         
-        // تحويل المليمترات إلى بكسل
-        fun mmToPx(mm: Float): Float = mm * scale
+        // mm → dp directly: the preview is `width` dp wide for `cardWidthMm` mm.
+        fun mmToDp(mm: Float): Float = mm * dpPerMm
         
         // العنوان
         if (design.title.show && design.title.text.isNotEmpty()) {
             Text(
                 text = design.title.text,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.title.x).dp },
-                    top = with(density) { mmToPx(design.title.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.title.x).dp,
+                    y = mmToDp(design.title.y).dp
                 ),
-                fontSize = with(density) { maxOf(6f, design.title.fontSize * 0.353f * scale).sp },
-                color = try { Color(android.graphics.Color.parseColor(design.title.color)) } catch (_: Exception) { Color.Black },
+                fontSize = maxOf(6f, design.title.fontSize * width / (cardWidthMm * 2.83465f)).sp,
+                color = try { Color((design.title.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.title.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
         
+        // رقم توضيحي للمعاينة فقط؛ لا يُستخدم في توليد أو طباعة بيانات الدفعات.
         // اسم المستخدم
         if (design.showUsername && design.username.show) {
             Text(
-                text = code,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.username.x).dp },
-                    top = with(density) { mmToPx(design.username.y).dp }
+                text = PREVIEW_CARD_NUMBER,
+                modifier = Modifier.offset(
+                    x = mmToDp(design.username.x).dp,
+                    y = mmToDp(design.username.y).dp
                 ),
-                fontSize = with(density) { maxOf(7f, design.username.fontSize * 0.353f * scale).sp },
-                color = try { Color(android.graphics.Color.parseColor(design.username.color)) } catch (_: Exception) { Color.Black },
+                fontSize = maxOf(7f, design.username.fontSize * width / (cardWidthMm * 2.83465f)).sp,
+                textAlign = TextAlign.Left,
+                maxLines = 1,
+                softWrap = false,
+                color = try { Color((design.username.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.username.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1679,13 +1865,13 @@ fun CardPreview(
         // كلمة المرور
         if (design.password.show) {
             Text(
-                text = code,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.password.x).dp },
-                    top = with(density) { mmToPx(design.password.y).dp }
+                text = "",
+                modifier = Modifier.offset(
+                    x = mmToDp(design.password.x).dp,
+                    y = mmToDp(design.password.y).dp
                 ),
-                fontSize = with(density) { maxOf(7f, design.password.fontSize * 0.353f * scale).sp },
-                color = try { Color(android.graphics.Color.parseColor(design.password.color)) } catch (_: Exception) { Color.Black },
+                fontSize = maxOf(7f, design.password.fontSize * width / (cardWidthMm * 2.83465f)).sp,
+                color = try { Color((design.password.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.password.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1693,13 +1879,13 @@ fun CardPreview(
         // السعر
         if (design.price.show) {
             Text(
-                text = "500 YER",
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.price.x).dp },
-                    top = with(density) { mmToPx(design.price.y).dp }
+                text = design.price.text,
+                modifier = Modifier.offset(
+                    x = mmToDp(design.price.x).dp,
+                    y = mmToDp(design.price.y).dp
                 ),
-                fontSize = with(density) { maxOf(6f, design.price.fontSize * 0.353f * scale).sp },
-                color = try { Color(android.graphics.Color.parseColor(design.price.color)) } catch (_: Exception) { Color.Black },
+                fontSize = maxOf(6f, design.price.fontSize * width / (cardWidthMm * 2.83465f)).sp,
+                color = try { Color((design.price.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.price.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1707,13 +1893,13 @@ fun CardPreview(
         // الرقم التسلسلي
         if (design.serial.show) {
             Text(
-                text = "SN: 0001",
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.serial.x).dp },
-                    top = with(density) { mmToPx(design.serial.y).dp }
+                text = design.serial.text,
+                modifier = Modifier.offset(
+                    x = mmToDp(design.serial.x).dp,
+                    y = mmToDp(design.serial.y).dp
                 ),
-                fontSize = with(density) { maxOf(5f, design.serial.fontSize * 0.353f * scale).sp },
-                color = try { Color(android.graphics.Color.parseColor(design.serial.color)) } catch (_: Exception) { Color.Black },
+                fontSize = maxOf(5f, design.serial.fontSize * width / (cardWidthMm * 2.83465f)).sp,
+                color = try { Color((design.serial.color).toColorInt()) } catch (_: Exception) { Color.Black },
                 fontWeight = if (design.serial.bold) FontWeight.Bold else FontWeight.Normal
             )
         }
@@ -1722,12 +1908,12 @@ fun CardPreview(
         if (design.payment.show && design.payment.text.isNotEmpty()) {
             Text(
                 text = design.payment.text,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.payment.x).dp },
-                    top = with(density) { mmToPx(design.payment.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.payment.x).dp,
+                    y = mmToDp(design.payment.y).dp
                 ),
-                fontSize = with(density) { maxOf(5f, design.payment.fontSize * 0.353f * scale).sp },
-                color = try { Color(android.graphics.Color.parseColor(design.payment.color)) } catch (_: Exception) { Color.Black }
+                fontSize = maxOf(5f, design.payment.fontSize * width / (cardWidthMm * 2.83465f)).sp,
+                color = try { Color((design.payment.color).toColorInt()) } catch (_: Exception) { Color.Black }
             )
         }
 
@@ -1735,12 +1921,12 @@ fun CardPreview(
         if (design.pos.show && design.pos.text.isNotEmpty()) {
             Text(
                 text = design.pos.text,
-                modifier = Modifier.padding(
-                    start = with(density) { mmToPx(design.pos.x).dp },
-                    top = with(density) { mmToPx(design.pos.y).dp }
+                modifier = Modifier.offset(
+                    x = mmToDp(design.pos.x).dp,
+                    y = mmToDp(design.pos.y).dp
                 ),
-                fontSize = with(density) { maxOf(5f, design.pos.fontSize * 0.353f * scale).sp },
-                color = try { Color(android.graphics.Color.parseColor(design.pos.color)) } catch (_: Exception) { Color.Black }
+                fontSize = maxOf(5f, design.pos.fontSize * width / (cardWidthMm * 2.83465f)).sp,
+                color = try { Color((design.pos.color).toColorInt()) } catch (_: Exception) { Color.Black }
             )
         }
         
@@ -1748,13 +1934,13 @@ fun CardPreview(
         if (design.barcodeOn) {
             Box(
                 modifier = Modifier
-                    .padding(
-                        start = with(density) { mmToPx(design.barcodeX).dp },
-                        top = with(density) { mmToPx(design.barcodeY).dp }
+                    .offset(
+                        x = mmToDp(design.barcodeX).dp,
+                        y = mmToDp(design.barcodeY).dp
                     )
                     .size(
-                        width = with(density) { mmToPx(design.barcodeWidth).dp },
-                        height = with(density) { mmToPx(design.barcodeHeight).dp }
+                        width = mmToDp(design.barcodeWidth).dp,
+                        height = mmToDp(design.barcodeHeight).dp
                     )
                     .border(0.5.dp, Color.DarkGray)
                     .background(Color.White),
@@ -1786,13 +1972,13 @@ fun CardPreview(
                     .build(),
                 contentDescription = "الشعار",
                 modifier = Modifier
-                    .padding(
-                        start = with(density) { mmToPx(design.logoX).dp },
-                        top = with(density) { mmToPx(design.logoY).dp }
+                    .offset(
+                        x = mmToDp(design.logoX).dp,
+                        y = mmToDp(design.logoY).dp
                     )
                     .size(
-                        width = with(density) { mmToPx(design.logoWidth).dp },
-                        height = with(density) { mmToPx(design.logoHeight).dp }
+                        width = mmToDp(design.logoWidth).dp,
+                        height = mmToDp(design.logoHeight).dp
                     ),
                 contentScale = ContentScale.Fit
             )
@@ -1829,7 +2015,7 @@ fun ColorPickerDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     presetColors.forEach { hex ->
-                        val col = try { Color(android.graphics.Color.parseColor(hex)) } catch (_: Exception) { Color.Black }
+                        val col = try { Color((hex).toColorInt()) } catch (_: Exception) { Color.Black }
                         Box(
                             modifier = Modifier
                                 .size(36.dp)
@@ -1967,6 +2153,10 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
         val pageMarginPt = design.pageMargin * mmToPt
         val marginHPt = design.marginH * mmToPt
         val marginVPt = design.marginV * mmToPt
+        val backgroundBitmap = loadStoredBackgroundBitmap(context, design)
+        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            isFilterBitmap = true
+        }
 
         var cardCount = 0
         for (r in 0 until rows) {
@@ -1976,20 +2166,29 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                 val right = left + cardWPt
                 val bottom = top + cardHPt
 
+                // رسم الخلفية المحفوظة داخل كل كرت في ملف PDF أيضاً.
+                if (backgroundBitmap != null) {
+                    canvas.drawBitmap(
+                        backgroundBitmap,
+                        null,
+                        RectF(left, top, right, bottom),
+                        backgroundPaint
+                    )
+                }
+
                 // الإطار
                 if (design.borderOn) {
                     paintBorder.strokeWidth = max(0.5f, design.borderSize * mmToPt)
-                    paintBorder.color = try { android.graphics.Color.parseColor(design.borderColor) } catch (_: Exception) { android.graphics.Color.BLACK }
+                    paintBorder.color = try { (design.borderColor).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
                     canvas.drawRect(left, top, right, bottom, paintBorder)
                 }
 
-                val dummyCode = sampleCode(design)
                 cardCount++
 
                 // العنوان
                 if (design.title.show && design.title.text.isNotEmpty()) {
                     paintText.textSize = design.title.fontSize * 0.8f
-                    paintText.color = try { android.graphics.Color.parseColor(design.title.color) } catch (_: Exception) { android.graphics.Color.BLACK }
+                    paintText.color = try { (design.title.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
                     canvas.drawText(design.title.text, left + design.title.x * mmToPt, top + design.title.y * mmToPt + paintText.textSize, paintText)
                 }
 
@@ -1997,29 +2196,29 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
                 if (design.showUsername && design.username.show) {
                     paintText.textSize = design.username.fontSize * 0.8f
                     paintText.isFakeBoldText = design.username.bold
-                    paintText.color = try { android.graphics.Color.parseColor(design.username.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText(dummyCode, left + design.username.x * mmToPt, top + design.username.y * mmToPt + paintText.textSize, paintText)
+                    paintText.color = try { (design.username.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
+                    canvas.drawText(PREVIEW_CARD_NUMBER, left + design.username.x * mmToPt, top + design.username.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // كلمة المرور
                 if (design.password.show) {
                     paintText.textSize = design.password.fontSize * 0.8f
-                    paintText.color = try { android.graphics.Color.parseColor(design.password.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText(dummyCode, left + design.password.x * mmToPt, top + design.password.y * mmToPt + paintText.textSize, paintText)
+                    paintText.color = try { (design.password.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
+                    canvas.drawText("", left + design.password.x * mmToPt, top + design.password.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // السعر
                 if (design.price.show) {
                     paintText.textSize = design.price.fontSize * 0.8f
-                    paintText.color = try { android.graphics.Color.parseColor(design.price.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText("500 YER", left + design.price.x * mmToPt, top + design.price.y * mmToPt + paintText.textSize, paintText)
+                    paintText.color = try { (design.price.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
+                    canvas.drawText(design.price.text, left + design.price.x * mmToPt, top + design.price.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // الرقم التسلسلي
                 if (design.serial.show) {
                     paintText.textSize = design.serial.fontSize * 0.8f
-                    paintText.color = try { android.graphics.Color.parseColor(design.serial.color) } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText("SN: $cardCount", left + design.serial.x * mmToPt, top + design.serial.y * mmToPt + paintText.textSize, paintText)
+                    paintText.color = try { (design.serial.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
+                    canvas.drawText(design.serial.text, left + design.serial.x * mmToPt, top + design.serial.y * mmToPt + paintText.textSize, paintText)
                 }
 
                 // الباركود المدمج
@@ -2041,7 +2240,9 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
         pdfDocument.finishPage(page)
 
         // حفظ الملف
-        val pdfFile = File(context.cacheDir, "Card_Design_${design.name.replace(" ", "_")}.pdf")
+        val previewDir = File(context.cacheDir, "designs").apply { mkdirs() }
+        val safeDesignName = design.name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
+        val pdfFile = File(previewDir, "Card_Design_$safeDesignName.pdf")
         val out = FileOutputStream(pdfFile)
         pdfDocument.writeTo(out)
         out.close()
@@ -2056,7 +2257,23 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
         }
         context.startActivity(Intent.createChooser(intent, "معاينة وطباعة ملف PDF"))
     } catch (e: Exception) {
-        e.printStackTrace()
-        Toast.makeText(context, "فشل فتح PDF: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+        OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
+        Toast.makeText(context, "تعذر فتح ملف PDF.", Toast.LENGTH_LONG).show()
+    }
+}
+
+private fun loadStoredBackgroundBitmap(context: Context, design: Design): Bitmap? {
+    if (!design.bgOn || design.bgUrl.isNullOrBlank()) return null
+    return try {
+        val uri = (design.bgUrl).toUri()
+        when (uri.scheme) {
+            "file" -> BitmapFactory.decodeFile(uri.path)
+            "content" -> context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input)
+            }
+            else -> null
+        }
+    } catch (_: Exception) {
+        null
     }
 }

@@ -1,5 +1,10 @@
 package com.example.ui.components
 
+import androidx.compose.material.icons.automirrored.filled.Chat
+
+import androidx.core.net.toUri
+import androidx.core.content.edit
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -36,12 +41,12 @@ fun DeveloperWelcomeDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val sharedPrefs = remember { context.getSharedPreferences("abo_talal_prefs", Context.MODE_PRIVATE) }
+    val sharedPrefs = remember { context.getSharedPreferences("netcraft_prefs", Context.MODE_PRIVATE) }
     var dontShowAgain by remember { mutableStateOf(false) }
 
     fun dialNumber(number: String) {
         try {
-            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number"))
+            val intent = Intent(Intent.ACTION_DIAL, ("tel:$number").toUri())
             context.startActivity(intent)
         } catch (e: Exception) {
             Toast.makeText(context, "تعذر فتح لوحة الاتصال: $number", Toast.LENGTH_SHORT).show()
@@ -51,7 +56,7 @@ fun DeveloperWelcomeDialog(
     fun openWhatsApp(number: String) {
         try {
             val cleanNumber = if (number.startsWith("7")) "967$number" else number
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$cleanNumber"))
+            val intent = Intent(Intent.ACTION_VIEW, ("https://wa.me/$cleanNumber").toUri())
             context.startActivity(intent)
         } catch (e: Exception) {
             Toast.makeText(context, "تعذر فتح واتساب: $number", Toast.LENGTH_SHORT).show()
@@ -61,7 +66,7 @@ fun DeveloperWelcomeDialog(
     Dialog(
         onDismissRequest = {
             if (dontShowAgain) {
-                sharedPrefs.edit().putBoolean("dont_show_developer_welcome", true).apply()
+                sharedPrefs.edit { putBoolean("dont_show_developer_welcome", true) }
             }
             onDismiss()
         },
@@ -110,7 +115,7 @@ fun DeveloperWelcomeDialog(
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Filled.Router,
-                                    contentDescription = "ABO TALAL VIP",
+                                    contentDescription = "NetCraft",
                                     tint = Color(0xFFFDE047),
                                     modifier = Modifier.size(34.dp)
                                 )
@@ -119,7 +124,7 @@ fun DeveloperWelcomeDialog(
 
                         // App Title
                         Text(
-                            text = "ABO TALAL VIP",
+                            text = "NetCraft",
                             fontFamily = CairoFontFamily,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Black,
@@ -193,7 +198,7 @@ fun DeveloperWelcomeDialog(
                             }
 
                             Text(
-                                text = "المهندس / عبدالحميد داوؤد (أبو طلال)",
+                                text = "شركة الهيثم للبرمجيات",
                                 fontFamily = CairoFontFamily,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.ExtraBold,
@@ -209,18 +214,18 @@ fun DeveloperWelcomeDialog(
                                 color = Color(0xFF334155)
                             )
 
-                            // Contact Row 1: 778215553
+                            // Contact Row 1: 773114243
                             ContactRow(
-                                number = "778215553",
-                                onCall = { dialNumber("778215553") },
-                                onWhatsApp = { openWhatsApp("778215553") }
+                                number = "773114243",
+                                onCall = { dialNumber("773114243") },
+                                onWhatsApp = { openWhatsApp("773114243") }
                             )
 
-                            // Contact Row 2: 700897775
+                            // Contact Row 2: 734587456
                             ContactRow(
-                                number = "700897775",
-                                onCall = { dialNumber("700897775") },
-                                onWhatsApp = { openWhatsApp("700897775") }
+                                number = "734587456",
+                                onCall = { dialNumber("734587456") },
+                                onWhatsApp = { openWhatsApp("734587456") }
                             )
                         }
                     }
@@ -256,7 +261,7 @@ fun DeveloperWelcomeDialog(
                             }
 
                             Text(
-                                text = "الشكر والتقدير لمن قام بالدعم والمساندة وتوفير بيئة ومتطلبات العمل.. الأخ / أحمد حزام داوؤد .. ولا أنسى والداي وإخواني هم سبب نجاحي بعد الله عزوجل.",
+                                text = "الشكر والتقدير لمن قام بالدعم والمساندة وتوفير بيئة ومتطلبات العمل.. ولا أنسى والداي وإخواني هم سبب نجاحي بعد الله عزوجل.",
                                 fontFamily = CairoFontFamily,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
@@ -297,7 +302,7 @@ fun DeveloperWelcomeDialog(
                     Button(
                         onClick = {
                             if (dontShowAgain) {
-                                sharedPrefs.edit().putBoolean("dont_show_developer_welcome", true).apply()
+                                sharedPrefs.edit { putBoolean("dont_show_developer_welcome", true) }
                             }
                             onDismiss()
                         },
@@ -405,7 +410,7 @@ private fun ContactRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Chat,
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "واتساب",
                             tint = Color.White,
                             modifier = Modifier.size(15.dp)

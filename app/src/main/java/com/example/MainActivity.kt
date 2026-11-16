@@ -1,5 +1,6 @@
 package com.example
 
+import android.app.Activity
 import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -14,22 +15,26 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.components.AppExitConfirmationDialog
 import com.example.ui.screens.*
@@ -37,6 +42,7 @@ import com.example.ui.screens.designs.DesignsScreen
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MikroTikViewModel
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,9 +54,21 @@ class MainActivity : ComponentActivity() {
             val viewModel: MikroTikViewModel = viewModel(
                 factory = MikroTikViewModel.Factory(application)
             )
-            val isDarkMode by viewModel.isDarkMode.collectAsState()
+            val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
             MyApplicationTheme(darkTheme = isDarkMode) {
+                val view = LocalView.current
+                if (!view.isInEditMode) {
+                    SideEffect {
+                        (view.context as? Activity)?.window?.let { window ->
+                            WindowCompat.getInsetsController(window, view).apply {
+                                // The header follows the active light/dark Material You scheme.
+                                isAppearanceLightStatusBars = !isDarkMode
+                                isAppearanceLightNavigationBars = !isDarkMode
+                            }
+                        }
+                    }
+                }
                 MainAppNavigation(viewModel)
             }
         }
@@ -60,20 +78,34 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppNavigation(viewModel: MikroTikViewModel) {
-    val isConnected by viewModel.isConnected.collectAsState()
-    val isDarkMode by viewModel.isDarkMode.collectAsState()
-    val conn by viewModel.currentConnection.collectAsState()
+    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
+    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+    val conn by viewModel.currentConnection.collectAsStateWithLifecycle()
+    val userManagerProfiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
+    val hotspotProfiles by viewModel.hotspotProfiles.collectAsStateWithLifecycle()
 
-    var showSplash by remember { mutableStateOf(true) }
-    // 0 = الرئيسية, 1 = الخدمات, 2 = التقارير, 3 = الملف
-    var currentTab by remember { mutableIntStateOf(0) }
+    var showSplash by rememberSaveable { mutableStateOf(true) }
+    // 0 = الرئيسية, 1 = الهوتسبوت, 2 = السجل, 3 = الشبكة, 4 = اليوزرمانجر,
+    // 5 = التصاميم, 6 = الأدوات, 7 = الكلاود
+    var currentTab by rememberSaveable { mutableIntStateOf(0) }
 
     // Dialogs for Header Actions
     var showPowerDialog by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
     var showExitAppDialog by remember { mutableStateOf(false) }
-    var showQuickActionDialog by remember { mutableStateOf(false) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
+    var syncRequest by remember { mutableIntStateOf(0) }
+    var isSyncing by remember { mutableStateOf(false) }
+
+    // Keep the sync button enabled even while a previous refresh is running.
+    // The repository refresh is asynchronous, so this only acknowledges the
+    // request visually and never claims that the operation already finished.
+    LaunchedEffect(syncRequest) {
+        if (syncRequest == 0) return@LaunchedEffect
+        isSyncing = true
+        delay(1200)
+        isSyncing = false
+    }
 
     // First: Splash Screen
     if (showSplash) {
@@ -105,8 +137,13 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                 }
             }
 
-            // Main Authenticated Scaffold
+            // Main Authenticated Scaffold. Tab screens (Hotspot, Tools, Cloud, …)
+            // already own a Scaffold/TopAppBar that applies system-bar insets; letting
+            // this shell apply them again doubled the status/navigation padding and
+            // shrank their content. Keep the shell inset-free and let the active
+            // screen handle insets exactly once.
             Scaffold(
+                contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 topBar = {
                     if (currentTab == 0) {
                         // Top Header Bar for Home/Dashboard with luxurious teal/blue horizontal gradient
@@ -114,20 +151,12 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .shadow(elevation = 8.dp),
-                            color = Color(0xFF063B40)
+                            color = MaterialTheme.colorScheme.primaryContainer
                         ) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(
-                                        Brush.horizontalGradient(
-                                            listOf(
-                                                Color(0xFF063B40),
-                                                Color(0xFF0C5A60),
-                                                Color(0xFF0284C7)
-                                            )
-                                        )
-                                    )
+                                    .background(MaterialTheme.colorScheme.primaryContainer)
                                     .statusBarsPadding()
                             ) {
                                 Row(
@@ -144,8 +173,8 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                     ) {
                                         Surface(
                                             shape = RoundedCornerShape(12.dp),
-                                            color = Color(0xFF10B981).copy(alpha = 0.22f),
-                                            border = BorderStroke(1.dp, Color(0xFF34D399).copy(alpha = 0.6f))
+                                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                                         ) {
                                             Row(
                                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -156,12 +185,12 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                                     modifier = Modifier
                                                         .size(7.dp)
                                                         .clip(CircleShape)
-                                                        .background(Color(0xFF34D399))
+                                                        .background(MaterialTheme.colorScheme.onTertiaryContainer)
                                                 )
                                                 Text(
                                                     text = "متصل",
                                                     fontFamily = CairoFontFamily,
-                                                    color = Color(0xFFECFDF5),
+                                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
                                                     fontSize = 11.sp,
                                                     fontWeight = FontWeight.Bold
                                                 )
@@ -172,20 +201,20 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                             Text(
                                                 text = conn?.username?.takeIf { it.isNotBlank() } ?: "المدير",
                                                 fontFamily = CairoFontFamily,
-                                                color = Color.White,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
                                                 fontSize = 15.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
                                             Text(
-                                                text = conn?.host?.takeIf { it.isNotBlank() } ?: "192.168.88.1",
+                                                text = conn?.host?.takeIf { it.isNotBlank() } ?: "-",
                                                 fontFamily = CairoFontFamily,
-                                                color = Color(0xFFE0F2FE),
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
                                                 fontSize = 10.sp
                                             )
                                         }
                                     }
 
-                                    // Center: App Brand ABO TALAL VIP with VIP Star
+                                    // Center: App Brand NetCraft with VIP Star
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -194,13 +223,13 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                             Icon(
                                                 imageVector = Icons.Filled.Star,
                                                 contentDescription = null,
-                                                tint = Color(0xFFFBBF24),
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                                 modifier = Modifier.size(15.dp)
                                             )
                                             Text(
-                                                text = "ABO TALAL VIP",
+                                                text = "NetCraft",
                                                 fontFamily = CairoFontFamily,
-                                                color = Color.White,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
                                                 fontSize = 17.sp,
                                                 fontWeight = FontWeight.ExtraBold,
                                                 letterSpacing = 0.5.sp
@@ -209,7 +238,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         Text(
                                             text = "إدارة وطباعة الكروت",
                                             fontFamily = CairoFontFamily,
-                                            color = Color(0xFFBAE6FD),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.SemiBold
                                         )
@@ -223,7 +252,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         // 1. Red Power Button (Reboot / Shutdown)
                                         Surface(
                                             shape = RoundedCornerShape(10.dp),
-                                            color = Color.White.copy(alpha = 0.18f),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f),
                                             modifier = Modifier
                                                 .size(34.dp)
                                                 .clip(RoundedCornerShape(10.dp))
@@ -233,7 +262,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                                 Icon(
                                                     imageVector = Icons.Filled.PowerSettingsNew,
                                                     contentDescription = "طاقة الراوتر",
-                                                    tint = Color(0xFFFCA5A5),
+                                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                                     modifier = Modifier.size(18.dp)
                                                 )
                                             }
@@ -242,7 +271,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         // 2. Exit / Disconnect Button
                                         Surface(
                                             shape = RoundedCornerShape(10.dp),
-                                            color = Color.White.copy(alpha = 0.18f),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f),
                                             modifier = Modifier
                                                 .size(34.dp)
                                                 .clip(RoundedCornerShape(10.dp))
@@ -250,9 +279,9 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         ) {
                                             Box(contentAlignment = Alignment.Center) {
                                                 Icon(
-                                                    imageVector = Icons.Filled.ExitToApp,
+                                                    imageVector = Icons.AutoMirrored.Filled.ExitToApp,
                                                     contentDescription = "تسجيل الخروج",
-                                                    tint = Color(0xFFFDBA74),
+                                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                                     modifier = Modifier.size(18.dp)
                                                 )
                                             }
@@ -261,7 +290,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         // 3. Dark / Light Mode Toggle
                                         Surface(
                                             shape = RoundedCornerShape(10.dp),
-                                            color = Color.White.copy(alpha = 0.18f),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f),
                                             modifier = Modifier
                                                 .size(34.dp)
                                                 .clip(RoundedCornerShape(10.dp))
@@ -271,7 +300,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                                 Icon(
                                                     imageVector = if (isDarkMode) Icons.Filled.LightMode else Icons.Filled.NightlightRound,
                                                     contentDescription = "الوضع الليلي",
-                                                    tint = if (isDarkMode) Color(0xFFFDE047) else Color.White,
+                                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                                     modifier = Modifier.size(18.dp)
                                                 )
                                             }
@@ -280,22 +309,31 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         // 4. Refresh / Sync Button
                                         Surface(
                                             shape = RoundedCornerShape(10.dp),
-                                            color = Color.White.copy(alpha = 0.18f),
-                                            modifier = Modifier
-                                                .size(34.dp)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .clickable {
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f),
+                                                modifier = Modifier
+                                                    .size(34.dp)
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .clickable {
+                                                    syncRequest++
                                                     viewModel.refreshAllData()
-                                                    actionMessage = "تم تحديث كافة بيانات الشبكة والراوتر بنجاح"
+                                                    actionMessage = "بدأت مزامنة بيانات الشبكة والراوتر. يمكنك متابعة استخدام التطبيق أثناء التحديث."
                                                 }
                                         ) {
                                             Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.Refresh,
-                                                    contentDescription = "مزامنة وتحديث",
-                                                    tint = Color(0xFFBAE6FD),
-                                                    modifier = Modifier.size(18.dp)
-                                                )
+                                                if (isSyncing) {
+                                                    CircularProgressIndicator(
+                                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
+                                                        strokeWidth = 2.dp,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Refresh,
+                                                        contentDescription = "مزامنة وتحديث",
+                                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -312,8 +350,8 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                 .fillMaxWidth()
                                 .shadow(elevation = 10.dp, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)),
                             shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-                            color = if (isDarkMode) Color(0xFF1E293B) else Color.White,
-                            border = BorderStroke(1.dp, if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0))
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -333,7 +371,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                 ) {
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
-                                        color = if (isDarkMode) Color(0xFF0C5A60).copy(alpha = 0.6f) else Color(0xFFE0F2FE)
+                                        color = MaterialTheme.colorScheme.primaryContainer
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -343,7 +381,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                             Icon(
                                                 imageVector = Icons.Filled.Home,
                                                 contentDescription = "الرئيسية",
-                                                tint = if (isDarkMode) Color(0xFF38BDF8) else Color(0xFF0C5A60),
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                                 modifier = Modifier.size(20.dp)
                                             )
                                             Text(
@@ -351,7 +389,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                                 fontFamily = CairoFontFamily,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = if (isDarkMode) Color(0xFF38BDF8) else Color(0xFF0C5A60)
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
                                             )
                                         }
                                     }
@@ -360,7 +398,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                             .padding(top = 2.dp)
                                             .size(5.dp)
                                             .clip(CircleShape)
-                                            .background(if (isDarkMode) Color(0xFF38BDF8) else Color(0xFF0284C7))
+                                            .background(MaterialTheme.colorScheme.primary)
                                     )
                                 }
 
@@ -375,7 +413,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                     Icon(
                                         imageVector = Icons.Filled.Wifi,
                                         contentDescription = "الهوتسبوت",
-                                        tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(22.dp)
                                     )
                                     Text(
@@ -383,43 +421,8 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         fontFamily = CairoFontFamily,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                }
-
-                                // 3. زر إجراء سريع مركزي بتصميم كبسولة متدرجة فاخرة
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .clickable { showQuickActionDialog = true },
-                                    shadowElevation = 4.dp
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .background(
-                                                Brush.horizontalGradient(
-                                                    listOf(Color(0xFF063B40), Color(0xFF0C5A60), Color(0xFF0284C7))
-                                                )
-                                            )
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Add,
-                                            contentDescription = "إجراء سريع",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Text(
-                                            text = "إجراء سريع",
-                                            fontFamily = CairoFontFamily,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                    }
                                 }
 
                                 // 4. الأدوات
@@ -433,7 +436,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                     Icon(
                                         imageVector = Icons.Filled.Build,
                                         contentDescription = "الأدوات",
-                                        tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(22.dp)
                                     )
                                     Text(
@@ -441,7 +444,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         fontFamily = CairoFontFamily,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
 
@@ -456,7 +459,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                     Icon(
                                         imageVector = Icons.Filled.Router,
                                         contentDescription = "الشبكة",
-                                        tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(22.dp)
                                     )
                                     Text(
@@ -464,7 +467,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                                         fontFamily = CairoFontFamily,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -511,6 +514,8 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                             onBack = { currentTab = 0 }
                         )
                         5 -> DesignsScreen(
+                            availableUmPackages = userManagerProfiles.map { it.name },
+                            availableHotspotProfiles = hotspotProfiles.map { it.name },
                             onBack = { currentTab = 0 }
                         )
                         6 -> ToolsScreen(
@@ -525,79 +530,6 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
                 }
             }
         }
-    }
-
-    // Quick Action Dialog (FAB +)
-    if (showQuickActionDialog) {
-        AlertDialog(
-            onDismissRequest = { showQuickActionDialog = false },
-            title = { Text("إجراء سريع", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = {
-                            showQuickActionDialog = false
-                            currentTab = 1
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Filled.AddCard, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("إضافة / توليد كروت هوتسبوت", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = {
-                            showQuickActionDialog = false
-                            currentTab = 4
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Filled.People, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("نظام اليوزرمانجر والكروت", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = {
-                            showQuickActionDialog = false
-                            currentTab = 5
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Filled.Palette, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("تصاميم وهوية الكروت VIP", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = {
-                            showQuickActionDialog = false
-                            viewModel.refreshAllData()
-                            actionMessage = "تم تحديث كافة بيانات الشبكة والراوتر بنجاح"
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Filled.Refresh, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("مزامنة وتحديث البيانات فوراً", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showQuickActionDialog = false }) {
-                    Text("إلغاء", fontFamily = CairoFontFamily)
-                }
-            }
-        )
     }
 
     // Power Dialog: Reboot or Shutdown Router
@@ -618,7 +550,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "اختر الإجراء الذي ترغب بتنفيذه على الراوتر المتصل (${conn?.host ?: "172.16.0.1"}):",
+                        "اختر الإجراء الذي ترغب بتنفيذه على الراوتر المتصل (${conn?.host ?: "-"}):",
                         fontFamily = CairoFontFamily
                     )
 
@@ -673,7 +605,7 @@ fun MainAppNavigation(viewModel: MikroTikViewModel) {
             onDismissRequest = { showExitDialog = false },
             icon = {
                 Icon(
-                    imageVector = Icons.Filled.ExitToApp,
+                    imageVector = Icons.AutoMirrored.Filled.ExitToApp,
                     contentDescription = null,
                     tint = Color(0xFF0C5A60),
                     modifier = Modifier.size(36.dp)

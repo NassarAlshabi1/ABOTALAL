@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.core.net.toUri
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -10,6 +12,7 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +31,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.MikroTikCloudBackup
@@ -40,15 +46,16 @@ fun CloudScreen(
     onBack: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val cloudInfo by viewModel.cloudInfo.collectAsState()
-    val cloudBackups by viewModel.cloudBackups.collectAsState()
-    val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val cloudInfo by viewModel.cloudInfo.collectAsStateWithLifecycle()
+    val cloudBackups by viewModel.cloudBackups.collectAsStateWithLifecycle()
+    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
     var isRefreshing by remember { mutableStateOf(false) }
     var isUpdatingDdns by remember { mutableStateOf(false) }
     var showUploadBackupDialog by remember { mutableStateOf(false) }
     var pingResult by remember { mutableStateOf<String?>(null) }
     var isPinging by remember { mutableStateOf(false) }
+    var backupToDelete by remember { mutableStateOf<MikroTikCloudBackup?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.fetchCloudData()
@@ -359,7 +366,7 @@ fun CloudScreen(
                                 onClick = {
                                     if (cloudInfo.dnsName.isNotBlank()) {
                                         val url = "http://${cloudInfo.dnsName}"
-                                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                        val browserIntent = Intent(Intent.ACTION_VIEW, (url).toUri())
                                         context.startActivity(browserIntent)
                                     } else {
                                         Toast.makeText(context, "اسم الدومين غير متوفر", Toast.LENGTH_SHORT).show()
@@ -493,13 +500,7 @@ fun CloudScreen(
                                 cloudBackups.forEach { backup ->
                                     CloudBackupItem(
                                         backup = backup,
-                                        onDelete = {
-                                            viewModel.removeCloudBackup(
-                                                backup.id,
-                                                onSuccess = { Toast.makeText(context, "تم حذف النسخة السحابية", Toast.LENGTH_SHORT).show() },
-                                                onError = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
-                                            )
-                                        }
+                                        onDelete = { backupToDelete = backup }
                                     )
                                 }
                             }
@@ -621,6 +622,8 @@ fun CloudScreen(
                         value = backupPassword,
                         onValueChange = { backupPassword = it },
                         label = { Text("كلمة مرور التشفير (اختياري)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
@@ -659,6 +662,35 @@ fun CloudScreen(
                 TextButton(onClick = { showUploadBackupDialog = false }) {
                     Text("إلغاء", fontFamily = CairoFontFamily)
                 }
+            }
+        )
+    }
+
+    backupToDelete?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { backupToDelete = null },
+            title = { Text("حذف النسخة السحابية", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "هل تريد حذف النسخة \"${backup.name}\" من سيرفر مايكروتيك السحابي؟ لا يمكن التراجع.",
+                    fontFamily = CairoFontFamily
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        backupToDelete = null
+                        viewModel.removeCloudBackup(
+                            backup.id,
+                            onSuccess = { Toast.makeText(context, "تم حذف النسخة السحابية", Toast.LENGTH_SHORT).show() },
+                            onError = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("نعم، احذف", fontFamily = CairoFontFamily) }
+            },
+            dismissButton = {
+                TextButton(onClick = { backupToDelete = null }) { Text("إلغاء", fontFamily = CairoFontFamily) }
             }
         )
     }
