@@ -67,7 +67,13 @@ class OperationTelemetryTest {
     fun `mutation detection and error classification use fixed categories`() {
         assertTrue(OperationTelemetry.isMutationCommand("/system/reboot"))
         assertTrue(OperationTelemetry.isMutationCommand("/ip/hotspot/user/add"))
+        assertTrue(OperationTelemetry.isMutationCommand("/tool/user-manager/user/create-and-activate-profile"))
+        assertTrue(OperationTelemetry.isMutationCommand("/tool/user-manager/session/close-session"))
+        assertTrue(OperationTelemetry.isMutationCommand("/interface/reset-counters"))
+        assertTrue(OperationTelemetry.isMutationCommand("/system/backup/cloud/upload-file"))
+        assertTrue(OperationTelemetry.isMutationCommand("/vendor/custom/do-something"))
         assertFalse(OperationTelemetry.isMutationCommand("/ip/hotspot/user/print"))
+        assertFalse(OperationTelemetry.isMutationCommand("/ping"))
         assertEquals(
             OperationTelemetry.ErrorClass.TIMEOUT,
             OperationTelemetry.classify(SocketTimeoutException("never included in event"))

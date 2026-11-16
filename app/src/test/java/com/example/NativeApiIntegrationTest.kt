@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.data.repository.RouterOsApiWordCodec
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -37,22 +38,7 @@ class NativeApiIntegrationTest {
         private val worker = thread(isDaemon = true) { serve() }
 
         private fun writeWord(out: OutputStream, word: String) {
-            val bytes = word.toByteArray(Charsets.UTF_8)
-            val len = bytes.size
-            when {
-                len < 0x80 -> out.write(len)
-                len < 0x4000 -> {
-                    out.write((len shr 8) or 0x80); out.write(len and 0xFF)
-                }
-                len < 0x200000 -> {
-                    out.write((len shr 16) or 0xC0); out.write((len shr 8) and 0xFF); out.write(len and 0xFF)
-                }
-                else -> {
-                    out.write((len shr 24) or 0xE0); out.write((len shr 16) and 0xFF)
-                    out.write((len shr 8) and 0xFF); out.write(len and 0xFF)
-                }
-            }
-            out.write(bytes)
+            RouterOsApiWordCodec.writeWord(out, word)
         }
 
         private fun writeSentence(out: OutputStream, words: List<String>) {
@@ -62,26 +48,7 @@ class NativeApiIntegrationTest {
         }
 
         private fun readWord(input: InputStream): String? {
-            val first = input.read()
-            if (first == -1) return null
-            if (first == 0) return ""
-            val len = when {
-                (first and 0x80) == 0 -> first
-                (first and 0xC0) == 0x80 -> ((first and 0x3F) shl 8) or input.read()
-                (first and 0xE0) == 0xC0 ->
-                    ((first and 0x1F) shl 16) or (input.read() shl 8) or input.read()
-                (first and 0xF0) == 0xE0 ->
-                    ((first and 0x0F) shl 24) or (input.read() shl 16) or (input.read() shl 8) or input.read()
-                else -> return ""
-            }
-            val buf = ByteArray(len)
-            var off = 0
-            while (off < len) {
-                val r = input.read(buf, off, len - off)
-                if (r == -1) break
-                off += r
-            }
-            return String(buf, 0, off, Charsets.UTF_8)
+            return RouterOsApiWordCodec.readWord(input)
         }
 
         private fun readSentence(input: InputStream): List<String>? {
@@ -193,6 +160,36 @@ class NativeApiIntegrationTest {
             assertTrue(api.ping())
             api.close()
         } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `does not replay a mutation when its reply times out`() {
+        val server = ScriptableMockServer()
+        server.handler = { words ->
+            if (words.firstOrNull() == "/ip/hotspot/user/add") Thread.sleep(500)
+            listOf(listOf("!done"))
+        }
+        val api = MikroTikNativeApi(
+            host = "127.0.0.1",
+            port = server.port,
+            connectTimeoutMs = 2000,
+            commandTimeoutMs = 150
+        )
+        try {
+            val (loggedIn, message) = api.login("admin", "1234")
+            assertTrue("login should succeed: $message", loggedIn)
+
+            val error = runCatching {
+                api.executeStrict("/ip/hotspot/user/add", "=name=timeout-test")
+            }.exceptionOrNull()
+            assertTrue("timed-out mutation should be reported", error is java.io.IOException)
+
+            Thread.sleep(600)
+            assertEquals(1, server.commandsMatching("/ip/hotspot/user/add").size)
+        } finally {
+            api.close()
             server.shutdown()
         }
     }

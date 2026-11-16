@@ -19,21 +19,14 @@ internal object AiDoctorDiagnostics {
         val recommendation: String
     )
 
-    fun majorVersion(version: String): Int? = Regex("^\\s*(\\d+)(?:\\.|\\s|$)")
-        .find(version)?.groupValues?.getOrNull(1)?.toIntOrNull()
-
-    private fun minorVersion(version: String): Int? = Regex("^\\s*\\d+\\.(\\d+)")
-        .find(version)?.groupValues?.getOrNull(1)?.toIntOrNull()
+    fun majorVersion(version: String): Int? = RouterOsSupport.parseVersion(version)?.first
 
     fun additionalReadSpecs(version: String, groups: Set<String>): List<ReadSpec> {
+        if (!RouterOsSupport.isSupported(version)) return emptyList()
         val selected = if ("all" in groups) setOf("security", "wireless", "routing", "ipv6", "usermanager") else groups
         val specs = mutableListOf<ReadSpec>()
         if ("usermanager" in selected) {
-            when (majorVersion(version)) {
-                6 -> addUserManagerSpecs(specs, "/tool/user-manager", 6)
-                7 -> addUserManagerSpecs(specs, "/user-manager", 7)
-                else -> Unit // Do not guess the User Manager menu path without a version.
-            }
+            addUserManagerSpecs(specs, "/tool/user-manager")
         }
         if ("security" in selected) {
             specs += ReadSpec("security", "management_services", "/ip/service/print", "name,disabled,address,port", limit = 80)
@@ -49,37 +42,17 @@ internal object AiDoctorDiagnostics {
             specs += ReadSpec("ipv6", "ipv6_firewall_filter", "/ipv6/firewall/filter/print", ".id,chain,action,protocol,src-address,dst-address,in-interface,out-interface,connection-state,disabled,packets,bytes", limit = 200)
         }
         if ("wireless" in selected) {
-            when (majorVersion(version)) {
-                6 -> addLegacyWirelessSpecs(specs, "/interface/wireless", "wireless")
-                7 -> {
-                    // ROS7.0-7.12 used the wifiwave2 package/menu; ROS7.13+ renamed it to wifi.
-                    val wifiPrefix = if ((minorVersion(version) ?: 0) < 13) "/interface/wifiwave2" else "/interface/wifi"
-                    addWifiSpecs(specs, wifiPrefix, "wifi")
-                    // ROS7 can also run the older wireless driver/package; keep it as a
-                    // separate optional data set rather than assuming one driver per release.
-                    addLegacyWirelessSpecs(specs, "/interface/wireless", "wireless_legacy")
-                }
-                else -> Unit // Do not guess generation-specific menu paths when version detection is unavailable.
-            }
+            addLegacyWirelessSpecs(specs, "/interface/wireless", "wireless")
         }
         return specs
     }
 
-    /** Read-only User Manager data. v6 exposes the currently usable plan as
-     *  `actual-profile` and has no `profile` field on users, so the two versions
-     *  intentionally request different columns. */
-    private fun addUserManagerSpecs(target: MutableList<ReadSpec>, prefix: String, major: Int) {
-        if (major == 6) {
-            target += ReadSpec(
-                "usermanager", "um_users", "$prefix/user/print",
-                ".id,name,actual-profile,uptime-used,disabled", limit = 500
-            )
-        } else {
-            target += ReadSpec(
-                "usermanager", "um_users", "$prefix/user/print",
-                ".id,name,disabled", limit = 500
-            )
-        }
+    /** Read-only RouterOS v6 User Manager data. */
+    private fun addUserManagerSpecs(target: MutableList<ReadSpec>, prefix: String) {
+        target += ReadSpec(
+            "usermanager", "um_users", "$prefix/user/print",
+            ".id,name,actual-profile,uptime-used,disabled", limit = 500
+        )
         target += ReadSpec(
             "usermanager", "um_profiles", "$prefix/profile/print",
             "name,validity,price", limit = 120
@@ -94,14 +67,6 @@ internal object AiDoctorDiagnostics {
         target += ReadSpec("wireless", "${keyPrefix}_interfaces", "$prefix/print", ".id,name,mode,band,frequency,channel-width,disabled,running,security-profile", limit = 80)
         target += ReadSpec("wireless", "${keyPrefix}_registrations", "$prefix/registration-table/print", "interface,mac-address,signal-strength,tx-rate,rx-rate,uptime", limit = 100)
         target += ReadSpec("wireless", "${keyPrefix}_security_profiles", "$prefix/security-profiles/print", "name,mode,authentication-types,unicast-ciphers,group-ciphers", limit = 80)
-    }
-
-    private fun addWifiSpecs(target: MutableList<ReadSpec>, prefix: String, keyPrefix: String) {
-        target += ReadSpec("wireless", "${keyPrefix}_interfaces", "$prefix/print", ".id,name,configuration,disabled,running,channel", limit = 80)
-        target += ReadSpec("wireless", "${keyPrefix}_registrations", "$prefix/registration-table/print", "interface,mac-address,signal,tx-rate,rx-rate,uptime,authorized", limit = 100)
-        // Never request `passphrase`; it is a sensitive RouterOS WiFi field.
-        target += ReadSpec("wireless", "${keyPrefix}_security_profiles", "$prefix/security/print", "name,authentication-types,wps", limit = 80)
-        target += ReadSpec("wireless", "${keyPrefix}_configurations", "$prefix/configuration/print", "name,ssid,security,mode", limit = 80)
     }
 
     fun securityFindings(

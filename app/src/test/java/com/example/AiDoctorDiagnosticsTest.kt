@@ -12,33 +12,26 @@ class AiDoctorDiagnosticsTest {
     fun `detects major RouterOS version without guessing unknown values`() {
         assertEquals(6, AiDoctorDiagnostics.majorVersion("6.49.20 (stable)"))
         assertEquals(7, AiDoctorDiagnostics.majorVersion("7.13.5"))
+        assertEquals(null, AiDoctorDiagnostics.majorVersion("6"))
         assertEquals(null, AiDoctorDiagnostics.majorVersion("unknown"))
         assertEquals(null, AiDoctorDiagnostics.majorVersion(""))
     }
 
     @Test
-    fun `uses legacy wireless menus on v6 and wifi menus on v7`() {
+    fun `uses only legacy wireless menus on supported v6`() {
         val ros6 = AiDoctorDiagnostics.additionalReadSpecs("6.49.20", setOf("wireless"))
-        val ros7Old = AiDoctorDiagnostics.additionalReadSpecs("7.12.1", setOf("wireless"))
         val ros7 = AiDoctorDiagnostics.additionalReadSpecs("7.13.5", setOf("wireless"))
         val unknown = AiDoctorDiagnostics.additionalReadSpecs("unknown", setOf("wireless"))
 
         assertTrue(ros6.any { it.path == "/interface/wireless/registration-table/print" })
         assertTrue(ros6.any { it.path == "/interface/wireless/security-profiles/print" })
         assertFalse(ros6.any { it.path.startsWith("/interface/wifi/") })
-        assertTrue(ros7Old.any { it.path == "/interface/wifiwave2/registration-table/print" })
-        assertTrue(ros7Old.any { it.path == "/interface/wireless/registration-table/print" })
-        assertTrue(ros7Old.any { it.path == "/interface/wifiwave2/security/print" })
-        assertTrue(ros7.any { it.path == "/interface/wifi/registration-table/print" })
-        assertTrue(ros7.any { it.path == "/interface/wifi/security/print" })
-        assertTrue(ros7.any { it.path == "/interface/wireless/registration-table/print" })
-        assertFalse(ros7.any { it.path.startsWith("/interface/wifiwave2/") })
+        assertTrue(ros7.isEmpty())
         assertTrue(unknown.isEmpty())
-        assertFalse(ros7.flatMap { it.properties.split(',') }.any { it.contains("passphrase", ignoreCase = true) })
     }
 
     @Test
-    fun `uses tool user-manager on v6 and user-manager on v7`() {
+    fun `uses tool user-manager only on supported v6`() {
         val ros6 = AiDoctorDiagnostics.additionalReadSpecs("6.49.20", setOf("usermanager"))
         val ros7 = AiDoctorDiagnostics.additionalReadSpecs("7.17.0", setOf("usermanager"))
         val unknown = AiDoctorDiagnostics.additionalReadSpecs("unknown", setOf("usermanager"))
@@ -49,10 +42,9 @@ class AiDoctorDiagnosticsTest {
             ros6.first { it.key == "um_users" }.properties
         )
         assertFalse(ros6.any { it.path.startsWith("/user-manager/") })
-        assertTrue(ros7.any { it.path == "/user-manager/user/print" })
-        assertFalse(ros7.any { it.path.startsWith("/tool/user-manager/") })
+        assertTrue(ros7.isEmpty())
         assertTrue(unknown.isEmpty())
-        assertTrue((ros6 + ros7).all { it.path.endsWith("/print") })
+        assertTrue(ros6.all { it.path.endsWith("/print") })
     }
 
     @Test
@@ -77,7 +69,7 @@ class AiDoctorDiagnosticsTest {
 
     @Test
     fun `requests only read-only common access and routing data`() {
-        val specs = AiDoctorDiagnostics.additionalReadSpecs("7.17.0", setOf("security", "routing", "ipv6"))
+        val specs = AiDoctorDiagnostics.additionalReadSpecs("6.49.20", setOf("security", "routing", "ipv6"))
         assertTrue(specs.any { it.path == "/ip/service/print" })
         assertTrue(specs.any { it.path == "/snmp/community/print" })
         assertTrue(specs.any { it.path == "/ip/route/print" })

@@ -120,8 +120,15 @@ object OperationTelemetry {
     }
 
     fun isMutationCommand(command: String): Boolean {
-        val verb = command.substringAfterLast('/').lowercase()
-        return verb in setOf("add", "set", "remove", "enable", "disable", "reboot", "shutdown", "restore", "run", "reset", "update", "flush")
+        val verb = command.trim().substringAfterLast('/').lowercase()
+        // Read-only operations are safe to retry after a timeout. Anything not
+        // explicitly known to be read-only is treated as a mutation, so new
+        // commands fail closed instead of being replayed accidentally.
+        val readOnlyVerbs = setOf(
+            "print", "get", "monitor", "listen", "ping", "traceroute", "export",
+            "check-for-updates"
+        )
+        return verb !in readOnlyVerbs
     }
 
     fun record(
