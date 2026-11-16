@@ -1419,7 +1419,7 @@ fun UserManagerBatchFullDialog(
                                                                         context = context,
                                                                         batch = batch,
                                                                         users = usersForBatch,
-                                                                        config = templateCfg
+                                                                        config = templateCfg.copy(posConfig = templateCfg.posConfig.copy(visible = templateCfg.posConfig.visible && showPosOnCard))
                                                                     )
                                                                 },
                                                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
@@ -1448,7 +1448,7 @@ fun UserManagerBatchFullDialog(
                                                                         context = context,
                                                                         batch = batch,
                                                                         users = usersForBatch,
-                                                                        config = templateCfg,
+                                                                        config = templateCfg.copy(posConfig = templateCfg.posConfig.copy(visible = templateCfg.posConfig.visible && showPosOnCard)),
                                                                         onComplete = {}
                                                                     )
                                                                 },

@@ -115,12 +115,26 @@ fun VoucherPrinterScreen(
     var selectedMode by remember { mutableStateOf(initialMode) }
     var selectedProfile by remember { mutableStateOf("") }
 
-    // Initialize default profile
+    // Real price of the selected profile (UM only carries a price; hotspot
+    // profiles have none). Replaces the previously hard-coded "١٠٠٠ د.ع".
+    val selectedProfilePrice by remember(selectedProfile, selectedMode, userManagerProfiles) {
+        mutableStateOf(
+            if (selectedMode == VoucherMode.USER_MANAGER)
+                userManagerProfiles.firstOrNull { it.name == selectedProfile }?.price ?: 0
+            else 0
+        )
+    }
+
+    // Initialize default profile (only when the selection is empty or no longer
+    // valid — never clobber the operator's choice on every router sync).
     LaunchedEffect(selectedMode, hotspotProfiles, userManagerProfiles) {
-        if (selectedMode == VoucherMode.HOTSPOT && hotspotProfiles.isNotEmpty()) {
-            selectedProfile = hotspotProfiles.first().name
-        } else if (selectedMode == VoucherMode.USER_MANAGER && userManagerProfiles.isNotEmpty()) {
-            selectedProfile = userManagerProfiles.first().name
+        val validProfiles = if (selectedMode == VoucherMode.HOTSPOT) hotspotProfiles.map { it.name } else userManagerProfiles.map { it.name }
+        if (selectedProfile.isEmpty() || selectedProfile !in validProfiles) {
+            if (selectedMode == VoucherMode.HOTSPOT && hotspotProfiles.isNotEmpty()) {
+                selectedProfile = hotspotProfiles.first().name
+            } else if (selectedMode == VoucherMode.USER_MANAGER && userManagerProfiles.isNotEmpty()) {
+                selectedProfile = userManagerProfiles.first().name
+            }
         }
     }
 
@@ -179,6 +193,7 @@ fun VoucherPrinterScreen(
     // 5. Execution State Pool
     val generatedVouchersList = remember { mutableStateListOf<TempVoucher>() }
     var isGeneratingAndAdding by remember { mutableStateOf(false) }
+    var pushedToRouter by remember { mutableStateOf(false) }
     var generationProgress by remember { mutableStateOf(0f) }
     var syncStatusText by remember { mutableStateOf<String?>(null) }
 
@@ -246,6 +261,7 @@ fun VoucherPrinterScreen(
     }
 
     LaunchedEffect(selectedMode, selectedProfile, qtyToGenerate, prefixText, usernameLength, generationTypeSeq, startSeqNum, matchPasswordWithUsername, bindMacOnFirstLogin) {
+        pushedToRouter = false
         generatedVouchersList.clear()
         val safeQty = qtyToGenerate.coerceIn(0, MAX_VOUCHERS_PER_BATCH)
         generatedVouchersList.addAll(buildVoucherBatch(safeQty, occupiedUsernames()))
@@ -719,7 +735,7 @@ fun VoucherPrinterScreen(
                                     )
                             ) {
                                 Text(
-                                    text = "باقة: $selectedProfile | السعر: ١٠٠٠ د.ع",
+                                    text = "باقة: $selectedProfile | السعر: ${if (selectedProfilePrice > 0) "$selectedProfilePrice د.ع" else "—"}",
                                     color = if (designTheme == CardDesignTheme.MINIMAL_WHITE) Color.DarkGray else Color.White.copy(
                                         alpha = 0.9f
                                     ),
@@ -1021,6 +1037,7 @@ fun VoucherPrinterScreen(
 
                             isGeneratingAndAdding = false
                             if (successCount > 0) {
+                                pushedToRouter = true
                                 viewModel.writeActivityLog(
                                     "توليد كروت آلي",
                                     "تمت إضافة $successCount كارت لبروفايل $selectedProfile" +
@@ -1067,6 +1084,10 @@ fun VoucherPrinterScreen(
                 // Native Print & Save PDF Button (100% Real!)
                 Button(
                     onClick = {
+                        if (!pushedToRouter) {
+                            Toast.makeText(context, "يجب توليد وإضافة الكروت إلى السيرفر أولاً قبل الطباعة.", Toast.LENGTH_LONG).show()
+                            return@onClick
+                        }
                         val printerHelper = VoucherPDFPrinter(
                             context = context,
                             vouchers = generatedVouchersList.toList(),
@@ -1089,7 +1110,7 @@ fun VoucherPrinterScreen(
                         )
                         printerHelper.startPrintFlow()
                     },
-                    enabled = generatedVouchersList.isNotEmpty(),
+                    enabled = generatedVouchersList.isNotEmpty() && pushedToRouter,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0061A4), contentColor = Color.White),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
@@ -1505,7 +1526,14 @@ class VoucherPDFPrinter(
                 val pdfDocument = mPdfDocument ?: return
                 
                 try {
-                    for (pageNumber in 0 until mTotalPages) {
+                    val requested = pages.filter { it.getStart() <= it.getEnd() }
+                        .flatMap { r -> (r.getStart()..minOf(r.getEnd(), mTotalPages - 1)).toList() }
+                        .filter { it in 0 until mTotalPages }
+                        .distinct()
+                        .sorted()
+                        .ifEmpty { (0 until mTotalPages).toList() }
+
+                    for (pageNumber in requested) {
                         if (cancellationSignal?.isCanceled == true) {
                             callback.onWriteCancelled()
                             return
@@ -1522,7 +1550,9 @@ class VoucherPDFPrinter(
                     }
 
                     // Write outputs stream
-                    pdfDocument.writeTo(FileOutputStream(destination.fileDescriptor))
+                    FileOutputStream(destination.fileDescriptor).use { out ->
+                        pdfDocument.writeTo(out)
+                    }
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                 } catch (e: Exception) {
                     callback.onWriteFailed(e.localizedMessage)
@@ -1683,7 +1713,7 @@ class VoucherPDFPrinter(
                             textSize = sizeDetails.toFloat()
                             isFakeBoldText = true
                         }
-                        canvas.drawText("باقة: $selectedProfile | ١٠٠٠ د.ع", dX, dY, paintDetailsVal)
+                        canvas.drawText("باقة: $selectedProfile | ${if (selectedProfilePrice > 0) "$selectedProfilePrice د.ع" else ""}", dX, dY, paintDetailsVal)
 
                         currentCardIndex++
                     }

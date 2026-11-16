@@ -125,7 +125,7 @@ import java.nio.charset.StandardCharsets
  * - شريط الترقيم والتنقل بين الصفحات
  */
 private fun isExpiredCard(user: UserManagerUser): Boolean =
-    !user.active || (user.profileExpired && user.uptimeUsed.isNotBlank() && user.uptimeUsed != "0s")
+    user.isConfirmedExpired
 
 @Composable
 private fun CardStatPill(modifier: Modifier, label: String, value: Int, color: Color) {
