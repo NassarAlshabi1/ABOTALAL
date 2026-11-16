@@ -47,7 +47,6 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.RouterBackupFile
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -70,6 +69,7 @@ fun DashboardScreen(
 
     val coroutineScope = rememberCoroutineScope()
     var isRefreshing by remember { mutableStateOf(false) }
+    var refreshResultMessage by remember { mutableStateOf<String?>(null) }
 
     // Colors based on theme
     val screenBg = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF1F5F9)
@@ -104,11 +104,12 @@ fun DashboardScreen(
     )
 
     fun doRefresh() {
-        coroutineScope.launch {
-            isRefreshing = true
-            viewModel.refreshAllData()
-            delay(800)
+        if (isRefreshing) return
+        isRefreshing = true
+        refreshResultMessage = null
+        viewModel.refreshAllData { error ->
             isRefreshing = false
+            refreshResultMessage = error?.let { "تعذر تحديث البيانات: $it" } ?: "تم تحديث البيانات بنجاح"
         }
     }
 
@@ -151,11 +152,15 @@ fun DashboardScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isRefreshing) "جارٍ التحديث الآن..." else "اسحب للأسفل للتحديث",
+                        text = when {
+                            isRefreshing -> "جارٍ تحديث البيانات…"
+                            refreshResultMessage != null -> refreshResultMessage!!
+                            else -> "اضغط لتحديث البيانات"
+                        },
                         fontFamily = CairoFontFamily,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = textPrimary
+                        color = if (refreshResultMessage?.startsWith("تعذر") == true && !isRefreshing) MaterialTheme.colorScheme.error else textPrimary
                     )
                 }
             }
@@ -269,7 +274,7 @@ fun DashboardScreen(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.Memory,
                             label = "المعالج",
-                            value = "${stats?.cpuUsage ?: 0}%"
+                            value = stats?.let { "${it.cpuUsage}%" } ?: "—"
                         )
                         RouterDetailPill(
                             modifier = Modifier.weight(1f),
@@ -289,11 +294,12 @@ fun DashboardScreen(
                             icon = Icons.AutoMirrored.Outlined.FormatListBulleted,
                             label = "الذاكرة",
                             value = run {
-                                val total = stats?.totalMemoryBytes ?: 0L
-                                val free = stats?.freeMemoryBytes ?: 0L
-                                val usedMb = ((total - free).coerceAtLeast(0L)) / 1048576f
-                                val totalMb = total / 1048576f
-                                if (total > 0) "%.1f / %.1f MB".format(usedMb, totalMb) else "-"
+                                val total = stats?.totalMemoryBytes
+                                val free = stats?.freeMemoryBytes
+                                if (total != null && free != null && total > 0L) {
+                                    val usedMb = ((total - free).coerceAtLeast(0L)) / 1048576f
+                                    "%.1f / %.1f MB".format(usedMb, total / 1048576f)
+                                } else "—"
                             },
                             hasProgressBar = (stats?.totalMemoryBytes ?: 0L) > 0L,
                             progressFraction = if ((stats?.totalMemoryBytes ?: 0L) > 0L)
@@ -304,7 +310,7 @@ fun DashboardScreen(
                             modifier = Modifier.weight(1f),
                             icon = Icons.Outlined.Group,
                             label = "المستخدمون النشطون",
-                            value = "${activeHotspot.size}"
+                            value = if (stats == null) "—" else "${activeHotspot.size}"
                         )
                     }
                 }

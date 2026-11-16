@@ -51,15 +51,24 @@ fun CloudScreen(
     val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
     var isRefreshing by remember { mutableStateOf(false) }
+    var cloudLoadError by remember { mutableStateOf<String?>(null) }
+    var cloudLoaded by remember { mutableStateOf(false) }
     var isUpdatingDdns by remember { mutableStateOf(false) }
     var showUploadBackupDialog by remember { mutableStateOf(false) }
     var pingResult by remember { mutableStateOf<String?>(null) }
     var isPinging by remember { mutableStateOf(false) }
     var backupToDelete by remember { mutableStateOf<MikroTikCloudBackup?>(null) }
 
-    LaunchedEffect(Unit) {
-        viewModel.fetchCloudData()
+    fun refreshCloud() {
+        isRefreshing = true
+        cloudLoadError = null
+        viewModel.fetchCloudData(
+            onSuccess = { cloudLoaded = true; isRefreshing = false },
+            onError = { cloudLoadError = it; isRefreshing = false }
+        )
     }
+
+    LaunchedEffect(Unit) { refreshCloud() }
 
     Scaffold(
         topBar = {
@@ -94,17 +103,7 @@ fun CloudScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            isRefreshing = true
-                            viewModel.fetchCloudData(
-                                onSuccess = {
-                                    isRefreshing = false
-                                    Toast.makeText(context, "تم تحديث بيانات الكلاود", Toast.LENGTH_SHORT).show()
-                                },
-                                onError = {
-                                    isRefreshing = false
-                                    Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
-                                }
-                            )
+                            refreshCloud()
                         }
                     ) {
                         Icon(
@@ -127,6 +126,13 @@ fun CloudScreen(
                 .padding(horizontal = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            if (isRefreshing || cloudLoadError != null) item {
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    if (isRefreshing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (isRefreshing) "جارٍ تحميل بيانات الكلاود…" else "تعذر تحديث الكلاود: $cloudLoadError", color = if (cloudLoadError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = CairoFontFamily)
+                }
+            }
             item {
                 Spacer(modifier = Modifier.height(6.dp))
 
@@ -481,7 +487,14 @@ fun CloudScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        if (cloudBackups.isEmpty()) {
+                        if (cloudLoadError != null) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                                Text(if (cloudBackups.isEmpty()) "تعذر تحميل النسخ الاحتياطية: $cloudLoadError" else "تعذر تحديث النسخ؛ المعروض قديم: $cloudLoadError", color = MaterialTheme.colorScheme.error, fontFamily = CairoFontFamily)
+                                TextButton(onClick = { refreshCloud() }) { Text("إعادة المحاولة", fontFamily = CairoFontFamily) }
+                            }
+                        } else if (!cloudLoaded || (isRefreshing && cloudBackups.isEmpty())) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("جارٍ تحميل بيانات الكلاود…", fontFamily = CairoFontFamily) }
+                        } else if (cloudBackups.isEmpty()) {
                             Surface(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(10.dp),

@@ -448,7 +448,11 @@ class MikroTikRepository(
     }
 
     // Native data retrieval via Port 8728
-    private fun fetchRealNativeData(api: MikroTikNativeApi, connection: RouterConnection) {
+    private fun fetchRealNativeData(
+        api: MikroTikNativeApi,
+        connection: RouterConnection,
+        onComplete: ((String?) -> Unit)? = null
+    ) {
         repositoryScope.launch {
             hydrateCachedUsers(connection.host)
             try {
@@ -610,6 +614,8 @@ class MikroTikRepository(
                     )
                 )
 
+                onComplete?.let { callback -> launch(Dispatchers.Main) { callback(null) } }
+
             } catch (e: Exception) {
                 OperationTelemetry.record(
                     event = OperationTelemetry.Event.SYNC_RESULT,
@@ -619,6 +625,10 @@ class MikroTikRepository(
                     transport = OperationTelemetry.Transport.NATIVE_API,
                     minIntervalMs = 60_000
                 )
+                onComplete?.let { callback ->
+                    val message = e.message ?: "تعذر تحديث بيانات الراوتر"
+                    launch(Dispatchers.Main) { callback(message) }
+                }
             }
         }
     }
@@ -2366,12 +2376,15 @@ class MikroTikRepository(
     }
 
 
-    fun refreshData() {
+    fun refreshData(onComplete: (String?) -> Unit = {}) {
         repositoryScope.launch {
             val conn = _currentConnection.value
             val api = nativeApi
             if (api != null && conn != null) {
-                fetchRealNativeData(api, conn)
+                fetchRealNativeData(api, conn, onComplete)
+            } else {
+                val message = if (_isConnected.value) requiresNativeApiMessage() else "غير متصل بالراوتر"
+                launch(Dispatchers.Main) { onComplete(message) }
             }
         }
     }

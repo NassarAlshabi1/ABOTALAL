@@ -43,6 +43,7 @@ fun SystemToolDetailScreen(
     val context = LocalContext.current
     var itemsList by remember { mutableStateOf<List<RouterGenericItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
 
     // For Ping tool
@@ -52,6 +53,7 @@ fun SystemToolDetailScreen(
 
     fun refreshData() {
         isLoading = true
+        loadError = null
         viewModel.fetchGenericSectionData(
             categoryKey = toolKey,
             onSuccess = {
@@ -60,6 +62,7 @@ fun SystemToolDetailScreen(
             },
             onError = {
                 isLoading = false
+                loadError = it
                 Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
             }
         )
@@ -201,7 +204,8 @@ fun SystemToolDetailScreen(
                                                 }
                                             }
                                         },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60))
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0C5A60)),
+                                        enabled = !isPinging && pingTarget.isNotBlank()
                                     ) {
                                         if (isPinging) {
                                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -263,15 +267,21 @@ fun SystemToolDetailScreen(
                         )
                     )
 
-                    if (isLoading) {
+                    if (isLoading && itemsList.isEmpty()) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(color = Color(0xFF0C5A60))
                         }
+                    } else if (loadError != null && itemsList.isEmpty()) {
+                        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                            Text(loadError ?: "تعذر تحميل البيانات", fontFamily = CairoFontFamily, color = MaterialTheme.colorScheme.error)
+                            TextButton(onClick = { refreshData() }) { Text("إعادة المحاولة", fontFamily = CairoFontFamily) }
+                        }
                     } else if (filteredList.isEmpty()) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("لا توجد عناصر لعرضها في هذا القسم", fontFamily = CairoFontFamily, color = Color.Gray)
+                            Text(if (loadError != null) "تعذر التحديث؛ البيانات المعروضة قديمة" else "لا توجد عناصر لعرضها في هذا القسم", fontFamily = CairoFontFamily, color = if (loadError != null) MaterialTheme.colorScheme.error else Color.Gray)
                         }
                     } else {
+                        if (isLoading || loadError != null) Text(if (isLoading) "جارٍ تحديث البيانات…" else "تعذر التحديث: ${loadError}. البيانات المعروضة قديمة", modifier = Modifier.padding(horizontal = 16.dp), color = if (loadError != null) MaterialTheme.colorScheme.error else Color.Gray, fontFamily = CairoFontFamily)
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxSize()
