@@ -90,7 +90,8 @@ internal object AiDoctorClient {
     suspend fun listGeminiModels(apiKey: String): List<GeminiModel> = withContext(Dispatchers.IO) {
         val key = apiKey.trim()
         require(key.isNotBlank()) { "أدخل Gemini API Key أولاً." }
-        val url = "$GEMINI_ENDPOINT/models?key=${java.net.URLEncoder.encode(key, "UTF-8")}"
+        val url = "$GEMINI_ENDPOINT/models"
+        http.newCall(Request.Builder().url(url).header("x-goog-api-key", key).get().build()).execute().use { response ->
         http.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException("فشل تحميل نماذج Gemini: HTTP ${response.code}.")
