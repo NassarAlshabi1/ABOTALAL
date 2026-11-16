@@ -92,7 +92,6 @@ internal object AiDoctorClient {
         require(key.isNotBlank()) { "أدخل Gemini API Key أولاً." }
         val url = "$GEMINI_ENDPOINT/models"
         http.newCall(Request.Builder().url(url).header("x-goog-api-key", key).get().build()).execute().use { response ->
-        http.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException("فشل تحميل نماذج Gemini: HTTP ${response.code}.")
             val models = JSONObject(raw).optJSONArray("models") ?: JSONArray()
@@ -126,18 +125,12 @@ internal object AiDoctorClient {
         require(key.isNotBlank()) { "أدخل Gemini API Key أولاً." }
         require(model.isNotBlank()) { "اختر نموذج Gemini بعد تحميل النماذج." }
         val encodedModel = java.net.URLEncoder.encode(model, "UTF-8").replace("+", "%20")
-        val encodedKey = java.net.URLEncoder.encode(key, "UTF-8")
         val url = "$GEMINI_ENDPOINT/models/$encodedModel:generateContent"
         val body = JSONObject()
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
             .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))))
             .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         http.newCall(Request.Builder().url(url).header("x-goog-api-key", key).post(body).build()).execute().use { response ->
-        val body = JSONObject()
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
-            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))))
-            .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        http.newCall(Request.Builder().url(url).post(body).build()).execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException("استجاب Gemini برمز HTTP ${response.code}; تحقق من المفتاح والنموذج.")
             val parts = JSONObject(raw).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")

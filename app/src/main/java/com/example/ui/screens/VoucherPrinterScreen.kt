@@ -1086,29 +1086,30 @@ fun VoucherPrinterScreen(
                     onClick = {
                         if (!pushedToRouter) {
                             Toast.makeText(context, "يجب توليد وإضافة الكروت إلى السيرفر أولاً قبل الطباعة.", Toast.LENGTH_LONG).show()
-                            return@onClick
+                        } else {
+                            val printerHelper = VoucherPDFPrinter(
+                                context = context,
+                                vouchers = generatedVouchersList.toList(),
+                                theme = designTheme,
+                                customBg = customImageBitmap,
+                                cols = columnsCount,
+                                cardsPerPage = limitPerPage,
+                                xUser = usernameX,
+                                yUser = usernameY,
+                                xPass = passwordX,
+                                yPass = passwordY,
+                                xDetails = detailsX,
+                                yDetails = detailsY,
+                                sizeUser = usernameFontSize,
+                                sizePass = passwordFontSize,
+                                sizeDetails = detailsFontSize,
+                                textColor = textDesignColor,
+                                selectedProfile = selectedProfile,
+                                selectedProfilePrice = selectedProfilePrice,
+                                matchPasswordWithUsername = matchPasswordWithUsername
+                            )
+                            printerHelper.startPrintFlow()
                         }
-                        val printerHelper = VoucherPDFPrinter(
-                            context = context,
-                            vouchers = generatedVouchersList.toList(),
-                            theme = designTheme,
-                            customBg = customImageBitmap,
-                            cols = columnsCount,
-                            cardsPerPage = limitPerPage,
-                            xUser = usernameX,
-                            yUser = usernameY,
-                            xPass = passwordX,
-                            yPass = passwordY,
-                            xDetails = detailsX,
-                            yDetails = detailsY,
-                            sizeUser = usernameFontSize,
-                            sizePass = passwordFontSize,
-                            sizeDetails = detailsFontSize,
-                            textColor = textDesignColor,
-                            selectedProfile = selectedProfile,
-                            matchPasswordWithUsername = matchPasswordWithUsername
-                        )
-                        printerHelper.startPrintFlow()
                     },
                     enabled = generatedVouchersList.isNotEmpty() && pushedToRouter,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0061A4), contentColor = Color.White),
@@ -1478,6 +1479,7 @@ class VoucherPDFPrinter(
     private val sizeDetails: Int,
     private val textColor: Color,
     private val selectedProfile: String,
+    private val selectedProfilePrice: Int,
     private val matchPasswordWithUsername: Boolean
 ) {
     fun startPrintFlow() {
