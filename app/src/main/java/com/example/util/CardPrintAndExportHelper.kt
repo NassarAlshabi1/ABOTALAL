@@ -1475,7 +1475,7 @@ object CardPrintAndExportHelper {
         // Page Margins in points
         val marginX = (config.pageMarginMm * 2.83465f).coerceAtLeast(6f)
         val marginY = (config.pageMarginMm * 2.83465f).coerceAtLeast(6f)
-        val footerSpace = if (config.pageNumberingEnabled || config.pageNoteEnabled) 20f else 6f
+        val footerSpace = if (config.pageNumberingEnabled) 20f else 6f
 
         val printableW = pageWidth - (marginX * 2)
         val printableH = pageHeight - (marginY * 2) - footerSpace
@@ -1565,20 +1565,7 @@ object CardPrintAndExportHelper {
             }
         }
 
-        // 4. Page Header / Note
-        if (config.pageNoteEnabled && config.pageNoteText.isNotEmpty()) {
-            val notePaint = AndroidPaint().apply {
-                isAntiAlias = true
-                textAlign = AndroidPaint.Align.CENTER
-                textSize = config.pageNoteSize.coerceIn(6f, 16f)
-                color = parseColorSafe(config.pageNoteColorHex, ("#0C5A60").toColorInt())
-                isFakeBoldText = true
-            }
-            val noteY = pageHeight - 8f
-            canvas.drawText(config.pageNoteText, pageWidth / 2f, noteY, notePaint)
-        }
-
-        // 5. Page Numbering
+        // Page numbering is page-level metadata and remains in the footer.
         if (config.pageNumberingEnabled) {
             val numPaint = AndroidPaint().apply {
                 isAntiAlias = true
@@ -1681,7 +1668,7 @@ object CardPrintAndExportHelper {
                 isFakeBoldText = elem.isBold
             }
             val posX = cardRect.left + (elem.xMm * scaleX)
-            val posY = cardRect.top + (elem.yMm * scaleY) + (elem.fontSize * 0.85f)
+            val textTop = cardRect.top + (elem.yMm * scaleY)
             if (elem.showTitle && elem.titleText.isNotEmpty()) {
                 val titlePaint = AndroidPaint().apply {
                     isAntiAlias = true
@@ -1689,9 +1676,10 @@ object CardPrintAndExportHelper {
                     textSize = (elem.fontSize * 0.7f).coerceIn(5f, 12f)
                     color = parseColorSafe(elem.colorHex, AndroidColor.DKGRAY)
                 }
-                canvas.drawText(elem.titleText, posX, posY - (elem.fontSize * 0.85f), titlePaint)
+                val labelBaseline = textTop - titlePaint.fontMetrics.descent - titlePaint.textSize * 0.15f
+                canvas.drawText(elem.titleText, posX, labelBaseline, titlePaint)
             }
-            canvas.drawText(displayText, posX, posY, paint)
+            canvas.drawText(displayText, posX, textTop - paint.fontMetrics.ascent, paint)
         }
 
         // 1. Username / Code (ALWAYS displays real user code, positioned at exact xMm & yMm)
@@ -1705,7 +1693,7 @@ object CardPrintAndExportHelper {
                 isFakeBoldText = uCfg.isBold
             }
             val posX = cardRect.left + (uCfg.xMm * scaleX)
-            val posY = cardRect.top + (uCfg.yMm * scaleY) + (uCfg.fontSize * 0.85f)
+            val textTop = cardRect.top + (uCfg.yMm * scaleY)
 
             if (uCfg.showTitle && uCfg.titleText.isNotEmpty()) {
                 val titlePaint = AndroidPaint().apply {
@@ -1714,11 +1702,12 @@ object CardPrintAndExportHelper {
                     textSize = (uCfg.fontSize * 0.65f).coerceIn(5f, 12f)
                     color = parseColorSafe(uCfg.colorHex, AndroidColor.DKGRAY)
                 }
-                canvas.drawText(uCfg.titleText, posX, posY - (uCfg.fontSize * 0.85f), titlePaint)
+                val labelBaseline = textTop - titlePaint.fontMetrics.descent - titlePaint.textSize * 0.15f
+                canvas.drawText(uCfg.titleText, posX, labelBaseline, titlePaint)
             }
 
             // Real user username code
-            canvas.drawText(user.username, posX, posY, uPaint)
+            canvas.drawText(user.username, posX, textTop - uPaint.fontMetrics.ascent, uPaint)
         }
 
         // 2. Title
@@ -1861,6 +1850,21 @@ object CardPrintAndExportHelper {
                 }
                 canvas.drawRoundRect(lRect, 2f, 2f, logoPaint)
             }
+        }
+
+        // Page note is a card element in the editor preview, so honor its saved
+        // millimeter coordinates on every card instead of moving it to the sheet footer.
+        if (config.pageNoteEnabled && config.pageNoteText.isNotEmpty()) {
+            val notePaint = AndroidPaint().apply {
+                isAntiAlias = true
+                textAlign = AndroidPaint.Align.LEFT
+                textSize = config.pageNoteSize.coerceIn(6f, 16f)
+                color = parseColorSafe(config.pageNoteColorHex, ("#0C5A60").toColorInt())
+                isFakeBoldText = true
+            }
+            val noteX = cardRect.left + config.pageNoteX * scaleX
+            val noteTop = cardRect.top + config.pageNoteY * scaleY
+            canvas.drawText(config.pageNoteText, noteX, noteTop - notePaint.fontMetrics.ascent, notePaint)
         }
     }
 
