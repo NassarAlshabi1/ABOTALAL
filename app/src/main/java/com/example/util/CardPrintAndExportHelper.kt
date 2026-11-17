@@ -1667,27 +1667,20 @@ object CardPrintAndExportHelper {
         val scaleX = cardW / cardWidthMm
         val scaleY = cardH / cardHeightMm
 
-        // Helper to draw text element based on xMm and yMm with alignment support.
+        // Design editor positions X from the card's left edge. Match that contract
+        // in exports rather than interpreting it as a right-edge offset.
         // `elem.titleText` is the element's LABEL (drawn on the line above the
         // value) while `displayText` is the actual data of this card.
         fun drawTextItem(elem: CardElementConfig, displayText: String) {
             if (!elem.visible || displayText.isEmpty()) return
             val paint = AndroidPaint().apply {
                 isAntiAlias = true
-                textAlign = when (elem.alignment) {
-                    "center" -> AndroidPaint.Align.CENTER
-                    "left" -> AndroidPaint.Align.LEFT
-                    else -> AndroidPaint.Align.RIGHT
-                }
+                textAlign = AndroidPaint.Align.LEFT
                 textSize = elem.fontSize.coerceIn(5f, 26f)
                 color = parseColorSafe(elem.colorHex, ("#0F172A").toColorInt())
                 isFakeBoldText = elem.isBold
             }
-            val posX = when (elem.alignment) {
-                "center" -> cardRect.centerX() - (elem.xMm * scaleX)
-                "left" -> cardRect.left + (elem.xMm * scaleX)
-                else -> cardRect.right - (elem.xMm * scaleX)
-            }
+            val posX = cardRect.left + (elem.xMm * scaleX)
             val posY = cardRect.top + (elem.yMm * scaleY) + (elem.fontSize * 0.85f)
             if (elem.showTitle && elem.titleText.isNotEmpty()) {
                 val titlePaint = AndroidPaint().apply {
@@ -1706,20 +1699,12 @@ object CardPrintAndExportHelper {
             val uCfg = config.usernameConfig
             val uPaint = AndroidPaint().apply {
                 isAntiAlias = true
-                textAlign = when (uCfg.alignment) {
-                    "center" -> AndroidPaint.Align.CENTER
-                    "left" -> AndroidPaint.Align.LEFT
-                    else -> AndroidPaint.Align.RIGHT
-                }
+                textAlign = AndroidPaint.Align.LEFT
                 textSize = uCfg.fontSize.coerceIn(6f, 24f)
                 color = parseColorSafe(uCfg.colorHex, ("#0F172A").toColorInt())
                 isFakeBoldText = uCfg.isBold
             }
-            val posX = when (uCfg.alignment) {
-                "center" -> cardRect.centerX() - (uCfg.xMm * scaleX)
-                "left" -> cardRect.left + (uCfg.xMm * scaleX)
-                else -> cardRect.right - (uCfg.xMm * scaleX)
-            }
+            val posX = cardRect.left + (uCfg.xMm * scaleX)
             val posY = cardRect.top + (uCfg.yMm * scaleY) + (uCfg.fontSize * 0.85f)
 
             if (uCfg.showTitle && uCfg.titleText.isNotEmpty()) {
@@ -1766,7 +1751,9 @@ object CardPrintAndExportHelper {
 
         // 6. Payment / Batch
         if (config.paymentConfig.visible) {
-            drawTextItem(config.paymentConfig, batch.batchId)
+            // This field is configured as literal text in the design editor.
+            // Never print the internal batch identifier as card content.
+            drawTextItem(config.paymentConfig.copy(showTitle = false), config.paymentConfig.titleText)
         }
 
         // 7. Serial
@@ -1787,7 +1774,7 @@ object CardPrintAndExportHelper {
             val bCfg = config.barcodeConfig
             val bw = (bCfg.widthMm * scaleX).coerceAtLeast(10f)
             val bh = (bCfg.heightMm * scaleY).coerceAtLeast(6f)
-            val bx = cardRect.right - (bCfg.xMm * scaleX) - bw
+            val bx = cardRect.left + (bCfg.xMm * scaleX)
             val by = cardRect.top + (bCfg.yMm * scaleY)
             val bRect = AndroidRectF(bx, by, bx + bw, by + bh)
 

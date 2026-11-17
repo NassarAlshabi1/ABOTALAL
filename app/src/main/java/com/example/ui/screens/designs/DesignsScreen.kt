@@ -868,7 +868,7 @@ fun DesignsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     NumField(
-                                        label = "الموضع س (أفقي مم)",
+                                        label = "الموضع س من اليسار (مم)",
                                         value = design.barcodeX,
                                         onValueChange = { value ->
                                             viewModel.updateDraft(design.copy(barcodeX = value))
@@ -981,7 +981,7 @@ fun DesignsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     NumField(
-                                        label = "الموضع س (أفقي مم)",
+                                        label = "الموضع س من اليسار (مم)",
                                         value = design.logoX,
                                         onValueChange = { value ->
                                             viewModel.updateDraft(design.copy(logoX = value))
@@ -1534,7 +1534,7 @@ fun ElementEditorCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 NumField(
-                    label = "أفقي س (مم)",
+                    label = "أفقي س من اليسار (مم)",
                     value = element.x,
                     onValueChange = { x -> onElementChange(element.copy(x = x)) },
                     step = 0.5f, min = 0f, max = 200f, decimals = 1,
@@ -1636,9 +1636,9 @@ fun QuickPositionButtons(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            QuickPosButton("↗ أعلى يمين") { onPositionSelected(2f, 2f) }
+            QuickPosButton("↗ أعلى يمين") { onPositionSelected(maxOf(0f, cardWidth - 25f), 2f) }
             QuickPosButton("↑ أعلى وسط") { onPositionSelected(maxOf(0f, (cardWidth - 25) / 2f), 2f) }
-            QuickPosButton("↖ أعلى يسار") { onPositionSelected(maxOf(0f, cardWidth - 25f), 2f) }
+            QuickPosButton("↖ أعلى يسار") { onPositionSelected(2f, 2f) }
         }
         
         Spacer(modifier = Modifier.height(4.dp))
@@ -1646,11 +1646,11 @@ fun QuickPositionButtons(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            QuickPosButton("→ وسط يمين") { onPositionSelected(2f, maxOf(0f, (cardHeight - 6) / 2f)) }
+            QuickPosButton("→ وسط يمين") { onPositionSelected(maxOf(0f, cardWidth - 25f), maxOf(0f, (cardHeight - 6) / 2f)) }
             QuickPosButton("🎯 مركز الكرت", true) { 
                 onPositionSelected(maxOf(0f, (cardWidth - 25) / 2f), maxOf(0f, (cardHeight - 6) / 2f)) 
             }
-            QuickPosButton("← وسط يسار") { onPositionSelected(maxOf(0f, cardWidth - 25f), maxOf(0f, (cardHeight - 6) / 2f)) }
+            QuickPosButton("← وسط يسار") { onPositionSelected(2f, maxOf(0f, (cardHeight - 6) / 2f)) }
         }
         
         Spacer(modifier = Modifier.height(4.dp))
@@ -1658,9 +1658,9 @@ fun QuickPositionButtons(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            QuickPosButton("↘ أسفل يمين") { onPositionSelected(2f, maxOf(0f, cardHeight - 6f)) }
+            QuickPosButton("↘ أسفل يمين") { onPositionSelected(maxOf(0f, cardWidth - 25f), maxOf(0f, cardHeight - 6f)) }
             QuickPosButton("↓ أسفل وسط") { onPositionSelected(maxOf(0f, (cardWidth - 25) / 2f), maxOf(0f, cardHeight - 6f)) }
-            QuickPosButton("↙ أسفل يسار") { onPositionSelected(maxOf(0f, cardWidth - 25f), maxOf(0f, cardHeight - 6f)) }
+            QuickPosButton("↙ أسفل يسار") { onPositionSelected(2f, maxOf(0f, cardHeight - 6f)) }
         }
     }
 }

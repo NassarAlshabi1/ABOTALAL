@@ -11,7 +11,7 @@ import androidx.compose.ui.text.font.FontWeight
  */
 data class ElementStyle(
     val show: Boolean = false,
-    val x: Float = 4f,          // الموضع الأفقي (مم) - من يمين الكرت
+    val x: Float = 4f,          // الموضع الأفقي (مم) - من يسار الكرت
     val y: Float = 6f,          // الموضع الرأسي (مم) - من أعلى الكرت
     val fontSize: Float = 10f,  // حجم الخط (نقطة)
     val color: String = "#000000",
