@@ -45,8 +45,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.RouterBackupFile
+import com.example.R
+import com.example.ui.components.LiveLineChart
+import com.example.ui.components.RefreshableListContainer
 import com.example.ui.theme.CairoFontFamily
+import com.example.ui.theme.netCraftColors
 import com.example.ui.viewmodel.MikroTikViewModel
+import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -71,12 +76,13 @@ fun DashboardScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     var refreshResultMessage by remember { mutableStateOf<String?>(null) }
 
-    // Colors based on theme
-    val screenBg = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF1F5F9)
-    val cardBg = if (isDarkMode) Color(0xFF1E293B) else Color.White
-    val cardBorderColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
-    val textPrimary = if (isDarkMode) Color(0xFFF8FAFC) else Color(0xFF0F172A)
-    val textSecondary = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+    // Semantic theme tokens — replaces the old hardcoded isDarkMode colors.
+    val appColors = netCraftColors()
+    val screenBg = appColors.screenBg
+    val cardBg = appColors.cardBg
+    val cardBorderColor = appColors.cardBorder
+    val textPrimary = appColors.textPrimary
+    val textSecondary = appColors.textSecondary
 
     // Dialog states for services
     var showExpensesDialog by remember { mutableStateOf(false) }
@@ -113,10 +119,36 @@ fun DashboardScreen(
         }
     }
 
+    // ── Live metric history (sampled from the 3-second stats ticker) ──
+    val cpuHistory = remember { mutableStateListOf<Int>() }
+    val memHistory = remember { mutableStateListOf<Int>() }
+    LaunchedEffect(Unit) {
+        viewModel.routerStats.collect { s ->
+            val cpu = s?.cpuUsage ?: return@collect
+            val total = s.totalMemoryBytes
+            val free = s.freeMemoryBytes
+            val memPct = if (total > 0) (((total - free) * 100) / total).toInt() else return@collect
+            if (cpuHistory.lastOrNull() != cpu) {
+                cpuHistory.add(cpu)
+                if (cpuHistory.size > 40) cpuHistory.removeAt(0)
+            }
+            if (memHistory.lastOrNull() != memPct) {
+                memHistory.add(memPct)
+                if (memHistory.size > 40) memHistory.removeAt(0)
+            }
+        }
+    }
+
+    RefreshableListContainer(
+        isRefreshing = isRefreshing,
+        onRefresh = { doRefresh() },
+        modifier = Modifier
+            .fillMaxSize()
+            .background(screenBg),
+    ) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(screenBg)
             .padding(horizontal = 14.dp),
         contentPadding = PaddingValues(top = 10.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -314,6 +346,38 @@ fun DashboardScreen(
                         )
                     }
                 }
+            }
+        }
+
+        // 2.5 بطاقة المراقبة الحية: مخططات المعالج والذاكرة (تحديث كل 3 ثوانٍ)
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LiveMetricCard(
+                    title = stringResource(R.string.cpu_live_chart_title),
+                    currentLabel = stringResource(R.string.cpu_current_value, stats?.cpuUsage ?: 0),
+                    values = cpuHistory,
+                    lineColor = appColors.chartLinePrimary,
+                    fillColor = appColors.chartLinePrimary,
+                    gridColor = appColors.chartGrid,
+                    labelColor = textSecondary,
+                )
+                LiveMetricCard(
+                    title = stringResource(R.string.memory_live_chart_title),
+                    currentLabel = stringResource(
+                        R.string.memory_current_value,
+                        run {
+                            val s = stats
+                            if (s != null && s.totalMemoryBytes > 0)
+                                (((s.totalMemoryBytes - s.freeMemoryBytes) * 100) / s.totalMemoryBytes).toInt()
+                            else 0
+                        }
+                    ),
+                    values = memHistory,
+                    lineColor = appColors.chartLineSecondary,
+                    fillColor = appColors.chartLineSecondary,
+                    gridColor = appColors.chartGrid,
+                    labelColor = textSecondary,
+                )
             }
         }
 
@@ -761,6 +825,7 @@ fun DashboardScreen(
         }
 
     }
+    } // RefreshableListContainer
 
     // --- Dialogs ---
     if (showPrintingSystemDialog) {
@@ -1594,5 +1659,79 @@ private fun formatBackupFileSize(bytes: Long): String {
         b >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", b / (1024 * 1024))
         b >= 1024 -> String.format(Locale.US, "%.0f KB", b / 1024)
         else -> "$bytes B"
+    }
+}
+
+/**
+ * Dashboard live-metric card: header row (title + current value) over a
+ * [LiveLineChart] rendering the rolling history sampled from routerStats.
+ */
+@Composable
+private fun LiveMetricCard(
+    title: String,
+    currentLabel: String,
+    values: List<Int>,
+    lineColor: Color,
+    fillColor: Color,
+    gridColor: Color,
+    labelColor: Color,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = netCraftColors().cardBg,
+        border = BorderStroke(1.dp, netCraftColors().cardBorder),
+        shadowElevation = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = title,
+                    fontFamily = CairoFontFamily,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = labelColor,
+                )
+                Text(
+                    text = if (values.isEmpty()) stringResource(R.string.chart_no_data) else currentLabel,
+                    fontFamily = CairoFontFamily,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = lineColor,
+                )
+            }
+            if (values.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(96.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = stringResource(R.string.chart_no_data),
+                        fontFamily = CairoFontFamily,
+                        fontSize = 12.sp,
+                        color = labelColor,
+                    )
+                }
+            } else {
+                LiveLineChart(
+                    values = values.map { it.toFloat() },
+                    lineColor = lineColor,
+                    fillColor = fillColor,
+                    gridColor = gridColor,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(96.dp),
+                )
+            }
+        }
     }
 }

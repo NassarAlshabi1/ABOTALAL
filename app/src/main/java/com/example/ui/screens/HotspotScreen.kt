@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.HotspotActive
 import com.example.data.model.HotspotProfile
 import com.example.data.model.HotspotUser
+import com.example.ui.components.RefreshableListContainer
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 
@@ -68,6 +69,9 @@ fun HotspotScreen(
     // Snackbar notifications
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // Pull-to-refresh: re-syncs hotspot users, sessions and stats from the router.
+    var isPullRefreshing by remember { mutableStateOf(false) }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
@@ -176,10 +180,21 @@ fun HotspotScreen(
                 }
             }
         ) { padding ->
+            RefreshableListContainer(
+                isRefreshing = isPullRefreshing,
+                onRefresh = {
+                    if (!isPullRefreshing) {
+                        isPullRefreshing = true
+                        viewModel.refreshAllData { isPullRefreshing = false }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
                     .background(MaterialTheme.colorScheme.background)
             ) {
                 Spacer(modifier = Modifier.height(10.dp))
@@ -307,6 +322,7 @@ fun HotspotScreen(
                     }
                 )
             }
+            } // RefreshableListContainer
         }
     }
 }

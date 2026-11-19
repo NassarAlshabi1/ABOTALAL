@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.ActivityLog
 import com.example.data.model.RouterLogEntry
+import com.example.ui.components.RefreshableListContainer
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import java.text.SimpleDateFormat
@@ -54,6 +55,22 @@ fun LogScreen(
         (routerLogs ?: emptyList()).map { it.topics }.filter { it.isNotBlank() }.distinct().take(12)
     }
     val isConnected by viewModel.isConnected.collectAsState()
+
+    // Pull-to-refresh state: refreshes whatever tab is active.
+    var isPullRefreshing by remember { mutableStateOf(false) }
+    fun pullRefresh() {
+        if (isPullRefreshing) return
+        if (selectedTab == 1 && isConnected) {
+            isPullRefreshing = true
+            viewModel.fetchRouterLogs(
+                onSuccess = { routerLogs = it; isPullRefreshing = false },
+                onError = { routerLogsError = it; routerLogs = null; isPullRefreshing = false }
+            )
+        } else {
+            isPullRefreshing = true
+            viewModel.refreshAllData { isPullRefreshing = false }
+        }
+    }
 
     fun loadRouterLogs() {
         routerLogsLoading = true
@@ -152,15 +169,25 @@ fun LogScreen(
                             }
 
                             if (logs.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { showClearConfirm = true },
-                                    modifier = Modifier.size(36.dp)
+                                TooltipBox(
+                                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                                    tooltip = {
+                                        PlainTooltip {
+                                            Text("مسح كل السجلات المحلية", fontFamily = CairoFontFamily, fontSize = 12.sp)
+                                        }
+                                    },
+                                    state = rememberTooltipState()
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.DeleteSweep,
-                                        contentDescription = "مسح السجلات",
-                                        tint = Color(0xFFFCA5A5)
-                                    )
+                                    IconButton(
+                                        onClick = { showClearConfirm = true },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.DeleteSweep,
+                                            contentDescription = "مسح السجلات",
+                                            tint = Color(0xFFFCA5A5)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -168,30 +195,32 @@ fun LogScreen(
                 }
             }
         ) { padding ->
+            RefreshableListContainer(
+                isRefreshing = isPullRefreshing,
+                onRefresh = { pullRefresh() },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
                     .background(MaterialTheme.colorScheme.background)
             ) {
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Tab selector: local activity log | router log buffer
-                Row(
+                // Tab selector: local activity log | router log buffer (M3 segmented buttons)
+                SingleChoiceSegmentedButtonRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(horizontal = 24.dp, vertical = 4.dp)
                 ) {
                     listOf("سجل العمليات", "سجلات الراوتر").forEachIndexed { idx, label ->
-                        FilterChip(
+                        SegmentedButton(
                             selected = selectedTab == idx,
                             onClick = { selectedTab = idx },
-                            label = { Text(label, fontFamily = CairoFontFamily, fontSize = 12.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFF0C5A60),
-                                selectedLabelColor = Color.White
-                            )
+                            shape = SegmentedButtonDefaults.itemShape(idx, 2),
+                            label = { Text(label, fontFamily = CairoFontFamily, fontSize = 12.sp) }
                         )
                     }
                 }
@@ -397,6 +426,7 @@ fun LogScreen(
                     }
                 )
             }
+            } // RefreshableListContainer
         }
     }
 }

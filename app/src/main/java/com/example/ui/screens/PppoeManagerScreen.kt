@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.PppoeUser
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
+import com.example.ui.components.RefreshableListContainer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -154,6 +155,14 @@ fun PppoeManagerScreen(
                 }
             }
         ) { padding ->
+            RefreshableListContainer(
+                isRefreshing = isLoading,
+                onRefresh = {
+                    refreshUsers()
+                },
+                modifier = Modifier
+                    .fillMaxSize(),
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -353,6 +362,7 @@ fun PppoeManagerScreen(
                     }
                 }
             }
+            } // RefreshableListContainer
         }
     }
 

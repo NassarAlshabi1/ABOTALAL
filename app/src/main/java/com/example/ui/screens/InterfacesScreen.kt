@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.InterfaceStats
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
+import com.example.ui.components.RefreshableListContainer
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,6 +47,9 @@ fun InterfacesScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // Pull-to-refresh: re-syncs data from the router.
+    var isPullRefreshing by remember { mutableStateOf(false) }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
@@ -133,6 +137,17 @@ fun InterfacesScreen(
             },
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
         ) { padding ->
+            RefreshableListContainer(
+                isRefreshing = isPullRefreshing,
+                onRefresh = {
+                    if (!isPullRefreshing) {
+                        isPullRefreshing = true
+                        viewModel.refreshAllData { isPullRefreshing = false }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize(),
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -350,6 +365,7 @@ fun InterfacesScreen(
                     CircularProgressIndicator()
                 }
             }
+            } // RefreshableListContainer
         }
     }
 }

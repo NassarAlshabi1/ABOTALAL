@@ -48,6 +48,7 @@ import com.example.data.model.UserManagerUser
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.CardPrintAndExportHelper
+import com.example.ui.components.RefreshableListContainer
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -237,6 +238,9 @@ fun UserManagerScreen(
         )
     }
 
+    // Pull-to-refresh: re-syncs data from the router.
+    var isPullRefreshing by remember { mutableStateOf(false) }
+
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
             topBar = {
@@ -409,6 +413,17 @@ fun UserManagerScreen(
             },
             containerColor = Color(0xFFF8FAFC)
         ) { innerPadding ->
+            RefreshableListContainer(
+                isRefreshing = isPullRefreshing,
+                onRefresh = {
+                    if (!isPullRefreshing) {
+                        isPullRefreshing = true
+                        viewModel.refreshAllData { isPullRefreshing = false }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize(),
+            ) {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -497,6 +512,7 @@ fun UserManagerScreen(
                     Spacer(modifier = Modifier.height(24.dp))
                 }
             }
+            } // RefreshableListContainer
         }
     }
 

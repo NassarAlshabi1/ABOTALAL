@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.InterfaceStats
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
+import com.example.ui.components.RefreshableListContainer
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -70,6 +71,9 @@ fun PortsBandwidthScreen(
         }
         matchesSearch && matchesFilter
     }
+
+    // Pull-to-refresh: re-syncs data from the router.
+    var isPullRefreshing by remember { mutableStateOf(false) }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
@@ -165,6 +169,17 @@ fun PortsBandwidthScreen(
                 }
             }
         ) { padding ->
+            RefreshableListContainer(
+                isRefreshing = isPullRefreshing,
+                onRefresh = {
+                    if (!isPullRefreshing) {
+                        isPullRefreshing = true
+                        viewModel.refreshAllData { isPullRefreshing = false }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize(),
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -349,6 +364,7 @@ fun PortsBandwidthScreen(
                     item { Spacer(modifier = Modifier.height(16.dp)) }
                 }
             }
+            } // RefreshableListContainer
         }
     }
 

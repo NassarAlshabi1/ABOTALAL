@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.MikroTikCloudBackup
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
+import com.example.ui.components.RefreshableListContainer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,6 +120,14 @@ fun CloudScreen(
             )
         }
     ) { padding ->
+        RefreshableListContainer(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                refreshCloud()
+            },
+            modifier = Modifier
+                .fillMaxSize(),
+        ) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -597,6 +606,7 @@ fun CloudScreen(
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+        } // RefreshableListContainer
     }
 
     // Dialog: Upload Cloud Backup
