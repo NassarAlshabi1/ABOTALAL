@@ -2220,9 +2220,13 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
             if (!e.show || value.isBlank()) return
             textPaint.textSize = max(1f, e.fontSize * 0.8f)
             textPaint.color = color(e.color)
-            textPaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT,
-                (if (e.bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL) or
-                    (if (e.italic) android.graphics.Typeface.ITALIC else android.graphics.Typeface.NORMAL))
+            val style = when {
+                e.bold && e.italic -> android.graphics.Typeface.BOLD_ITALIC
+                e.bold -> android.graphics.Typeface.BOLD
+                e.italic -> android.graphics.Typeface.ITALIC
+                else -> android.graphics.Typeface.NORMAL
+            }
+            textPaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, style)
             canvas.drawText(value, left + e.x * mm, top + e.y * mm + textPaint.textSize, textPaint)
         }
         for (p in 0 until pageCount) {
