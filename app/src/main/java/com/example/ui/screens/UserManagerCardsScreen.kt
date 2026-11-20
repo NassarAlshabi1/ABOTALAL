@@ -7,7 +7,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -106,6 +105,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.example.data.model.UserManagerProfile
 import com.example.data.model.UserManagerUser
+
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.CardPrintAndExportHelper
@@ -672,17 +673,17 @@ fun UserManagerCardsScreen(
                                 .clickable {
                                     val selected = selectedUsernames.value
                                     if (selected.isEmpty()) {
-                                        Toast.makeText(context, "يرجى تحديد كرت واحد على الأقل للتفعيل", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.info("يرجى تحديد كرت واحد على الأقل للتفعيل")
                                     } else {
                                         viewModel.bulkToggleUserManagerUsers(
                                             selected.toList(),
                                             active = true,
                                             onSuccess = { count ->
-                                                Toast.makeText(context, "تم تفعيل $count كرت بنجاح", Toast.LENGTH_SHORT).show()
+                                                AppFeedback.success("تم تفعيل $count كرت بنجاح")
                                                 selectedUsernames.value = emptySet()
                                             },
                                             onError = { message ->
-                                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                                AppFeedback.info(message, long = true)
                                             }
                                         )
                                     }
@@ -720,7 +721,7 @@ fun UserManagerCardsScreen(
                                 .clickable {
                                     val selected = selectedUsernames.value
                                     if (selected.isEmpty()) {
-                                        Toast.makeText(context, "يرجى تحديد الكروت المراد حذفها", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.info("يرجى تحديد الكروت المراد حذفها")
                                     } else {
                                         userToDelete = null // Bulk delete flag
                                         showDeleteConfirmDialog = true
@@ -805,7 +806,7 @@ fun UserManagerCardsScreen(
                                     // touch cards that are no longer visible/fresh.
                                     selectedUsernames.value = emptySet()
                                     viewModel.refreshAllData()
-                                    Toast.makeText(context, "جاري تحديث الكروت من السيرفر...", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.info("جاري تحديث الكروت من السيرفر...")
                                 }
                                 .testTag("cards_refresh_button")
                         ) {
@@ -1376,10 +1377,10 @@ fun UserManagerCardsScreen(
                 viewModel.toggleUserManagerUser(
                     username = user.username,
                     onSuccess = {
-                        Toast.makeText(context, "تم تغيير حالة الكرت", Toast.LENGTH_SHORT).show()
+                        AppFeedback.success("تم تغيير حالة الكرت")
                     },
                     onError = { err ->
-                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                        AppFeedback.error(err)
                     }
                 )
                 selectedCardForDetails = null
@@ -1409,11 +1410,11 @@ fun UserManagerCardsScreen(
                     newProfile = targetProfile,
                     resetUptime = resetUptime,
                     onSuccess = {
-                        Toast.makeText(context, "✅ تم تجديد الكرت (${user.username}) بالباقة ($targetProfile) بنجاح!", Toast.LENGTH_LONG).show()
+                        AppFeedback.success("✅ تم تجديد الكرت (${user.username}) بالباقة ($targetProfile) بنجاح!", long = true)
                         cardToRenew = null
                     },
                     onError = { err ->
-                        Toast.makeText(context, "تعذر التجديد: $err", Toast.LENGTH_SHORT).show()
+                        AppFeedback.error("تعذر التجديد: $err")
                     }
                 )
             }
@@ -1457,18 +1458,18 @@ fun UserManagerCardsScreen(
                             viewModel.deleteUserManagerUser(
                                 username = userToDelete!!,
                                 onSuccess = {
-                                    Toast.makeText(context, "تم حذف الكرت بنجاح", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.success("تم حذف الكرت بنجاح")
                                 },
-                                onError = { Toast.makeText(context, "فشل الحذف", Toast.LENGTH_SHORT).show() }
+                                onError = { AppFeedback.error("فشل الحذف") }
                             )
                         } else {
                             viewModel.bulkDeleteUserManagerUsers(
                                 usernames = selectedUsernames.value.toList(),
                                 onSuccess = { deletedCount ->
-                                    Toast.makeText(context, "تم حذف $deletedCount كرت بنجاح", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.success("تم حذف $deletedCount كرت بنجاح")
                                     selectedUsernames.value = emptySet()
                                 },
-                                onError = { Toast.makeText(context, "فشل الحذف الجماعي", Toast.LENGTH_SHORT).show() }
+                                onError = { AppFeedback.error("فشل الحذف الجماعي") }
                             )
                         }
                         showDeleteConfirmDialog = false
@@ -1521,10 +1522,10 @@ fun UserManagerCardsScreen(
                         showCleanExpiredConfirmDialog = false
                         viewModel.cleanExpiredUserManagerUsers(
                             onSuccess = { count ->
-                                Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
+                                AppFeedback.error("تم تنظيف $count كرت منتهي")
                             },
                             onError = { err ->
-                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                AppFeedback.error(err)
                             }
                         )
                     },
@@ -1665,7 +1666,7 @@ fun CardDetailsDialog(
                                     IconButton(
                                         onClick = {
                                             clipboard.setPrimaryClip(ClipData.newPlainText("username", user.username))
-                                            Toast.makeText(context, "تم نسخ اسم المستخدم", Toast.LENGTH_SHORT).show()
+                                            AppFeedback.success("تم نسخ اسم المستخدم")
                                         },
                                         modifier = Modifier.size(24.dp)
                                     ) {
@@ -1700,7 +1701,7 @@ fun CardDetailsDialog(
                                     IconButton(
                                         onClick = {
                                             clipboard.setPrimaryClip(ClipData.newPlainText("password", user.password.ifEmpty { user.username }))
-                                            Toast.makeText(context, "تم نسخ كلمة المرور", Toast.LENGTH_SHORT).show()
+                                            AppFeedback.success("تم نسخ كلمة المرور")
                                         },
                                         modifier = Modifier.size(24.dp)
                                     ) {
@@ -2108,9 +2109,9 @@ private fun exportCardsCsv(context: Context, users: List<UserManagerUser>) {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(shareIntent, "مشاركة أو فتح ملف الكروت (Excel)"))
-        Toast.makeText(context, "تم تجهيز ملف Excel بنجاح", Toast.LENGTH_SHORT).show()
+        AppFeedback.success("تم تجهيز ملف Excel بنجاح")
     } catch (e: Exception) {
-        Toast.makeText(context, "حدث خطأ أثناء تصدير الملف: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        AppFeedback.error("حدث خطأ أثناء تصدير الملف: ${e.localizedMessage}")
     }
 }
 

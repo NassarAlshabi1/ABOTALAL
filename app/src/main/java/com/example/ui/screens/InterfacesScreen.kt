@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.InterfaceStats
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.ui.components.RefreshableListContainer
@@ -45,7 +46,6 @@ fun InterfacesScreen(
     var successMessage by remember { mutableStateOf<String?>(null) }
     var runningCommand by remember { mutableStateOf(false) }
 
-    val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     // Pull-to-refresh: re-syncs data from the router.
@@ -134,8 +134,7 @@ fun InterfacesScreen(
                         }
                     }
                 }
-            },
-            snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
+            }
         ) { padding ->
             RefreshableListContainer(
                 isRefreshing = isPullRefreshing,
@@ -286,7 +285,7 @@ fun InterfacesScreen(
                                     },
                                     onError = { err ->
                                         runningCommand = false
-                                        scope.launch { snackbarHostState.showSnackbar(err) }
+                                        AppFeedback.error(err)
                                     }
                                 )
                             },

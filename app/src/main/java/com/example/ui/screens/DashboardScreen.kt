@@ -49,6 +49,7 @@ import com.example.R
 import com.example.ui.components.LiveLineChart
 import com.example.ui.components.RefreshableListContainer
 import com.example.ui.theme.CairoFontFamily
+import com.example.ui.theme.LocalIsDarkTheme
 import com.example.ui.theme.netCraftColors
 import com.example.ui.viewmodel.MikroTikViewModel
 import androidx.compose.ui.res.stringResource
@@ -67,7 +68,6 @@ fun DashboardScreen(
     val userManagerUsers by viewModel.userManagerUsers.collectAsStateWithLifecycle()
     val profiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
     val activeHotspot by viewModel.activeHotspot.collectAsStateWithLifecycle()
-    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
     val profilePrices = remember(profiles) { profiles.associate { it.name to it.price } }
     val cardsAccountValue = userManagerUsers.sumOf { profilePrices[it.profile] ?: 0 }
     val formattedCardsAccountValue = String.format(Locale.getDefault(), "%,d", cardsAccountValue)
@@ -392,26 +392,24 @@ fun DashboardScreen(
                     // قيمة الحسابات محسوبة من أسعار الباقات المحمّلة من الراوتر.
                     StatCardItem(
                         modifier = Modifier.weight(1f),
-                        title = "قيمة الحسابات",
+                        title = stringResource(R.string.stat_accounts_value_title),
                         icon = Icons.Filled.PointOfSale,
                         iconTint = Color(0xFF0284C7),
                         iconBackground = Color(0xFFE0F2FE),
                         value = "$formattedCardsAccountValue ريال",
-                        footer = "حسب أسعار باقات اليوزرمانجر",
-                        isDarkMode = isDarkMode,
+                        footer = stringResource(R.string.stat_accounts_value_footer),
                         onClick = { showFinancialReportDialog = true }
                     )
 
                     // كرت الكروت المولدة (يسار)
                     StatCardItem(
                         modifier = Modifier.weight(1f),
-                        title = "الكروت المولدة",
+                        title = stringResource(R.string.stat_generated_cards_title),
                         icon = Icons.Filled.CreditCard,
                         iconTint = Color(0xFFEA580C),
                         iconBackground = Color(0xFFFFEDD5),
                         value = "${userManagerUsers.size}",
-                        footer = "الكروت خلال 30 يوماً: ${userManagerUsers.size}",
-                        isDarkMode = isDarkMode,
+                        footer = stringResource(R.string.stat_generated_cards_footer, userManagerUsers.size),
                         onClick = { navigateToTab(2) }
                     )
                 }
@@ -424,26 +422,24 @@ fun DashboardScreen(
                     // الكروت النشطة تُحسب من User Manager فقط، وليس من جلسات الهوتسبوت.
                     StatCardItem(
                         modifier = Modifier.weight(1f),
-                        title = "الكروت النشطة",
+                        title = stringResource(R.string.stat_active_cards_title),
                         icon = Icons.Filled.CheckCircle,
                         iconTint = Color(0xFF10B981),
                         iconBackground = Color(0xFFD1FAE5),
                         value = "${userManagerUsers.count { it.active }}",
                         footer = "User Manager",
-                        isDarkMode = isDarkMode,
                         onClick = { navigateToTab(2) }
                     )
 
                     // كرت الكروت المتبقية (يسار)
                     StatCardItem(
                         modifier = Modifier.weight(1f),
-                        title = "الكروت المتبقية",
+                        title = stringResource(R.string.stat_remaining_cards_title),
                         icon = Icons.AutoMirrored.Filled.Article,
                         iconTint = Color(0xFF0284C7),
                         iconBackground = Color(0xFFE0F2FE),
                         value = "${hotspotUsers.size}",
-                        footer = "كروت الهوتسبوت: ${hotspotUsers.size}",
-                        isDarkMode = isDarkMode,
+                        footer = stringResource(R.string.stat_remaining_cards_footer, hotspotUsers.size),
                         onClick = { navigateToTab(1) }
                     )
                 }
@@ -459,8 +455,8 @@ fun DashboardScreen(
                     .clip(RoundedCornerShape(16.dp))
                     .clickable { showPrintingSystemDialog = true },
                 shape = RoundedCornerShape(16.dp),
-                color = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFFEF3C7),
-                border = if (isDarkMode) BorderStroke(1.dp, Color(0xFFD97706).copy(alpha = 0.5f)) else null
+                color = appColors.warningBanner,
+                border = appColors.warningBannerBorder
             ) {
                 Row(
                     modifier = Modifier
@@ -477,20 +473,20 @@ fun DashboardScreen(
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = if (isDarkMode) Color(0xFFD97706).copy(alpha = 0.25f) else Color(0xFFFDE68A),
+                            color = appColors.warningChipBg,
                             modifier = Modifier.size(36.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Filled.Campaign,
                                     contentDescription = null,
-                                    tint = if (isDarkMode) Color(0xFFFBBF24) else Color(0xFFD97706),
+                                    tint = appColors.warningChipIcon,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
                         Text(
-                            text = "معا نظام الطباعة NetCraft",
+                            text = stringResource(R.string.printing_system_banner_title),
                             fontFamily = CairoFontFamily,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
@@ -511,12 +507,12 @@ fun DashboardScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                                contentDescription = "عرض",
+                                contentDescription = stringResource(R.string.action_view),
                                 tint = Color.White,
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "عرض",
+                                text = stringResource(R.string.action_view),
                                 fontFamily = CairoFontFamily,
                                 color = Color.White,
                                 fontSize = 13.sp,
@@ -554,7 +550,6 @@ fun DashboardScreen(
                     icon = Icons.Filled.People,
                     backgroundColor = Color(0xFFBAE6FD),
                     contentColor = Color(0xFF0284C7),
-                    isDarkMode = isDarkMode,
                     onClick = { navigateToTab(2) }
                 )
 
@@ -565,7 +560,6 @@ fun DashboardScreen(
                     icon = Icons.Filled.Wifi,
                     backgroundColor = Color(0xFF99F6E4),
                     contentColor = Color(0xFF0D9488),
-                    isDarkMode = isDarkMode,
                     onClick = { navigateToTab(1) }
                 )
 
@@ -576,7 +570,6 @@ fun DashboardScreen(
                     icon = Icons.AutoMirrored.Filled.ReceiptLong,
                     backgroundColor = Color(0xFFFECDD3),
                     contentColor = Color(0xFFE11D48),
-                    isDarkMode = isDarkMode,
                     onClick = { showExpensesDialog = true }
                 )
             }
@@ -596,7 +589,6 @@ fun DashboardScreen(
                     backgroundColor = Color.White,
                     contentColor = Color(0xFF10B981),
                     hasBorder = true,
-                    isDarkMode = isDarkMode,
                     onClick = { navigateToTab(5) }
                 )
 
@@ -608,7 +600,6 @@ fun DashboardScreen(
                     backgroundColor = Color.White,
                     contentColor = Color(0xFFEA580C),
                     hasBorder = true,
-                    isDarkMode = isDarkMode,
                     onClick = { showActiveUsersDialog = true }
                 )
 
@@ -620,7 +611,6 @@ fun DashboardScreen(
                     backgroundColor = Color.White,
                     contentColor = Color(0xFFD97706),
                     hasBorder = true,
-                    isDarkMode = isDarkMode,
                     onClick = { showFinancialReportDialog = true }
                 )
             }
@@ -640,7 +630,6 @@ fun DashboardScreen(
                     backgroundColor = Color.White,
                     contentColor = Color(0xFF0EA5E9),
                     hasBorder = true,
-                    isDarkMode = isDarkMode,
                     onClick = { showProfileDialog = true }
                 )
 
@@ -651,7 +640,6 @@ fun DashboardScreen(
                     icon = Icons.Filled.Save,
                     backgroundColor = Color(0xFFFEF3C7),
                     contentColor = Color(0xFFD97706),
-                    isDarkMode = isDarkMode,
                     onClick = { showBackupDialog = true }
                 )
 
@@ -662,7 +650,6 @@ fun DashboardScreen(
                     icon = Icons.Filled.History,
                     backgroundColor = Color(0xFFCCFBF1),
                     contentColor = Color(0xFF0D9488),
-                    isDarkMode = isDarkMode,
                     onClick = { showRecentActivitiesDialog = true }
                 )
             }
@@ -681,7 +668,6 @@ fun DashboardScreen(
                     icon = Icons.Filled.HeadsetMic,
                     backgroundColor = Color(0xFFD1FAE5),
                     contentColor = Color(0xFF059669),
-                    isDarkMode = isDarkMode,
                     onClick = { showSupportDialog = true }
                 )
 
@@ -692,7 +678,6 @@ fun DashboardScreen(
                     icon = Icons.Filled.Info,
                     backgroundColor = Color(0xFFE0F2FE),
                     contentColor = Color(0xFF0284C7),
-                    isDarkMode = isDarkMode,
                     onClick = { showAboutDialog = true }
                 )
             }
@@ -757,7 +742,7 @@ fun DashboardScreen(
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = if (isDarkMode) Color(0xFF1E293B) else Color.White),
+                colors = CardDefaults.cardColors(containerColor = appColors.cardBg),
                 elevation = CardDefaults.cardElevation(3.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1132,7 +1117,7 @@ fun DashboardScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .background(if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC), RoundedCornerShape(8.dp))
+                                        .background(appColors.surfaceSubtle, RoundedCornerShape(8.dp))
                                         .padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -1450,13 +1435,10 @@ fun StatCardItem(
     iconBackground: Color,
     value: String,
     footer: String,
-    isDarkMode: Boolean = false,
     onClick: () -> Unit
 ) {
-    val cardBg = if (isDarkMode) Color(0xFF1E293B) else Color.White
-    val titleColor = if (isDarkMode) Color(0xFFF1F5F9) else Color(0xFF1E293B)
-    val valueColor = if (isDarkMode) Color(0xFFF8FAFC) else Color(0xFF0F172A)
-    val footerColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val colors = netCraftColors()
+    val dark = LocalIsDarkTheme.current
 
     Surface(
         modifier = modifier
@@ -1464,8 +1446,8 @@ fun StatCardItem(
             .clip(RoundedCornerShape(14.dp))
             .clickable { onClick() },
         shape = RoundedCornerShape(14.dp),
-        color = cardBg,
-        border = if (isDarkMode) BorderStroke(1.dp, Color(0xFF334155)) else null
+        color = colors.cardBg,
+        border = colors.cardBorderStroke
     ) {
         Column(
             modifier = Modifier
@@ -1483,11 +1465,11 @@ fun StatCardItem(
                     fontFamily = CairoFontFamily,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = titleColor
+                    color = colors.textPrimary
                 )
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = if (isDarkMode) iconTint.copy(alpha = 0.2f) else iconBackground,
+                    color = if (dark) iconTint.copy(alpha = 0.2f) else iconBackground,
                     modifier = Modifier.size(24.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -1506,7 +1488,7 @@ fun StatCardItem(
                 fontFamily = CairoFontFamily,
                 fontSize = 19.sp,
                 fontWeight = FontWeight.ExtraBold,
-                color = valueColor
+                color = colors.textPrimary
             )
 
             Text(
@@ -1514,7 +1496,7 @@ fun StatCardItem(
                 fontFamily = CairoFontFamily,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Normal,
-                color = footerColor,
+                color = colors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -1530,15 +1512,12 @@ fun ServiceCard(
     backgroundColor: Color,
     contentColor: Color,
     hasBorder: Boolean = false,
-    isDarkMode: Boolean = false,
     onClick: () -> Unit
 ) {
-    val actualBg = if (isDarkMode) {
-        Color(0xFF1E293B)
-    } else {
-        backgroundColor
-    }
-    val titleColor = if (isDarkMode) Color(0xFFF1F5F9) else Color(0xFF1E293B)
+    val colors = netCraftColors()
+    val dark = LocalIsDarkTheme.current
+    val actualBg = if (dark) colors.cardBg else backgroundColor
+    val titleColor = colors.textPrimary
 
     Surface(
         modifier = modifier
@@ -1548,9 +1527,7 @@ fun ServiceCard(
             .clickable { onClick() },
         shape = RoundedCornerShape(14.dp),
         color = actualBg,
-        border = if (isDarkMode) {
-            BorderStroke(1.dp, Color(0xFF334155))
-        } else if (hasBorder) {
+        border = colors.cardBorderStroke ?: if (hasBorder) {
             CardDefaults.outlinedCardBorder().copy(
                 brush = Brush.horizontalGradient(listOf(Color(0xFFE2E8F0), Color(0xFFF1F5F9)))
             )
@@ -1565,7 +1542,7 @@ fun ServiceCard(
         ) {
             Surface(
                 shape = CircleShape,
-                color = contentColor.copy(alpha = if (isDarkMode) 0.22f else 0.15f),
+                color = contentColor.copy(alpha = colors.iconChipAlpha),
                 modifier = Modifier.size(32.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -1601,11 +1578,12 @@ fun WideServiceCard(
     icon: ImageVector,
     backgroundColor: Color,
     contentColor: Color,
-    isDarkMode: Boolean = false,
     onClick: () -> Unit
 ) {
-    val actualBg = if (isDarkMode) Color(0xFF1E293B) else backgroundColor
-    val titleColor = if (isDarkMode) Color(0xFFF1F5F9) else Color(0xFF1E293B)
+    val colors = netCraftColors()
+    val dark = LocalIsDarkTheme.current
+    val actualBg = if (dark) colors.cardBg else backgroundColor
+    val titleColor = colors.textPrimary
 
     Surface(
         modifier = modifier
@@ -1615,7 +1593,7 @@ fun WideServiceCard(
             .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         color = actualBg,
-        border = if (isDarkMode) BorderStroke(1.dp, Color(0xFF334155)) else null
+        border = colors.cardBorderStroke
     ) {
         Row(
             modifier = Modifier
@@ -1626,7 +1604,7 @@ fun WideServiceCard(
         ) {
             Surface(
                 shape = CircleShape,
-                color = contentColor.copy(alpha = if (isDarkMode) 0.22f else 0.15f),
+                color = contentColor.copy(alpha = colors.iconChipAlpha),
                 modifier = Modifier.size(36.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {

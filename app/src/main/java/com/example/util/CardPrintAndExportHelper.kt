@@ -11,6 +11,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
+
+import com.example.ui.components.AppFeedback
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.common.BitMatrix
@@ -35,7 +37,6 @@ import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
 import android.provider.MediaStore
-import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.example.data.Design
 import com.example.data.ElementStyle
@@ -790,7 +791,7 @@ object CardPrintAndExportHelper {
     ): File? {
         return try {
             if (users.isEmpty()) {
-                Toast.makeText(context, "لا توجد كروت فعلية لمعاينتها أو تصديرها", Toast.LENGTH_LONG).show()
+                AppFeedback.info("لا توجد كروت فعلية لمعاينتها أو تصديرها", long = true)
                 return null
             }
             val realCards = users
@@ -904,7 +905,7 @@ object CardPrintAndExportHelper {
             context.startActivity(Intent.createChooser(intent, "معاينة ملف PDF - NetCraft"))
         } catch (e: Exception) {
             OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-            Toast.makeText(context, "تعذر فتح معاينة PDF.", Toast.LENGTH_LONG).show()
+            AppFeedback.error("تعذر فتح معاينة PDF.")
         }
     }
 
@@ -963,7 +964,7 @@ object CardPrintAndExportHelper {
     ) {
         try {
             if (users.isEmpty()) {
-                Toast.makeText(context, "لا توجد كروت فعلية للطباعة أو التصدير", Toast.LENGTH_LONG).show()
+                AppFeedback.info("لا توجد كروت فعلية للطباعة أو التصدير", long = true)
                 return
             }
             val realCards = users
@@ -1008,20 +1009,20 @@ object CardPrintAndExportHelper {
 
                 try {
                     saveToDownloads(context, fileName, "application/pdf") { out -> pdfDocument.writeTo(out) }
-                    Toast.makeText(context, "تم حفظ ملف PDF في التنزيلات:\n$fileName", Toast.LENGTH_LONG).show()
+                    AppFeedback.success("تم حفظ ملف PDF في التنزيلات:\n$fileName", long = true)
                 } finally {
                     pdfDocument.close()
                 }
             } catch (e: Exception) {
                 OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-                Toast.makeText(context, "تعذر حفظ ملف PDF في التنزيلات.", Toast.LENGTH_LONG).show()
+                AppFeedback.error("تعذر حفظ ملف PDF في التنزيلات.")
             }
 
             // 2. Open native print manager
             previewDesignInSystemPrint(context, config, bgBitmap, realCards, curBatch)
         } catch (e: Exception) {
             OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-            Toast.makeText(context, "فشل إنشاء ملف الطباعة.", Toast.LENGTH_LONG).show()
+            AppFeedback.error("فشل إنشاء ملف الطباعة.")
         }
     }
 
@@ -1036,12 +1037,12 @@ object CardPrintAndExportHelper {
         batch: GeneratedBatchRecord
     ) {
         if (users.isEmpty()) {
-            Toast.makeText(context, "لا توجد كروت فعلية لمعاينتها", Toast.LENGTH_LONG).show()
+            AppFeedback.info("لا توجد كروت فعلية لمعاينتها", long = true)
             return
         }
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {
-            Toast.makeText(context, "خدمة الطباعة غير متوفرة في هذا الجهاز!", Toast.LENGTH_LONG).show()
+            AppFeedback.info("خدمة الطباعة غير متوفرة في هذا الجهاز!", long = true)
             return
         }
 
@@ -1172,7 +1173,7 @@ object CardPrintAndExportHelper {
     ) {
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {
-            Toast.makeText(context, "خدمة الطباعة غير متوفرة في هذا الجهاز!", Toast.LENGTH_LONG).show()
+            AppFeedback.info("خدمة الطباعة غير متوفرة في هذا الجهاز!", long = true)
             return
         }
 
@@ -1318,11 +1319,11 @@ object CardPrintAndExportHelper {
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
 
-            Toast.makeText(context, "تم حفظ ملف PDF بنجاح (${users.size} كرت)", Toast.LENGTH_LONG).show()
+            AppFeedback.success("تم حفظ ملف PDF بنجاح (${users.size} كرت)", long = true)
             onComplete(uri)
         } catch (e: Exception) {
             OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-            Toast.makeText(context, "تعذر حفظ ملف PDF.", Toast.LENGTH_LONG).show()
+            AppFeedback.error("تعذر حفظ ملف PDF.")
             onComplete(null)
         }
     }
@@ -1380,11 +1381,11 @@ object CardPrintAndExportHelper {
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
 
-            Toast.makeText(context, "تم تصدير ${users.size} كرت إلى Excel بنجاح!", Toast.LENGTH_LONG).show()
+            AppFeedback.success("تم تصدير ${users.size} كرت إلى Excel بنجاح!", long = true)
             return file
         } catch (e: Exception) {
             OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-            Toast.makeText(context, "تعذر تصدير الملف.", Toast.LENGTH_LONG).show()
+            AppFeedback.error("تعذر تصدير الملف.")
             return null
         }
     }

@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,6 +27,9 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.RouterGenericItem
+
+import com.example.ui.components.AppFeedback
+import com.example.ui.components.RefreshableListContainer
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 
@@ -63,7 +65,7 @@ fun SystemToolDetailScreen(
             onError = {
                 isLoading = false
                 loadError = it
-                Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                AppFeedback.info(it)
             }
         )
     }
@@ -282,6 +284,13 @@ fun SystemToolDetailScreen(
                         }
                     } else {
                         if (isLoading || loadError != null) Text(if (isLoading) "جارٍ تحديث البيانات…" else "تعذر التحديث: ${loadError}. البيانات المعروضة قديمة", modifier = Modifier.padding(horizontal = 16.dp), color = if (loadError != null) MaterialTheme.colorScheme.error else Color.Gray, fontFamily = CairoFontFamily)
+                        RefreshableListContainer(
+                            isRefreshing = isLoading,
+                            onRefresh = { refreshData() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                        ) {
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -349,6 +358,7 @@ fun SystemToolDetailScreen(
                             }
                             item { Spacer(modifier = Modifier.height(16.dp)) }
                         }
+                        } // RefreshableListContainer
                     }
                 }
             }

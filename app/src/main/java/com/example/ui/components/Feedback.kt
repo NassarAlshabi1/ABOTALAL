@@ -16,76 +16,105 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.netCraftColors
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 
 /**
  * Unified in-app feedback API.
  *
- * Replaces the historical mix of Toast and ad-hoc snackbars (128 call sites)
- * with one entry point:
+ * Replaces the historical mix of `Toast.makeText` (112 call sites) and ad-hoc
+ * per-screen snackbars with ONE entry point that works from anywhere —
+ * composables, ViewModels, coroutines and plain helper classes:
  *
  * ```
- * val feedback = rememberFeedbackState()
- * Scaffold(snackbarHost = { FeedbackHost(feedback) }) { ... }
- * feedback.success("تم الحفظ")
- * feedback.error("تعذر الاتصال")
+ * AppFeedback.success("تم الحفظ")
+ * AppFeedback.error("تعذر الاتصال")
  * ```
  *
- * Messages are always snackbars (survive configuration changes, are
- * accessible, and never leak system-wide toasts).
+ * Messages are always themed snackbars rendered by [AppFeedbackHost] (mounted
+ * once at the app root in MainActivity): they survive configuration changes,
+ * are accessible, respect the app theme, and never leak system-wide toasts.
  */
 enum class FeedbackType { SUCCESS, ERROR, WARNING, INFO }
 
-class FeedbackState internal constructor(
-    internal val hostState: SnackbarHostState,
-    internal val scope: kotlinx.coroutines.CoroutineScope,
-) {
-    /** Shows a themed snackbar. Safe to call from any thread. */
+internal class FeedbackEvent(
+    val message: String,
+    val type: FeedbackType,
+    val duration: SnackbarDuration,
+    val actionLabel: String?,
+    val onAction: (() -> Unit)?,
+)
+
+/** App-singleton feedback bus. Safe to call from any thread. */
+object AppFeedback {
+    internal val events = Channel<FeedbackEvent>(Channel.UNLIMITED)
+
     fun show(
         message: String,
         type: FeedbackType = FeedbackType.INFO,
+        long: Boolean = false,
         actionLabel: String? = null,
         onAction: (() -> Unit)? = null,
-        duration: SnackbarDuration = SnackbarDuration.Short,
     ) {
         if (message.isBlank()) return
-        // Encode the type as a prefix tag so FeedbackHost can pick the right
-        // icon without changing the SnackbarHostState API.
-        val tagged = when (type) {
-            FeedbackType.SUCCESS -> "✓ $message"
-            FeedbackType.ERROR -> "✕ $message"
-            FeedbackType.WARNING -> "! $message"
-            FeedbackType.INFO -> message
-        }
-        scope.launch {
+        events.trySend(
+            FeedbackEvent(
+                message = message,
+                type = type,
+                duration = if (long) SnackbarDuration.Long else SnackbarDuration.Short,
+                actionLabel = actionLabel,
+                onAction = onAction,
+            )
+        )
+    }
+
+    fun info(message: String, long: Boolean = false) = show(message, FeedbackType.INFO, long)
+
+    fun success(message: String, long: Boolean = false) = show(message, FeedbackType.SUCCESS, long)
+
+    /** Errors stay on screen longer so the user can actually read them. */
+    fun error(message: String) = show(message, FeedbackType.ERROR, long = true)
+
+    fun warning(message: String, long: Boolean = false) = show(message, FeedbackType.WARNING, long)
+}
+
+/**
+ * Root-level host that renders every [AppFeedback] message as a themed
+ * snackbar. Mounted once in MainActivity on top of all screens; no screen
+ * needs its own SnackbarHost anymore.
+ */
+@Composable
+fun AppFeedbackHost(modifier: Modifier = Modifier) {
+    val hostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) {
+        for (event in AppFeedback.events) {
+            // Encode the type as a prefix tag so the renderer can pick the
+            // right icon without changing the SnackbarHostState API.
+            val tagged = when (event.type) {
+                FeedbackType.SUCCESS -> "✓ ${event.message}"
+                FeedbackType.ERROR -> "✕ ${event.message}"
+                FeedbackType.WARNING -> "! ${event.message}"
+                FeedbackType.INFO -> event.message
+            }
             val result = hostState.showSnackbar(
                 message = tagged,
-                actionLabel = actionLabel,
-                duration = duration,
+                actionLabel = event.actionLabel,
+                duration = event.duration,
             )
-            if (result == SnackbarResult.ActionPerformed) onAction?.invoke()
+            if (result == SnackbarResult.ActionPerformed) event.onAction?.invoke()
         }
     }
 
-    fun success(message: String) = show(message, FeedbackType.SUCCESS)
-    fun error(message: String) = show(message, FeedbackType.ERROR, duration = SnackbarDuration.Long)
-    fun warning(message: String) = show(message, FeedbackType.WARNING)
-    fun info(message: String) = show(message, FeedbackType.INFO)
-}
-
-/** Creates a [FeedbackState] bound to the current composition scope. */
-@Composable
-fun rememberFeedbackState(): FeedbackState {
-    val hostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-    return remember { FeedbackState(hostState, scope) }
+    SnackbarHost(hostState = hostState, modifier = modifier) { data ->
+        FeedbackSnackbar(data)
+    }
 }
 
 private fun FeedbackType.icon(): ImageVector = when (this) {
@@ -102,19 +131,11 @@ private fun FeedbackType.color(): Color = when (this) {
     FeedbackType.INFO -> Color(0xFF0284C7)
 }
 
-/** Renders the snackbars produced by [FeedbackState]. Put it in Scaffold(snackbarHost = ...). */
-@Composable
-fun FeedbackHost(feedback: FeedbackState) {
-    SnackbarHost(hostState = feedback.hostState) { data ->
-        FeedbackSnackbar(data)
-    }
-}
-
 @Composable
 private fun FeedbackSnackbar(data: SnackbarData) {
     val colors = netCraftColors()
-    // Convention: messages carry their type as a prefix tag "[نوع]" so the
-    // host can render an icon without changing every call site at once.
+    // Convention: messages carry their type as a prefix tag so the host can
+    // render an icon without changing every call site at once.
     val (type, text) = parseType(data.visuals.message)
     Snackbar(
         containerColor = colors.cardBg,

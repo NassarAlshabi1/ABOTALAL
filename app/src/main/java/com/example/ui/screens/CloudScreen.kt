@@ -7,7 +7,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,6 +35,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.MikroTikCloudBackup
+
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.ui.components.RefreshableListContainer
@@ -235,7 +236,7 @@ fun CloudScreen(
                                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                                 val clip = ClipData.newPlainText("MikroTik Cloud DNS", cloudInfo.dnsName)
                                                 clipboard.setPrimaryClip(clip)
-                                                Toast.makeText(context, "تم نسخ رابط الكلاود ✅", Toast.LENGTH_SHORT).show()
+                                                AppFeedback.success("تم نسخ رابط الكلاود ✅")
                                             },
                                             modifier = Modifier.size(32.dp)
                                         ) {
@@ -355,11 +356,11 @@ fun CloudScreen(
                                     viewModel.forceUpdateCloud(
                                         onSuccess = {
                                             isUpdatingDdns = false
-                                            Toast.makeText(context, "تم إرسال أمر التحديث الفوري للكلاود بنجاح ✅", Toast.LENGTH_SHORT).show()
+                                            AppFeedback.success("تم إرسال أمر التحديث الفوري للكلاود بنجاح ✅")
                                         },
                                         onError = {
                                             isUpdatingDdns = false
-                                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                                            AppFeedback.info(it)
                                         }
                                     )
                                 },
@@ -384,7 +385,7 @@ fun CloudScreen(
                                         val browserIntent = Intent(Intent.ACTION_VIEW, (url).toUri())
                                         context.startActivity(browserIntent)
                                     } else {
-                                        Toast.makeText(context, "اسم الدومين غير متوفر", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.info("اسم الدومين غير متوفر")
                                     }
                                 },
                                 modifier = Modifier.weight(1f),
@@ -418,9 +419,9 @@ fun CloudScreen(
                                     viewModel.setCloudDdns(
                                         checked,
                                         onSuccess = {
-                                            Toast.makeText(context, if (checked) "تم تفعيل الكلاود" else "تم تعطيل الكلاود", Toast.LENGTH_SHORT).show()
+                                            AppFeedback.info(if (checked) "تم تفعيل الكلاود" else "تم تعطيل الكلاود")
                                         },
-                                        onError = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                                        onError = { AppFeedback.info(it) }
                                     )
                                 }
                             )
@@ -446,8 +447,8 @@ fun CloudScreen(
                                 onCheckedChange = { checked ->
                                     viewModel.setCloudUpdateTime(
                                         checked,
-                                        onSuccess = { Toast.makeText(context, "تم حفظ ضبط الوقت", Toast.LENGTH_SHORT).show() },
-                                        onError = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                                        onSuccess = { AppFeedback.success("تم حفظ ضبط الوقت") },
+                                        onError = { AppFeedback.info(it) }
                                     )
                                 }
                             )
@@ -565,7 +566,7 @@ fun CloudScreen(
                                             pingResult = result
                                         }
                                     } else {
-                                        Toast.makeText(context, "لا يوجد عنوان لاختباره", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.info("لا يوجد عنوان لاختباره")
                                     }
                                 },
                                 shape = RoundedCornerShape(10.dp),
@@ -663,11 +664,11 @@ fun CloudScreen(
                             onSuccess = {
                                 isUploading = false
                                 showUploadBackupDialog = false
-                                Toast.makeText(context, "تم رفع النسخة الاحتياطية بنجاح ✅", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تم رفع النسخة الاحتياطية بنجاح ✅")
                             },
                             onError = {
                                 isUploading = false
-                                Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                                AppFeedback.info(it)
                             }
                         )
                     },
@@ -705,8 +706,8 @@ fun CloudScreen(
                         backupToDelete = null
                         viewModel.removeCloudBackup(
                             backup.id,
-                            onSuccess = { Toast.makeText(context, "تم حذف النسخة السحابية", Toast.LENGTH_SHORT).show() },
-                            onError = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                            onSuccess = { AppFeedback.success("تم حذف النسخة السحابية") },
+                            onError = { AppFeedback.info(it) }
                         )
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)

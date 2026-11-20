@@ -8,7 +8,6 @@ import androidx.core.content.edit
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -49,7 +48,7 @@ fun DeveloperWelcomeDialog(
             val intent = Intent(Intent.ACTION_DIAL, ("tel:$number").toUri())
             context.startActivity(intent)
         } catch (e: Exception) {
-            Toast.makeText(context, "تعذر فتح لوحة الاتصال: $number", Toast.LENGTH_SHORT).show()
+            AppFeedback.error("تعذر فتح لوحة الاتصال: $number")
         }
     }
 
@@ -59,7 +58,7 @@ fun DeveloperWelcomeDialog(
             val intent = Intent(Intent.ACTION_VIEW, ("https://wa.me/$cleanNumber").toUri())
             context.startActivity(intent)
         } catch (e: Exception) {
-            Toast.makeText(context, "تعذر فتح واتساب: $number", Toast.LENGTH_SHORT).show()
+            AppFeedback.error("تعذر فتح واتساب: $number")
         }
     }
 

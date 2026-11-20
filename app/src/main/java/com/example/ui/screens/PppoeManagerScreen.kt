@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,6 +26,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.PppoeUser
+
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.ui.components.RefreshableListContainer
@@ -57,7 +58,7 @@ fun PppoeManagerScreen(
             onError = {
                 isLoading = false
                 loadError = it
-                Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                AppFeedback.info(it)
             }
         )
     }
@@ -417,10 +418,10 @@ fun PppoeManagerScreen(
                                 ),
                                 onSuccess = {
                                     showAddDialog = false
-                                    Toast.makeText(context, "تمت إضافة المستخدم بنجاح", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.success("تمت إضافة المستخدم بنجاح")
                                     refreshUsers()
                                 },
-                                onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+                                onError = { AppFeedback.info(it, long = true) }
                             )
                         }
                     },
@@ -453,10 +454,10 @@ fun PppoeManagerScreen(
                         viewModel.deletePppoeUser(
                             name = target.name,
                             onSuccess = {
-                                Toast.makeText(context, "تم حذف المستخدم ${target.name}", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تم حذف المستخدم ${target.name}")
                                 refreshUsers()
                             },
-                            onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+                            onError = { AppFeedback.info(it, long = true) }
                         )
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)

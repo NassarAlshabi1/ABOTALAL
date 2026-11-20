@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +28,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.InterfaceStats
+
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.ui.components.RefreshableListContainer
@@ -396,11 +397,11 @@ fun PortsBandwidthScreen(
                             onSuccess = {
                                 isOperating = false
                                 showToggleDialog = false
-                                Toast.makeText(context, "تم تنفيذ الأمر على المنفذ بنجاح", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تم تنفيذ الأمر على المنفذ بنجاح")
                             },
                             onError = { err ->
                                 isOperating = false
-                                Toast.makeText(context, "فشل: $err", Toast.LENGTH_LONG).show()
+                                AppFeedback.error("فشل: $err")
                             }
                         )
                     },
@@ -441,11 +442,11 @@ fun PortsBandwidthScreen(
                             onSuccess = {
                                 isOperating = false
                                 showResetDialog = false
-                                Toast.makeText(context, "تم تصفير عدادات المنفذ بنجاح", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تم تصفير عدادات المنفذ بنجاح")
                             },
                             onError = { err ->
                                 isOperating = false
-                                Toast.makeText(context, "فشل: $err", Toast.LENGTH_LONG).show()
+                                AppFeedback.error("فشل: $err")
                             }
                         )
                     },

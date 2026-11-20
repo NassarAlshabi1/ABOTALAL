@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -34,8 +33,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.UserManagerProfile
+
+import com.example.ui.components.AppFeedback
+import com.example.ui.components.RefreshableListContainer
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,6 +56,20 @@ fun UserManagerProfilesDialog(
     var profileToDelete by remember { mutableStateOf<UserManagerProfile?>(null) }
     var isImporting by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
+
+    // Pull-to-refresh + manual refresh share one path. refreshAllData() is
+    // fire-and-forget in the ViewModel, so the indicator acknowledges the
+    // request visually and settles shortly after.
+    fun refreshProfiles() {
+        isRefreshing = true
+        viewModel.refreshAllData()
+    }
+    LaunchedEffect(isRefreshing) {
+        if (isRefreshing) {
+            delay(1500)
+            isRefreshing = false
+        }
+    }
 
     // Pagination state
     val itemsPerPage = 4
@@ -151,11 +168,17 @@ fun UserManagerProfilesDialog(
                         }
                     }
 
-                    // --- Scrollable Content ---
-                    LazyColumn(
+                    // --- Scrollable Content (pull-to-refresh) ---
+                    RefreshableListContainer(
+                        isRefreshing = isRefreshing,
+                        onRefresh = { refreshProfiles() },
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
+                    ) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -178,19 +201,11 @@ fun UserManagerProfilesDialog(
                                             viewModel.importUserManagerProfiles(
                                                 onSuccess = { count ->
                                                     isImporting = false
-                                                    Toast
-                                                        .makeText(
-                                                            context,
-                                                            "تم استيراد ومزامنة $count باقة يوزرمانجر بنجاح!",
-                                                            Toast.LENGTH_SHORT
-                                                        )
-                                                        .show()
+                                                    AppFeedback.success("تم استيراد ومزامنة $count باقة يوزرمانجر بنجاح!")
                                                 },
                                                 onError = { err ->
                                                     isImporting = false
-                                                    Toast
-                                                        .makeText(context, "خطأ: $err", Toast.LENGTH_SHORT)
-                                                        .show()
+                                                    AppFeedback.error("خطأ: $err")
                                                 }
                                             )
                                         }
@@ -228,16 +243,7 @@ fun UserManagerProfilesDialog(
                                         .height(44.dp)
                                         .clip(RoundedCornerShape(10.dp))
                                         .clickable {
-                                            isRefreshing = true
-                                            viewModel.refreshAllData()
-                                            Toast
-                                                .makeText(
-                                                    context,
-                                                    "تم تحديث باقات اليوزرمانجر بنجاح",
-                                                    Toast.LENGTH_SHORT
-                                                )
-                                                .show()
-                                            isRefreshing = false
+                                            refreshProfiles()
                                         }
                                 ) {
                                     Row(
@@ -470,6 +476,7 @@ fun UserManagerProfilesDialog(
                             }
                         }
                     }
+                    } // RefreshableListContainer
                 }
             }
         }
@@ -493,10 +500,10 @@ fun UserManagerProfilesDialog(
                     profile = newProf,
                     onSuccess = {
                         showAddDialog = false
-                        Toast.makeText(context, "تمت إضافة الباقة '${newProf.name}' بنجاح", Toast.LENGTH_SHORT).show()
+                        AppFeedback.success("تمت إضافة الباقة '${newProf.name}' بنجاح")
                     },
                     onError = { err ->
-                        Toast.makeText(context, "خطأ: $err", Toast.LENGTH_SHORT).show()
+                        AppFeedback.error("خطأ: $err")
                     }
                 )
             },
@@ -515,10 +522,10 @@ fun UserManagerProfilesDialog(
                     profile = updatedProf,
                     onSuccess = {
                         profileToEdit = null
-                        Toast.makeText(context, "تم حفظ تعديلات الباقة بنجاح", Toast.LENGTH_SHORT).show()
+                        AppFeedback.success("تم حفظ تعديلات الباقة بنجاح")
                     },
                     onError = { err ->
-                        Toast.makeText(context, "خطأ: $err", Toast.LENGTH_SHORT).show()
+                        AppFeedback.error("خطأ: $err")
                     }
                 )
             },
@@ -559,10 +566,10 @@ fun UserManagerProfilesDialog(
                             profileName = prof.name,
                             onSuccess = {
                                 profileToDelete = null
-                                Toast.makeText(context, "تم حذف الباقة بنجاح", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تم حذف الباقة بنجاح")
                             },
                             onError = { err ->
-                                Toast.makeText(context, "خطأ: $err", Toast.LENGTH_SHORT).show()
+                                AppFeedback.error("خطأ: $err")
                             }
                         )
                     },

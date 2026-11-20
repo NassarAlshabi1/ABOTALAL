@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import androidx.core.graphics.toColorInt
 
+
+import com.example.ui.components.AppFeedback
 import java.util.Locale
 import android.content.Context
 import android.graphics.Bitmap
@@ -21,7 +23,6 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -184,10 +185,10 @@ fun VoucherPrinterScreen(
                     val originalBitmap = BitmapFactory.decodeStream(inputStream)
                     customImageBitmap = originalBitmap
                     designTheme = CardDesignTheme.CUSTOM_IMAGE
-                    Toast.makeText(context, "تم تحميل قالب الكرت المخصص بنجاح!", Toast.LENGTH_SHORT).show()
+                    AppFeedback.success("تم تحميل قالب الكرت المخصص بنجاح!")
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, "فشل في قراءة الصورة: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                AppFeedback.error("فشل في قراءة الصورة: ${e.localizedMessage}")
             }
         }
     }
@@ -929,7 +930,7 @@ fun VoucherPrinterScreen(
                             if (!viewModel.isConnected.value) {
                                 isGeneratingAndAdding = false
                                 syncStatusText = null
-                                Toast.makeText(context, "اتصل بالراوتر أولاً قبل توليد الكروت.", Toast.LENGTH_LONG).show()
+                                AppFeedback.info("اتصل بالراوتر أولاً قبل توليد الكروت.", long = true)
                                 return@launch
                             }
 
@@ -958,11 +959,7 @@ fun VoucherPrinterScreen(
                             if (!synced) {
                                 isGeneratingAndAdding = false
                                 syncStatusText = null
-                                Toast.makeText(
-                                    context,
-                                    syncError ?: "تعذرت مزامنة كروت الراوتر. لم يتم توليد أي كرت لتفادي التكرار.",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                AppFeedback.error(syncError ?: "تعذرت مزامنة كروت الراوتر. لم يتم توليد أي كرت لتفادي التكرار.")
                                 return@launch
                             }
 
@@ -1042,11 +1039,12 @@ fun VoucherPrinterScreen(
                                     append("تعذر إضافة $failureCount كرت — راجع اتصال الراوتر وأعد المحاولة.")
                                 }
                             }
-                            Toast.makeText(
-                                context,
-                                message.ifBlank { "لم تتم إضافة أي كرت." },
-                                if (failureCount > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
-                            ).show()
+                            val summary = message.ifBlank { "لم تتم إضافة أي كرت." }
+                            if (failureCount > 0) {
+                                AppFeedback.warning(summary, long = true)
+                            } else {
+                                AppFeedback.success(summary)
+                            }
                         }
                     },
                     enabled = !isGeneratingAndAdding && generatedVouchersList.isNotEmpty(),
@@ -1076,7 +1074,7 @@ fun VoucherPrinterScreen(
                 Button(
                     onClick = {
                         if (!pushedToRouter) {
-                            Toast.makeText(context, "يجب توليد وإضافة الكروت إلى السيرفر أولاً قبل الطباعة.", Toast.LENGTH_LONG).show()
+                            AppFeedback.warning("يجب توليد وإضافة الكروت إلى السيرفر أولاً قبل الطباعة.", long = true)
                         } else {
                             val printerHelper = VoucherPDFPrinter(
                                 context = context,
@@ -1483,7 +1481,7 @@ class VoucherPDFPrinter(
     fun startPrintFlow() {
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {
-            Toast.makeText(context, "خدمة الطباعة غير متوفرة في هذا الجهاز!", Toast.LENGTH_LONG).show()
+            AppFeedback.info("خدمة الطباعة غير متوفرة في هذا الجهاز!", long = true)
             return
         }
 

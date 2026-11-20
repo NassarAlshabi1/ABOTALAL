@@ -3,6 +3,8 @@ package com.example.ui.screens.designs
 import androidx.core.graphics.toColorInt
 import androidx.core.net.toUri
 
+
+import com.example.ui.components.AppFeedback
 import java.util.Locale
 import android.content.Context
 import android.content.Intent
@@ -12,7 +14,6 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -155,12 +156,12 @@ fun DesignsScreen(
                         // الحفظ الفوري يضمن بقاء الصورة مع الباقة المختارة حتى لو أُغلقت الشاشة.
                         viewModel.saveDesign(updatedDesign)
                         CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
-                        Toast.makeText(context, "تم حفظ الخلفية مع التصميم والباقة المختارة", Toast.LENGTH_SHORT).show()
+                        AppFeedback.success("تم حفظ الخلفية مع التصميم والباقة المختارة")
                     } else {
-                        Toast.makeText(context, "تعذر قراءة صورة الخلفية", Toast.LENGTH_LONG).show()
+                        AppFeedback.error("تعذر قراءة صورة الخلفية")
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "فشل حفظ الخلفية: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    AppFeedback.error("فشل حفظ الخلفية: ${e.localizedMessage}")
                 }
             }
         }
@@ -490,7 +491,7 @@ fun DesignsScreen(
                                     onClick = {
                                         val design = activeDesign
                                         if (design.userManagerPackageId.isNullOrBlank() && design.hotspotPackageId.isNullOrBlank()) {
-                                            Toast.makeText(context, "اختر باقة User Manager أو Hotspot قبل إضافة الخلفية", Toast.LENGTH_LONG).show()
+                                            AppFeedback.info("اختر باقة User Manager أو Hotspot قبل إضافة الخلفية", long = true)
                                         } else {
                                             bgImagePicker.launch("image/*")
                                         }
@@ -1022,7 +1023,7 @@ fun DesignsScreen(
                                     activeDesign?.let {
                                         viewModel.saveDesign(it)
                                         CardPrintAndExportHelper.saveDesignAsTemplate(context, it)
-                                        Toast.makeText(context, "تم حفظ التصميم بنجاح ✅", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.success("تم حفظ التصميم بنجاح ✅")
                                     }
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1177,12 +1178,12 @@ fun DesignsScreen(
                                 )
                                 viewModel.saveDesign(updatedDesign)
                                 CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
-                                Toast.makeText(context, "تم حفظ الخلفية الجاهزة مع التصميم", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تم حفظ الخلفية الجاهزة مع التصميم")
                             } else {
-                                Toast.makeText(context, "تعذر تنزيل الخلفية الجاهزة", Toast.LENGTH_LONG).show()
+                                AppFeedback.error("تعذر تنزيل الخلفية الجاهزة")
                             }
                         } catch (e: Exception) {
-                            Toast.makeText(context, "فشل حفظ الخلفية: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                            AppFeedback.error("فشل حفظ الخلفية: ${e.localizedMessage}")
                         }
                     }
                 }
@@ -1215,7 +1216,7 @@ fun DesignsScreen(
                         selectedDesign?.let { design ->
                             deleteStoredBackgroundIfOwned(context, design.bgUrl)
                             viewModel.deleteDesign(design.id)
-                            Toast.makeText(context, "تم حذف التصميم", Toast.LENGTH_SHORT).show()
+                            AppFeedback.success("تم حذف التصميم")
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
@@ -2289,7 +2290,7 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
         context.startActivity(Intent.createChooser(intent, "معاينة وطباعة ملف PDF"))
     } catch (e: Exception) {
         OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-        Toast.makeText(context, e.message?.takeIf { it.contains("لا يتسع") } ?: "تعذر فتح ملف PDF.", Toast.LENGTH_LONG).show()
+        AppFeedback.error(e.message?.takeIf { it.contains("لا يتسع") } ?: "تعذر فتح ملف PDF.")
     }
 }
 

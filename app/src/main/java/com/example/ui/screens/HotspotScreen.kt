@@ -34,6 +34,7 @@ import com.example.data.model.HotspotActive
 import com.example.data.model.HotspotProfile
 import com.example.data.model.HotspotUser
 import com.example.ui.components.RefreshableListContainer
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 
@@ -66,8 +67,6 @@ fun HotspotScreen(
         activeUsers.filter { it.user.contains(searchActiveQuery, ignoreCase = true) }
     }
 
-    // Snackbar notifications
-    val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     // Pull-to-refresh: re-syncs hotspot users, sessions and stats from the router.
@@ -157,7 +156,6 @@ fun HotspotScreen(
                     }
                 }
             },
-            snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             floatingActionButton = {
                 if (activeTab == 1) { // Add User FAB
                     ExtendedFloatingActionButton(
@@ -245,10 +243,10 @@ fun HotspotScreen(
                         onKick = { id, user ->
                             viewModel.kickActiveUser(id, user,
                                 onSuccess = {
-                                    scope.launch { snackbarHostState.showSnackbar("تم فصل المستخدم '$user' من الشبكة") }
+                                    AppFeedback.success("تم فصل المستخدم '$user' من الشبكة")
                                 },
                                 onError = { err ->
-                                    scope.launch { snackbarHostState.showSnackbar(err) }
+                                    AppFeedback.error(err)
                                 }
                             )
                         }
@@ -260,10 +258,10 @@ fun HotspotScreen(
                         onDelete = { id, name ->
                             viewModel.deleteHotspotUser(id, name,
                                 onSuccess = {
-                                    scope.launch { snackbarHostState.showSnackbar("تم حذف الحساب '$name' نهائياً") }
+                                    AppFeedback.success("تم حذف الحساب '$name' نهائياً")
                                 },
                                 onError = { err ->
-                                    scope.launch { snackbarHostState.showSnackbar(err) }
+                                    AppFeedback.error(err)
                                 }
                             )
                         }
@@ -289,10 +287,10 @@ fun HotspotScreen(
                             ),
                             onSuccess = {
                                 showAddUserDialog = false
-                                scope.launch { snackbarHostState.showSnackbar("تم إنشاء كارت هوتسبوت جديد: $name") }
+                                AppFeedback.success("تم إنشاء كارت هوتسبوت جديد: $name")
                             },
                             onError = { err ->
-                                scope.launch { snackbarHostState.showSnackbar(err) }
+                                AppFeedback.error(err)
                             }
                         )
                     }
@@ -313,10 +311,10 @@ fun HotspotScreen(
                             ),
                             onSuccess = {
                                 showAddProfileDialog = false
-                                scope.launch { snackbarHostState.showSnackbar("تم إضافة بروفايل السرعة الجديد: $name") }
+                                AppFeedback.success("تم إضافة بروفايل السرعة الجديد: $name")
                             },
                             onError = { err ->
-                                scope.launch { snackbarHostState.showSnackbar(err) }
+                                AppFeedback.error(err)
                             }
                         )
                     }
