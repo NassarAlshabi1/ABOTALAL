@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.data.repository.RouterOsApiWordCodec
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -44,43 +45,23 @@ internal class ScriptableMockServer {
     private val worker = thread(isDaemon = true) { serve() }
 
     private fun writeWord(out: OutputStream, word: String) {
-        val bytes = word.toByteArray(Charsets.UTF_8)
-        val len = bytes.size
-        when {
-            len < 0x80 -> out.write(len)
-            len < 0x4000 -> { out.write((len shr 8) or 0x80); out.write(len and 0xFF) }
-            len < 0x200000 -> { out.write((len shr 16) or 0xC0); out.write((len shr 8) and 0xFF); out.write(len and 0xFF) }
-            else -> { out.write((len shr 24) or 0xE0); out.write((len shr 16) and 0xFF); out.write((len shr 8) and 0xFF); out.write(len and 0xFF) }
-        }
-        out.write(bytes)
-}
+        RouterOsApiWordCodec.writeWord(out, word)
+    }
 
     private fun writeSentence(out: OutputStream, words: List<String>) {
         for (w in words) writeWord(out, w)
         out.write(0)
         out.flush()
-}
+    }
 
     private fun readWord(input: InputStream): String? {
-        val first = input.read()
-        if (first == -1) return null
-        if (first == 0) return ""
-        val len = when {
-            (first and 0x80) == 0 -> first
-            (first and 0xC0) == 0x80 -> ((first and 0x3F) shl 8) or input.read()
-            (first and 0xE0) == 0xC0 -> ((first and 0x1F) shl 16) or (input.read() shl 8) or input.read()
-            (first and 0xF0) == 0xE0 -> ((first and 0x0F) shl 24) or (input.read() shl 16) or (input.read() shl 8) or input.read()
-            else -> return ""
-        }
-        val buf = ByteArray(len); var off = 0
-        while (off < len) { val r = input.read(buf, off, len - off); if (r == -1) break; off += r }
-        return String(buf, 0, off, Charsets.UTF_8)
-}
+        return RouterOsApiWordCodec.readWord(input)
+    }
 
     private fun readSentence(input: InputStream): List<String>? {
         val words = mutableListOf<String>()
         while (true) { val w = readWord(input) ?: return null; if (w.isEmpty()) return words; words.add(w) }
-}
+    }
 
     private fun serve() {
         try {
@@ -136,7 +117,7 @@ internal class ScriptableMockServer {
             }
         } catch (_: Exception) {
         }
-}
+    }
 
     fun commandsMatching(prefix: String): List<List<String>> =
         received.filter { it.firstOrNull()?.startsWith(prefix) == true }

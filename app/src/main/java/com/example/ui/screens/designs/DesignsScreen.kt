@@ -3,6 +3,8 @@ package com.example.ui.screens.designs
 import androidx.core.graphics.toColorInt
 import androidx.core.net.toUri
 
+
+import com.example.ui.components.AppFeedback
 import java.util.Locale
 import android.content.Context
 import android.content.Intent
@@ -12,7 +14,6 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -137,6 +138,7 @@ fun DesignsScreen(
     
     var showBuiltInBgDialog by remember { mutableStateOf(false) }
     var showDeleteDesignConfirm by remember { mutableStateOf(false) }
+    var designPendingPdf by remember { mutableStateOf<Design?>(null) }
 
     // Launchers for image picking
     val bgImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -154,12 +156,12 @@ fun DesignsScreen(
                         // الحفظ الفوري يضمن بقاء الصورة مع الباقة المختارة حتى لو أُغلقت الشاشة.
                         viewModel.saveDesign(updatedDesign)
                         CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
-                        Toast.makeText(context, "تم حفظ الخلفية مع التصميم والباقة المختارة", Toast.LENGTH_SHORT).show()
+                        AppFeedback.success("تم حفظ الخلفية مع التصميم والباقة المختارة")
                     } else {
-                        Toast.makeText(context, "تعذر قراءة صورة الخلفية", Toast.LENGTH_LONG).show()
+                        AppFeedback.error("تعذر قراءة صورة الخلفية")
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "فشل حفظ الخلفية: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    AppFeedback.error("فشل حفظ الخلفية: ${e.localizedMessage}")
                 }
             }
         }
@@ -191,7 +193,7 @@ fun DesignsScreen(
                 actions = {
                     IconButton(onClick = {
                         activeDesign?.let { d ->
-                            generateAndPreviewPdf(context, d)
+                            designPendingPdf = d
                         }
                     }) {
                         Icon(Icons.Default.PictureAsPdf, contentDescription = "معاينة PDF وطباعة")
@@ -203,6 +205,23 @@ fun DesignsScreen(
             )
         }
     ) { paddingValues ->
+        designPendingPdf?.let { design ->
+            val warnings = remember(design) { inspectDesignForPdf(design) }
+            AlertDialog(
+                onDismissRequest = { designPendingPdf = null },
+                title = { Text("فحص معاينة PDF", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(if (warnings.isEmpty()) "تخطيط البطاقة يقع ضمن حدود الصفحة والبطاقة." else "تحذيرات قبل إنشاء PDF:")
+                        warnings.take(8).forEach { Text("• $it", color = MaterialTheme.colorScheme.error) }
+                        if (warnings.size > 8) Text("و${warnings.size - 8} تحذيرات أخرى.", color = MaterialTheme.colorScheme.error)
+                        Text("ستُستخدم قيم توضيحية غير حساسة؛ العناصر غير المدعومة موضحة في التحذيرات.")
+                    }
+                },
+                confirmButton = { TextButton(onClick = { designPendingPdf = null; generateAndPreviewPdf(context, design) }) { Text("متابعة إلى PDF") } },
+                dismissButton = { TextButton(onClick = { designPendingPdf = null }) { Text("إلغاء") } }
+            )
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -472,7 +491,7 @@ fun DesignsScreen(
                                     onClick = {
                                         val design = activeDesign
                                         if (design.userManagerPackageId.isNullOrBlank() && design.hotspotPackageId.isNullOrBlank()) {
-                                            Toast.makeText(context, "اختر باقة User Manager أو Hotspot قبل إضافة الخلفية", Toast.LENGTH_LONG).show()
+                                            AppFeedback.info("اختر باقة User Manager أو Hotspot قبل إضافة الخلفية", long = true)
                                         } else {
                                             bgImagePicker.launch("image/*")
                                         }
@@ -850,7 +869,7 @@ fun DesignsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     NumField(
-                                        label = "الموضع س (أفقي مم)",
+                                        label = "الموضع س من اليسار (مم)",
                                         value = design.barcodeX,
                                         onValueChange = { value ->
                                             viewModel.updateDraft(design.copy(barcodeX = value))
@@ -963,7 +982,7 @@ fun DesignsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     NumField(
-                                        label = "الموضع س (أفقي مم)",
+                                        label = "الموضع س من اليسار (مم)",
                                         value = design.logoX,
                                         onValueChange = { value ->
                                             viewModel.updateDraft(design.copy(logoX = value))
@@ -1004,7 +1023,7 @@ fun DesignsScreen(
                                     activeDesign?.let {
                                         viewModel.saveDesign(it)
                                         CardPrintAndExportHelper.saveDesignAsTemplate(context, it)
-                                        Toast.makeText(context, "تم حفظ التصميم بنجاح ✅", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.success("تم حفظ التصميم بنجاح ✅")
                                     }
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1033,7 +1052,7 @@ fun DesignsScreen(
                         Button(
                             onClick = {
                                 activeDesign?.let { d ->
-                                    generateAndPreviewPdf(context, d)
+                                    designPendingPdf = d
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -1159,12 +1178,12 @@ fun DesignsScreen(
                                 )
                                 viewModel.saveDesign(updatedDesign)
                                 CardPrintAndExportHelper.saveDesignAsTemplate(context, updatedDesign)
-                                Toast.makeText(context, "تم حفظ الخلفية الجاهزة مع التصميم", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تم حفظ الخلفية الجاهزة مع التصميم")
                             } else {
-                                Toast.makeText(context, "تعذر تنزيل الخلفية الجاهزة", Toast.LENGTH_LONG).show()
+                                AppFeedback.error("تعذر تنزيل الخلفية الجاهزة")
                             }
                         } catch (e: Exception) {
-                            Toast.makeText(context, "فشل حفظ الخلفية: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                            AppFeedback.error("فشل حفظ الخلفية: ${e.localizedMessage}")
                         }
                     }
                 }
@@ -1197,7 +1216,7 @@ fun DesignsScreen(
                         selectedDesign?.let { design ->
                             deleteStoredBackgroundIfOwned(context, design.bgUrl)
                             viewModel.deleteDesign(design.id)
-                            Toast.makeText(context, "تم حذف التصميم", Toast.LENGTH_SHORT).show()
+                            AppFeedback.success("تم حذف التصميم")
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
@@ -1516,7 +1535,7 @@ fun ElementEditorCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 NumField(
-                    label = "أفقي س (مم)",
+                    label = "أفقي س من اليسار (مم)",
                     value = element.x,
                     onValueChange = { x -> onElementChange(element.copy(x = x)) },
                     step = 0.5f, min = 0f, max = 200f, decimals = 1,
@@ -1618,9 +1637,9 @@ fun QuickPositionButtons(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            QuickPosButton("↗ أعلى يمين") { onPositionSelected(2f, 2f) }
+            QuickPosButton("↗ أعلى يمين") { onPositionSelected(maxOf(0f, cardWidth - 25f), 2f) }
             QuickPosButton("↑ أعلى وسط") { onPositionSelected(maxOf(0f, (cardWidth - 25) / 2f), 2f) }
-            QuickPosButton("↖ أعلى يسار") { onPositionSelected(maxOf(0f, cardWidth - 25f), 2f) }
+            QuickPosButton("↖ أعلى يسار") { onPositionSelected(2f, 2f) }
         }
         
         Spacer(modifier = Modifier.height(4.dp))
@@ -1628,11 +1647,11 @@ fun QuickPositionButtons(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            QuickPosButton("→ وسط يمين") { onPositionSelected(2f, maxOf(0f, (cardHeight - 6) / 2f)) }
+            QuickPosButton("→ وسط يمين") { onPositionSelected(maxOf(0f, cardWidth - 25f), maxOf(0f, (cardHeight - 6) / 2f)) }
             QuickPosButton("🎯 مركز الكرت", true) { 
                 onPositionSelected(maxOf(0f, (cardWidth - 25) / 2f), maxOf(0f, (cardHeight - 6) / 2f)) 
             }
-            QuickPosButton("← وسط يسار") { onPositionSelected(maxOf(0f, cardWidth - 25f), maxOf(0f, (cardHeight - 6) / 2f)) }
+            QuickPosButton("← وسط يسار") { onPositionSelected(2f, maxOf(0f, (cardHeight - 6) / 2f)) }
         }
         
         Spacer(modifier = Modifier.height(4.dp))
@@ -1640,9 +1659,9 @@ fun QuickPositionButtons(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            QuickPosButton("↘ أسفل يمين") { onPositionSelected(2f, maxOf(0f, cardHeight - 6f)) }
+            QuickPosButton("↘ أسفل يمين") { onPositionSelected(maxOf(0f, cardWidth - 25f), maxOf(0f, cardHeight - 6f)) }
             QuickPosButton("↓ أسفل وسط") { onPositionSelected(maxOf(0f, (cardWidth - 25) / 2f), maxOf(0f, cardHeight - 6f)) }
-            QuickPosButton("↙ أسفل يسار") { onPositionSelected(maxOf(0f, cardWidth - 25f), maxOf(0f, cardHeight - 6f)) }
+            QuickPosButton("↙ أسفل يسار") { onPositionSelected(2f, maxOf(0f, cardHeight - 6f)) }
         }
     }
 }
@@ -1865,7 +1884,7 @@ fun CardPreview(
         // كلمة المرور
         if (design.password.show) {
             Text(
-                text = "",
+                text = PREVIEW_PASSWORD,
                 modifier = Modifier.offset(
                     x = mmToDp(design.password.x).dp,
                     y = mmToDp(design.password.y).dp
@@ -1893,7 +1912,7 @@ fun CardPreview(
         // الرقم التسلسلي
         if (design.serial.show) {
             Text(
-                text = design.serial.text,
+                text = design.serial.text.ifBlank { PREVIEW_SERIAL },
                 modifier = Modifier.offset(
                     x = mmToDp(design.serial.x).dp,
                     y = mmToDp(design.serial.y).dp
@@ -1930,6 +1949,13 @@ fun CardPreview(
             )
         }
         
+        if (design.profile.show && design.profile.text.isNotBlank()) {
+            Text(design.profile.text, modifier = Modifier.offset(x = mmToDp(design.profile.x).dp, y = mmToDp(design.profile.y).dp), fontSize = maxOf(5f, design.profile.fontSize * width / (cardWidthMm * 2.83465f)).sp, color = try { Color(design.profile.color.toColorInt()) } catch (_: Exception) { Color.Black })
+        }
+        if (design.pageNote.show && design.pageNote.text.isNotBlank()) {
+            Text(design.pageNote.text, modifier = Modifier.offset(x = mmToDp(design.pageNote.x).dp, y = mmToDp(design.pageNote.y).dp), fontSize = maxOf(5f, design.pageNote.fontSize * width / (cardWidthMm * 2.83465f)).sp, color = try { Color(design.pageNote.color.toColorInt()) } catch (_: Exception) { Color.Black })
+        }
+
         // الباركود / QR
         if (design.barcodeOn) {
             Box(
@@ -2125,130 +2151,136 @@ fun BuiltInBackgroundsDialog(
 // 📄 دالة توليد وفتح PDF عبر عارض أندرويد الأصلي
 // ============================================================
 
+private const val PREVIEW_PASSWORD = "DEMO-PASS"
+private const val PREVIEW_SERIAL = "SAMPLE-001"
+private const val PREVIEW_BARCODE = "CODE: 1234567890"
+
+private fun inspectDesignForPdf(design: Design): List<String> {
+    val (cw, ch) = cardSize(design)
+    val warnings = mutableListOf<String>()
+    fun bounds(name: String, x: Float, y: Float, w: Float, h: Float) {
+        if (x < 0f || y < 0f || x + w > cw || y + h > ch)
+            warnings += "$name يتجاوز حدود البطاقة (موضع/حجم تقريبي)."
+    }
+    fun text(name: String, e: ElementStyle, value: String, enabled: Boolean = e.show) {
+        if (!enabled || value.isBlank()) return
+        // Approximate glyph width at 0.55em; height is one font size in mm.
+        bounds(name, e.x, e.y, max(1f, value.length * e.fontSize * 0.55f / 2.83465f), max(1f, e.fontSize / 2.83465f))
+    }
+    text("العنوان", design.title, design.title.text)
+    text("اسم المستخدم التوضيحي", design.username, PREVIEW_CARD_NUMBER, design.showUsername && design.username.show)
+    text("كلمة المرور التوضيحية", design.password, PREVIEW_PASSWORD)
+    text("السعر", design.price, design.price.text)
+    text("الرقم التسلسلي التوضيحي", design.serial, PREVIEW_SERIAL)
+    text("الدفعة", design.payment, design.payment.text)
+    text("نقطة البيع", design.pos, design.pos.text)
+    text("اسم الباقة", design.profile, design.profile.text)
+    text("ملاحظة الصفحة", design.pageNote, design.pageNote.text)
+    text("رقم الصفحة", design.pageNumber, design.pageNumber.text.replace("{page}", "999"))
+    if (design.barcodeOn) bounds("الباركود (تمثيل توضيحي فقط)", design.barcodeX, design.barcodeY, design.barcodeWidth, design.barcodeHeight)
+    if (design.logoOn) bounds("الشعار", design.logoX, design.logoY, design.logoWidth, design.logoHeight)
+    val margin = design.pageMargin
+    val fitCols = if (cw + design.marginH <= 0) 0 else max(0, ((A4.WIDTH - 2 * margin + design.marginH) / (cw + design.marginH)).toInt())
+    val fitRows = if (ch + design.marginV <= 0) 0 else max(0, ((A4.HEIGHT - 2 * margin + design.marginV) / (ch + design.marginV)).toInt())
+    if (fitCols < max(1, design.columns) || fitRows < max(1, design.rows))
+        warnings += "الشبكة المطلوبة لا تتسع في صفحة A4 واحدة؛ سيُقسّم التصدير على صفحات متعددة. السعة الفعلية: ${fitCols.coerceAtLeast(0)} عمود × ${fitRows.coerceAtLeast(0)} صف."
+    if (design.barcodeOn) warnings += "الباركود غير مولّد من قيمة اعتماد/بيانات؛ سيظهر كعنصر توضيحي غير قابل للمسح."
+    if (design.logoOn && design.logoUrl.isNullOrBlank()) warnings += "الشعار مفعّل لكن لا يوجد ملف قابل للتحميل."
+    if (design.logoOn && design.logoUrl?.startsWith("http", true) == true) warnings += "الشعار عبر الإنترنت ظاهر في معاينة التطبيق فقط؛ لا يُحمّل إلى PDF حاليًا."
+    if (design.bgOn && design.bgUrl?.startsWith("http", true) == true) warnings += "الخلفية عبر الإنترنت لا تُضمّن في PDF حاليًا."
+    return warnings.distinct()
+}
+
 fun generateAndPreviewPdf(context: Context, design: Design) {
     try {
         val pdfDocument = PdfDocument()
-        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4 at 72dpi
-        val page = pdfDocument.startPage(pageInfo)
-        val canvas = page.canvas
-
-        val paintText = Paint().apply {
-            isAntiAlias = true
-            textSize = 10f
-        }
-        val paintBorder = Paint().apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1f
-            color = android.graphics.Color.BLACK
-        }
-
-        // حساب الأبعاد
-        val (cardW, cardH) = cardSize(design)
-        val cols = max(1, design.columns)
-        val rows = max(1, design.rows)
-
+        val pageW = 595
+        val pageH = 842
         val mmToPt = 72f / 25.4f
-        val cardWPt = cardW * mmToPt
-        val cardHPt = cardH * mmToPt
-        val pageMarginPt = design.pageMargin * mmToPt
-        val marginHPt = design.marginH * mmToPt
-        val marginVPt = design.marginV * mmToPt
-        val backgroundBitmap = loadStoredBackgroundBitmap(context, design)
-        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            isFilterBitmap = true
-        }
-
-        var cardCount = 0
-        for (r in 0 until rows) {
-            for (c in 0 until cols) {
-                val left = pageMarginPt + c * (cardWPt + marginHPt)
-                val top = pageMarginPt + r * (cardHPt + marginVPt)
-                val right = left + cardWPt
-                val bottom = top + cardHPt
-
-                // رسم الخلفية المحفوظة داخل كل كرت في ملف PDF أيضاً.
-                if (backgroundBitmap != null) {
-                    canvas.drawBitmap(
-                        backgroundBitmap,
-                        null,
-                        RectF(left, top, right, bottom),
-                        backgroundPaint
-                    )
-                }
-
-                // الإطار
-                if (design.borderOn) {
-                    paintBorder.strokeWidth = max(0.5f, design.borderSize * mmToPt)
-                    paintBorder.color = try { (design.borderColor).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawRect(left, top, right, bottom, paintBorder)
-                }
-
-                cardCount++
-
-                // العنوان
-                if (design.title.show && design.title.text.isNotEmpty()) {
-                    paintText.textSize = design.title.fontSize * 0.8f
-                    paintText.color = try { (design.title.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText(design.title.text, left + design.title.x * mmToPt, top + design.title.y * mmToPt + paintText.textSize, paintText)
-                }
-
-                // اسم المستخدم
-                if (design.showUsername && design.username.show) {
-                    paintText.textSize = design.username.fontSize * 0.8f
-                    paintText.isFakeBoldText = design.username.bold
-                    paintText.color = try { (design.username.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText(PREVIEW_CARD_NUMBER, left + design.username.x * mmToPt, top + design.username.y * mmToPt + paintText.textSize, paintText)
-                }
-
-                // كلمة المرور
-                if (design.password.show) {
-                    paintText.textSize = design.password.fontSize * 0.8f
-                    paintText.color = try { (design.password.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText("", left + design.password.x * mmToPt, top + design.password.y * mmToPt + paintText.textSize, paintText)
-                }
-
-                // السعر
-                if (design.price.show) {
-                    paintText.textSize = design.price.fontSize * 0.8f
-                    paintText.color = try { (design.price.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText(design.price.text, left + design.price.x * mmToPt, top + design.price.y * mmToPt + paintText.textSize, paintText)
-                }
-
-                // الرقم التسلسلي
-                if (design.serial.show) {
-                    paintText.textSize = design.serial.fontSize * 0.8f
-                    paintText.color = try { (design.serial.color).toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
-                    canvas.drawText(design.serial.text, left + design.serial.x * mmToPt, top + design.serial.y * mmToPt + paintText.textSize, paintText)
-                }
-
-                // الباركود المدمج
-                if (design.barcodeOn) {
-                    val bLeft = left + design.barcodeX * mmToPt
-                    val bTop = top + design.barcodeY * mmToPt
-                    val bW = design.barcodeWidth * mmToPt
-                    val bH = design.barcodeHeight * mmToPt
-                    val bPaint = Paint().apply { color = android.graphics.Color.BLACK }
-                    val bars = 12
-                    val bw = bW / (bars * 1.5f)
-                    for (b in 0 until bars) {
-                        canvas.drawRect(bLeft + b * (bW / bars), bTop, bLeft + b * (bW / bars) + bw, bTop + bH, bPaint)
-                    }
-                }
+        val (cardW, cardH) = cardSize(design)
+        val cw = cardW * mmToPt
+        val ch = cardH * mmToPt
+        val pageMargin = design.pageMargin * mmToPt
+        val gapH = design.marginH * mmToPt
+        val gapV = design.marginV * mmToPt
+        val colsFit = ((pageW - 2f * pageMargin + gapH) / (cw + gapH)).toInt().coerceAtLeast(0)
+        val rowsFit = ((pageH - 2f * pageMargin + gapV) / (ch + gapV)).toInt().coerceAtLeast(0)
+        require(colsFit > 0 && rowsFit > 0) { "لا يتسع كرت واحد ضمن هوامش A4 المحددة." }
+        val drawCols = min(max(1, design.columns), colsFit)
+        val drawRows = min(max(1, design.rows), rowsFit)
+        val perPage = drawCols * drawRows
+        val total = max(1, design.columns) * max(1, design.rows)
+        val pageCount = (total + perPage - 1) / perPage
+        val bg = loadStoredBackgroundBitmap(context, design)
+        val logo = loadDesignImage(context, design.logoUrl.takeIf { design.logoOn })
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.BLACK }
+        val mm = mmToPt
+        fun color(hex: String) = try { hex.toColorInt() } catch (_: Exception) { android.graphics.Color.BLACK }
+        fun drawText(canvas: android.graphics.Canvas, left: Float, top: Float, e: ElementStyle, value: String) {
+            if (!e.show || value.isBlank()) return
+            textPaint.textSize = max(1f, e.fontSize * 0.8f)
+            textPaint.color = color(e.color)
+            val style = when {
+                e.bold && e.italic -> android.graphics.Typeface.BOLD_ITALIC
+                e.bold -> android.graphics.Typeface.BOLD
+                e.italic -> android.graphics.Typeface.ITALIC
+                else -> android.graphics.Typeface.NORMAL
             }
+            textPaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, style)
+            canvas.drawText(value, left + e.x * mm, top + e.y * mm + textPaint.textSize, textPaint)
         }
-
-        pdfDocument.finishPage(page)
-
-        // حفظ الملف
+        for (p in 0 until pageCount) {
+            val info = PdfDocument.PageInfo.Builder(pageW, pageH, p + 1).create()
+            val page = pdfDocument.startPage(info)
+            val canvas = page.canvas
+            val first = p * perPage
+            val count = min(perPage, total - first)
+            for (local in 0 until count) {
+                val r = local / drawCols
+                val c = local % drawCols
+                val left = pageMargin + c * (cw + gapH)
+                val top = pageMargin + r * (ch + gapV)
+                val right = left + cw
+                val bottom = top + ch
+                bg?.let { canvas.drawBitmap(it, null, RectF(left, top, right, bottom), paint) }
+                if (design.borderOn) {
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = max(0.5f, design.borderSize * mm)
+                    paint.color = color(design.borderColor)
+                    canvas.drawRect(left, top, right, bottom, paint)
+                    paint.style = Paint.Style.FILL
+                }
+                drawText(canvas, left, top, design.title, design.title.text)
+                drawText(canvas, left, top, design.username, if (design.showUsername) PREVIEW_CARD_NUMBER else "")
+                drawText(canvas, left, top, design.password, PREVIEW_PASSWORD)
+                drawText(canvas, left, top, design.price, design.price.text)
+                drawText(canvas, left, top, design.serial, PREVIEW_SERIAL)
+                drawText(canvas, left, top, design.payment, design.payment.text)
+                drawText(canvas, left, top, design.pos, design.pos.text)
+                drawText(canvas, left, top, design.profile, design.profile.text)
+                drawText(canvas, left, top, design.pageNote, design.pageNote.text)
+                if (design.pageNumber.show) drawText(canvas, left, top, design.pageNumber, design.pageNumber.text.replace("{page}", (p + 1).toString()))
+                if (design.barcodeOn) {
+                    val l = left + design.barcodeX * mm; val t = top + design.barcodeY * mm
+                    val w = design.barcodeWidth * mm; val h = design.barcodeHeight * mm
+                    paint.color = android.graphics.Color.BLACK
+                    // Explicit demo glyph, never represented as a real scannable credential barcode.
+                    val barW = w / 18f
+                    for (i in 0 until 13) if (i % 3 != 1) canvas.drawRect(l + i * barW, t, l + (i + 1) * barW * .65f, t + h * .72f, paint)
+                    textPaint.textSize = min(7f, h * .22f); textPaint.color = android.graphics.Color.BLACK
+                    canvas.drawText(PREVIEW_BARCODE, l, t + h, textPaint)
+                }
+                logo?.let { canvas.drawBitmap(it, null, RectF(left + design.logoX * mm, top + design.logoY * mm,
+                    left + (design.logoX + design.logoWidth) * mm, top + (design.logoY + design.logoHeight) * mm), paint) }
+            }
+            pdfDocument.finishPage(page)
+        }
         val previewDir = File(context.cacheDir, "designs").apply { mkdirs() }
         val safeDesignName = design.name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
         val pdfFile = File(previewDir, "Card_Design_$safeDesignName.pdf")
-        val out = FileOutputStream(pdfFile)
-        pdfDocument.writeTo(out)
-        out.close()
+        FileOutputStream(pdfFile).use { pdfDocument.writeTo(it) }
         pdfDocument.close()
-
-        // فتح الملف بواسطة عارض أندرويد الافتراضي
         val fileUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", pdfFile)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(fileUri, "application/pdf")
@@ -2258,8 +2290,20 @@ fun generateAndPreviewPdf(context: Context, design: Design) {
         context.startActivity(Intent.createChooser(intent, "معاينة وطباعة ملف PDF"))
     } catch (e: Exception) {
         OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-        Toast.makeText(context, "تعذر فتح ملف PDF.", Toast.LENGTH_LONG).show()
+        AppFeedback.error(e.message?.takeIf { it.contains("لا يتسع") } ?: "تعذر فتح ملف PDF.")
     }
+}
+
+private fun loadDesignImage(context: Context, location: String?): Bitmap? {
+    if (location.isNullOrBlank()) return null
+    return try {
+        val uri = location.toUri()
+        when (uri.scheme) {
+            "file" -> BitmapFactory.decodeFile(uri.path)
+            "content" -> context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+            else -> null
+        }
+    } catch (_: Exception) { null }
 }
 
 private fun loadStoredBackgroundBitmap(context: Context, design: Design): Bitmap? {

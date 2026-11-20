@@ -57,6 +57,12 @@ data class Design(
     val pos: ElementStyle = ElementStyle(
         show = false, x = 4f, y = 12f, fontSize = 8f, text = ""
     ),
+    // اسم الباقة (package/profile name) — the element that tells the customer
+    // which plan the card is worth. Without it the printed card carries no
+    // plan information at all.
+    val profile: ElementStyle = ElementStyle(
+        show = false, x = 4f, y = 14f, fontSize = 8f, text = "الباقة"
+    ),
     val pageNote: ElementStyle = ElementStyle(
         show = false, x = 40f, y = 6f, fontSize = 10f, text = ""
     ),
@@ -74,6 +80,9 @@ data class Design(
     
     // الباركود
     val barcodeOn: Boolean = false,
+    // "barcode" = Code128 carrying the card code, "qr" = QR carrying
+    // "code:password" (readable by any scanner app).
+    val barcodeType: String = "barcode",
     val barcodeWidth: Float = 18f,
     val barcodeHeight: Float = 8f,
     val barcodeX: Float = 44f,

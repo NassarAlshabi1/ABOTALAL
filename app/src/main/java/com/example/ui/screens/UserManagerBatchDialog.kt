@@ -2,11 +2,12 @@ package com.example.ui.screens
 
 import androidx.core.content.edit
 
+
+import com.example.ui.components.AppFeedback
 import java.util.Locale
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -1023,30 +1024,30 @@ fun UserManagerBatchFullDialog(
                                 Button(
                                     onClick = {
                                         if (selectedProfileName.isBlank() || userManagerProfiles.none { it.name == selectedProfileName }) {
-                                            Toast.makeText(context, "يرجى اختيار باقة User Manager موجودة أولاً", Toast.LENGTH_LONG).show()
+                                            AppFeedback.info("يرجى اختيار باقة User Manager موجودة أولاً", long = true)
                                             return@Button
                                         }
                                         val count = cardCountInput.toAsciiDigits().toIntOrNull()
                                         if (count == null || count !in 1..5000) {
-                                            Toast.makeText(context, "أدخل عددًا صحيحًا من 1 إلى 5000 كرت", Toast.LENGTH_LONG).show()
+                                            AppFeedback.info("أدخل عددًا صحيحًا من 1 إلى 5000 كرت", long = true)
                                             return@Button
                                         }
                                         val len = nameLengthInput.toAsciiDigits().toIntOrNull()
                                         if (len == null || len !in 4..30) {
-                                            Toast.makeText(context, "طول اسم المستخدم يجب أن يكون من 4 إلى 30 حرفًا", Toast.LENGTH_LONG).show()
+                                            AppFeedback.info("طول اسم المستخدم يجب أن يكون من 4 إلى 30 حرفًا", long = true)
                                             return@Button
                                         }
                                         val cleanPrefix = cardPrefixInput.toAsciiDigits()
                                         val cleanSuffix = cardSuffixInput.toAsciiDigits()
                                         if (cleanPrefix.length + cleanSuffix.length + 3 > len) {
-                                            Toast.makeText(context, "البادئة واللاحقة يجب أن تتركا مساحة لثلاثة أحرف عشوائية على الأقل ضمن الطول المحدد", Toast.LENGTH_LONG).show()
+                                            AppFeedback.info("البادئة واللاحقة يجب أن تتركا مساحة لثلاثة أحرف عشوائية على الأقل ضمن الطول المحدد", long = true)
                                             return@Button
                                         }
                                         val price = userManagerProfiles.firstOrNull { it.name == selectedProfileName }?.price ?: 0
                                         val excluded = if (excludeCharEnabled) excludedCharInput.toAsciiDigits().toSet() else emptySet()
                                         val allowedChars = cardCodeCharacterPool(selectedNamePattern, excluded)
                                         if (allowedChars.isEmpty()) {
-                                            Toast.makeText(context, "لا توجد أحرف متاحة بعد تطبيق الاستثناءات", Toast.LENGTH_LONG).show()
+                                            AppFeedback.info("لا توجد أحرف متاحة بعد تطبيق الاستثناءات", long = true)
                                             return@Button
                                         }
 
@@ -1060,7 +1061,7 @@ fun UserManagerBatchFullDialog(
                                                     .all { it in allowedChars }
                                         }
                                         if (possibleCodes - alreadyUsedCodes < count.toDouble()) {
-                                            Toast.makeText(context, "عدد التركيبات المتاحة لا يكفي لإنشاء $count اسمًا فريدًا. زد طول الاسم أو غيّر نمطه.", Toast.LENGTH_LONG).show()
+                                            AppFeedback.info("عدد التركيبات المتاحة لا يكفي لإنشاء $count اسمًا فريدًا. زد طول الاسم أو غيّر نمطه.", long = true)
                                             return@Button
                                         }
 
@@ -1100,7 +1101,7 @@ fun UserManagerBatchFullDialog(
                                         }
                                         if (generatedUsers.size != count) {
                                             isGenerating = false
-                                            Toast.makeText(context, "تعذر إنشاء $count اسمًا فريدًا؛ زد طول الاسم أو غيّر نمطه.", Toast.LENGTH_LONG).show()
+                                            AppFeedback.error("تعذر إنشاء $count اسمًا فريدًا؛ زد طول الاسم أو غيّر نمطه.")
                                             return@Button
                                         }
 
@@ -1141,7 +1142,7 @@ fun UserManagerBatchFullDialog(
                                                     )
                                                     onUpdateBatches(listOf(partialRecord) + batchRecords)
                                                 }
-                                                Toast.makeText(context, "خطأ في التوليد: $err", Toast.LENGTH_LONG).show()
+                                                AppFeedback.error("خطأ في التوليد: $err")
                                             }
                                         )
                                     },
@@ -1405,12 +1406,12 @@ fun UserManagerBatchFullDialog(
                                                                     // Get users for this batch
                                                                     val usersForBatch = batch.resolveCards(userManagerUsers)
                                                                     if (usersForBatch.isEmpty()) {
-                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        AppFeedback.info("لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", long = true)
                                                                         return@TextButton
                                                                     }
                                                                     val printDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
                                                                     if (printDesign == null) {
-                                                                        Toast.makeText(context, "اختر تصميمًا محفوظًا من شاشة تصاميم الكروت أولًا", Toast.LENGTH_LONG).show()
+                                                                        AppFeedback.info("اختر تصميمًا محفوظًا من شاشة تصاميم الكروت أولًا", long = true)
                                                                         return@TextButton
                                                                     }
                                                                     CardPrintAndExportHelper.saveDesignAsTemplate(context, printDesign)
@@ -1419,7 +1420,7 @@ fun UserManagerBatchFullDialog(
                                                                         context = context,
                                                                         batch = batch,
                                                                         users = usersForBatch,
-                                                                        config = templateCfg
+                                                                        config = templateCfg.copy(posConfig = templateCfg.posConfig.copy(visible = templateCfg.posConfig.visible && showPosOnCard))
                                                                     )
                                                                 },
                                                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
@@ -1434,12 +1435,12 @@ fun UserManagerBatchFullDialog(
                                                                 onClick = {
                                                                     val usersForBatch = batch.resolveCards(userManagerUsers)
                                                                     if (usersForBatch.isEmpty()) {
-                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        AppFeedback.info("لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", long = true)
                                                                         return@TextButton
                                                                     }
                                                                     val printDesign = savedDesigns.firstOrNull { it.name == linkedTemplateName }
                                                                     if (printDesign == null) {
-                                                                        Toast.makeText(context, "اختر تصميمًا محفوظًا من شاشة تصاميم الكروت أولًا", Toast.LENGTH_LONG).show()
+                                                                        AppFeedback.info("اختر تصميمًا محفوظًا من شاشة تصاميم الكروت أولًا", long = true)
                                                                         return@TextButton
                                                                     }
                                                                     CardPrintAndExportHelper.saveDesignAsTemplate(context, printDesign)
@@ -1448,7 +1449,7 @@ fun UserManagerBatchFullDialog(
                                                                         context = context,
                                                                         batch = batch,
                                                                         users = usersForBatch,
-                                                                        config = templateCfg,
+                                                                        config = templateCfg.copy(posConfig = templateCfg.posConfig.copy(visible = templateCfg.posConfig.visible && showPosOnCard)),
                                                                         onComplete = {}
                                                                     )
                                                                 },
@@ -1464,7 +1465,7 @@ fun UserManagerBatchFullDialog(
                                                                 onClick = {
                                                                     val usersForBatch = batch.resolveCards(userManagerUsers)
                                                                     if (usersForBatch.isEmpty()) {
-                                                                        Toast.makeText(context, "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", Toast.LENGTH_LONG).show()
+                                                                        AppFeedback.info("لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر", long = true)
                                                                         return@TextButton
                                                                     }
                                                                     CardPrintAndExportHelper.exportBatchToExcel(
@@ -1557,7 +1558,7 @@ fun UserManagerBatchFullDialog(
                                         Button(
                                             onClick = {
                                                 if (selectedProfileName.isBlank()) {
-                                                    Toast.makeText(context, "يرجى اختيار باقة User Manager أولاً", Toast.LENGTH_LONG).show()
+                                                    AppFeedback.info("يرجى اختيار باقة User Manager أولاً", long = true)
                                                     return@Button
                                                 }
 
@@ -1584,7 +1585,7 @@ fun UserManagerBatchFullDialog(
                                                     .toList()
 
                                                 if (importedUsers.isEmpty()) {
-                                                    Toast.makeText(context, "يرجى إدخال بيانات الكروت أولاً", Toast.LENGTH_SHORT).show()
+                                                    AppFeedback.info("يرجى إدخال بيانات الكروت أولاً")
                                                     return@Button
                                                 }
 
@@ -1636,7 +1637,7 @@ fun UserManagerBatchFullDialog(
                                                                 cards = created
                                                             )) + batchRecords)
                                                         }
-                                                        Toast.makeText(context, "خطأ أثناء الاستيراد: $err", Toast.LENGTH_LONG).show()
+                                                        AppFeedback.error("خطأ أثناء الاستيراد: $err")
                                                     }
                                                 )
                                             },
@@ -1704,7 +1705,7 @@ fun UserManagerBatchFullDialog(
                                         linkedTemplateName = tmpl
                                         sharedPrefs.edit { putString("${selectedProfileName}_template", tmpl) }
                                         showLinkTemplateDialog = false
-                                        Toast.makeText(context, "تم ربط الباقة $selectedProfileName بقالب التصميم $tmpl", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.success("تم ربط الباقة $selectedProfileName بقالب التصميم $tmpl")
                                     },
                                 shape = RoundedCornerShape(10.dp),
                                 border = BorderStroke(
@@ -1827,7 +1828,7 @@ fun UserManagerBatchFullDialog(
                                     showAddProfileDialog = false
                                 },
                                 onError = { errMsg ->
-                                    Toast.makeText(context, "خطأ: $errMsg", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.error("خطأ: $errMsg")
                                 }
                             )
                         }
@@ -1859,7 +1860,7 @@ fun UserManagerBatchFullDialog(
             confirmButton = {
                 TextButton(onClick = {
                     onUpdateBatches(batchRecords.filter { it.batchId != batch.batchId })
-                    Toast.makeText(context, "تم حذف الدفعة ${batch.batchId}", Toast.LENGTH_SHORT).show()
+                    AppFeedback.success("تم حذف الدفعة ${batch.batchId}")
                     pendingDeleteBatch = null
                 }) {
                     Text("حذف", color = Color(0xFFEF4444), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)

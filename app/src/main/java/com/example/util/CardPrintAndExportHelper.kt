@@ -11,6 +11,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
+
+import com.example.ui.components.AppFeedback
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.common.BitMatrix
@@ -35,7 +37,6 @@ import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
 import android.provider.MediaStore
-import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.example.data.Design
 import com.example.data.ElementStyle
@@ -262,6 +263,88 @@ object CardPrintAndExportHelper {
         prefs.edit { putStringSet("all_templates_set", list.toSet()) }
     }
 
+    /**
+     * Name of the print template linked to a User Manager / Hotspot profile.
+     * The link lives in `card_templates_prefs` under `"<profileName>_template"`
+     * (written by the batch dialog and by [saveTemplateConfig]).
+     *
+     * Returns null when the profile has no link, or when the link points at a
+     * template that no longer exists — a stale link must never resurrect a
+     * deleted design.
+     */
+    fun resolveLinkedTemplateName(context: Context, profileName: String): String? {
+        if (profileName.isBlank()) return null
+        val prefs = context.getSharedPreferences("card_templates_prefs", Context.MODE_PRIVATE)
+        val name = prefs.getString("${profileName}_template", "")?.trim().orEmpty()
+        if (name.isEmpty()) return null
+        return name.takeIf { it in getTemplatesList(context) }
+    }
+
+    /**
+     * The template config linked to [profileName], or [fallback] when the
+     * profile has no usable template link.
+     */
+    fun loadLinkedTemplateConfig(
+        context: Context,
+        profileName: String,
+        fallback: CardTemplateConfig = CardTemplateConfig()
+    ): CardTemplateConfig {
+        val name = resolveLinkedTemplateName(context, profileName) ?: return fallback
+        return loadTemplateConfig(context, name)
+    }
+
+    /**
+     * Layout used when a card is printed without a linked template: shows what
+     * the customer actually needs — the card code, the password, the package
+     * name — plus a scannable barcode. The bare default config printed the
+     * username only.
+     */
+    private fun defaultSingleCardConfig(username: String): CardTemplateConfig = CardTemplateConfig(
+        templateName = "كرت_فردي_$username",
+        columns = 1,
+        rows = 1,
+        autoFitA4 = false,
+        cardWidthMm = 80f,
+        cardHeightMm = 32f,
+        usernameConfig = CardElementConfig(
+            visible = true,
+            showTitle = true,
+            titleText = "رمز الدخول",
+            xMm = 4f,
+            yMm = 3f,
+            fontSize = 12f,
+            isBold = true,
+            colorHex = "#0F172A"
+        ),
+        passwordConfig = CardElementConfig(
+            visible = true,
+            showTitle = true,
+            titleText = "كلمة المرور",
+            xMm = 4f,
+            yMm = 13f,
+            fontSize = 10f,
+            isBold = false,
+            colorHex = "#0F172A"
+        ),
+        profileConfig = CardElementConfig(
+            visible = true,
+            showTitle = true,
+            titleText = "الباقة",
+            xMm = 4f,
+            yMm = 22f,
+            fontSize = 8f,
+            isBold = true,
+            colorHex = "#475569"
+        ),
+        barcodeConfig = CardElementConfig(
+            visible = true,
+            xMm = 52f,
+            yMm = 6f,
+            widthMm = 24f,
+            heightMm = 16f
+        )
+    )
+
     /** Persist a saved card design as the exact template consumed by voucher printing. */
     fun saveDesignAsTemplate(context: Context, design: Design) {
         val backgroundPath = design.bgUrl?.let { raw ->
@@ -270,8 +353,12 @@ object CardPrintAndExportHelper {
                 if (uri.scheme == "file") uri.path else null
             }.getOrNull()
         }
-        fun ElementStyle.toPrintElement() = CardElementConfig(
+        // `asLabel = true`  -> the element's text is the element's LABEL and the
+        //                         real card data is printed below it.
+        // `asLabel = false` -> the element's text IS the printed value.
+        fun ElementStyle.toPrintElement(asLabel: Boolean = true) = CardElementConfig(
             visible = show,
+            showTitle = asLabel && text.isNotEmpty(),
             titleText = text,
             xMm = x,
             yMm = y,
@@ -314,19 +401,30 @@ object CardPrintAndExportHelper {
                 moveStep = design.moveStep,
                 showUsername = design.showUsername,
                 usernameConfig = design.username.toPrintElement(),
-                titleConfig = design.title.toPrintElement(),
+                titleConfig = design.title.toPrintElement(asLabel = false),
                 passwordConfig = design.password.toPrintElement(),
                 priceConfig = design.price.toPrintElement(),
+                profileConfig = CardElementConfig(
+                    visible = design.profile.show,
+                    showTitle = design.profile.text.isNotEmpty(),
+                    titleText = design.profile.text.ifEmpty { "الباقة" },
+                    xMm = design.profile.x,
+                    yMm = design.profile.y,
+                    fontSize = design.profile.fontSize,
+                    isBold = design.profile.bold,
+                    isItalic = design.profile.italic,
+                    colorHex = design.profile.color
+                ),
                 paymentConfig = design.payment.toPrintElement(),
                 serialConfig = design.serial.toPrintElement(),
-                posConfig = design.pos.toPrintElement(),
+                posConfig = design.pos.toPrintElement(asLabel = false),
                 barcodeConfig = CardElementConfig(
                     visible = design.barcodeOn,
                     xMm = design.barcodeX,
                     yMm = design.barcodeY,
                     widthMm = design.barcodeWidth,
                     heightMm = design.barcodeHeight,
-                    barcodeType = "barcode"
+                    barcodeType = design.barcodeType
                 ),
                 logoUrl = design.logoUrl,
                 logoConfig = CardElementConfig(
@@ -458,7 +556,7 @@ object CardPrintAndExportHelper {
             ),
             paymentConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_payment_vis", false),
-                showTitle = false,
+                showTitle = prefs.getBoolean("${p}_payment_title_on", false),
                 titleText = prefs.getString("${p}_payment_text", "") ?: "",
                 xMm = prefs.getFloat("${p}_payment_x_mm", 4f),
                 yMm = prefs.getFloat("${p}_payment_y_mm", 10f),
@@ -470,7 +568,7 @@ object CardPrintAndExportHelper {
             ),
             serialConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_ser_vis", false),
-                showTitle = false,
+                showTitle = prefs.getBoolean("${p}_ser_title_on", false),
                 titleText = prefs.getString("${p}_ser_title_text", "") ?: "",
                 xMm = prefs.getFloat("${p}_ser_x_mm", 34f),
                 yMm = prefs.getFloat("${p}_ser_y_mm", 10f),
@@ -482,7 +580,7 @@ object CardPrintAndExportHelper {
             ),
             posConfig = CardElementConfig(
                 visible = prefs.getBoolean("${p}_pos_vis", false),
-                showTitle = false,
+                showTitle = prefs.getBoolean("${p}_pos_title_on", false),
                 titleText = prefs.getString("${p}_pos_text", "") ?: "",
                 xMm = prefs.getFloat("${p}_pos_x_mm", 4f),
                 yMm = prefs.getFloat("${p}_pos_y_mm", 12f),
@@ -607,6 +705,7 @@ object CardPrintAndExportHelper {
             putString("${p}_prof_align", config.profileConfig.alignment)
             // Payment
             putBoolean("${p}_payment_vis", config.paymentConfig.visible)
+            putBoolean("${p}_payment_title_on", config.paymentConfig.showTitle)
             putString("${p}_payment_text", config.paymentConfig.titleText)
             putFloat("${p}_payment_x_mm", config.paymentConfig.xMm)
             putFloat("${p}_payment_y_mm", config.paymentConfig.yMm)
@@ -617,6 +716,7 @@ object CardPrintAndExportHelper {
             putString("${p}_payment_align", config.paymentConfig.alignment)
             // Serial
             putBoolean("${p}_ser_vis", config.serialConfig.visible)
+            putBoolean("${p}_ser_title_on", config.serialConfig.showTitle)
             putString("${p}_ser_title_text", config.serialConfig.titleText)
             putFloat("${p}_ser_x_mm", config.serialConfig.xMm)
             putFloat("${p}_ser_y_mm", config.serialConfig.yMm)
@@ -627,6 +727,7 @@ object CardPrintAndExportHelper {
             putString("${p}_ser_align", config.serialConfig.alignment)
             // POS
             putBoolean("${p}_pos_vis", config.posConfig.visible)
+            putBoolean("${p}_pos_title_on", config.posConfig.showTitle)
             putString("${p}_pos_text", config.posConfig.titleText)
             putFloat("${p}_pos_x_mm", config.posConfig.xMm)
             putFloat("${p}_pos_y_mm", config.posConfig.yMm)
@@ -690,7 +791,7 @@ object CardPrintAndExportHelper {
     ): File? {
         return try {
             if (users.isEmpty()) {
-                Toast.makeText(context, "لا توجد كروت فعلية لمعاينتها أو تصديرها", Toast.LENGTH_LONG).show()
+                AppFeedback.info("لا توجد كروت فعلية لمعاينتها أو تصديرها", long = true)
                 return null
             }
             val realCards = users
@@ -704,6 +805,7 @@ object CardPrintAndExportHelper {
             )
 
             val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
+            val logoBitmap = loadLogoBitmap(context, config.logoUrl)
 
             val isLandscape = config.pageOrientation.equals("landscape", ignoreCase = true)
             val sheetW = if (isLandscape) 842 else 595
@@ -721,7 +823,8 @@ object CardPrintAndExportHelper {
                     users = realCards,
                     config = config,
                     bgBitmap = bgBitmap,
-                    batch = curBatch
+                    batch = curBatch,
+                    logoBitmap = logoBitmap
                 )
                 pdfDocument.finishPage(page)
             }
@@ -802,7 +905,7 @@ object CardPrintAndExportHelper {
             context.startActivity(Intent.createChooser(intent, "معاينة ملف PDF - NetCraft"))
         } catch (e: Exception) {
             OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-            Toast.makeText(context, "تعذر فتح معاينة PDF.", Toast.LENGTH_LONG).show()
+            AppFeedback.error("تعذر فتح معاينة PDF.")
         }
     }
 
@@ -861,7 +964,7 @@ object CardPrintAndExportHelper {
     ) {
         try {
             if (users.isEmpty()) {
-                Toast.makeText(context, "لا توجد كروت فعلية للطباعة أو التصدير", Toast.LENGTH_LONG).show()
+                AppFeedback.info("لا توجد كروت فعلية للطباعة أو التصدير", long = true)
                 return
             }
             val realCards = users
@@ -875,6 +978,7 @@ object CardPrintAndExportHelper {
             )
 
             val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
+            val logoBitmap = loadLogoBitmap(context, config.logoUrl)
 
             // 1. Save PDF file to Downloads
             try {
@@ -897,27 +1001,28 @@ object CardPrintAndExportHelper {
                         users = realCards,
                         config = config,
                         bgBitmap = bgBitmap,
-                        batch = curBatch
+                        batch = curBatch,
+                        logoBitmap = logoBitmap
                     )
                     pdfDocument.finishPage(page)
                 }
 
                 try {
                     saveToDownloads(context, fileName, "application/pdf") { out -> pdfDocument.writeTo(out) }
-                    Toast.makeText(context, "تم حفظ ملف PDF في التنزيلات:\n$fileName", Toast.LENGTH_LONG).show()
+                    AppFeedback.success("تم حفظ ملف PDF في التنزيلات:\n$fileName", long = true)
                 } finally {
                     pdfDocument.close()
                 }
             } catch (e: Exception) {
                 OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-                Toast.makeText(context, "تعذر حفظ ملف PDF في التنزيلات.", Toast.LENGTH_LONG).show()
+                AppFeedback.error("تعذر حفظ ملف PDF في التنزيلات.")
             }
 
             // 2. Open native print manager
             previewDesignInSystemPrint(context, config, bgBitmap, realCards, curBatch)
         } catch (e: Exception) {
             OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-            Toast.makeText(context, "فشل إنشاء ملف الطباعة.", Toast.LENGTH_LONG).show()
+            AppFeedback.error("فشل إنشاء ملف الطباعة.")
         }
     }
 
@@ -932,16 +1037,17 @@ object CardPrintAndExportHelper {
         batch: GeneratedBatchRecord
     ) {
         if (users.isEmpty()) {
-            Toast.makeText(context, "لا توجد كروت فعلية لمعاينتها", Toast.LENGTH_LONG).show()
+            AppFeedback.info("لا توجد كروت فعلية لمعاينتها", long = true)
             return
         }
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {
-            Toast.makeText(context, "خدمة الطباعة غير متوفرة في هذا الجهاز!", Toast.LENGTH_LONG).show()
+            AppFeedback.info("خدمة الطباعة غير متوفرة في هذا الجهاز!", long = true)
             return
         }
 
         val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
+        val logoBitmap = loadLogoBitmap(context, config.logoUrl)
         val totalPages = pageCountFor(users.size, config)
 
         val printAdapter = object : PrintDocumentAdapter() {
@@ -975,7 +1081,17 @@ object CardPrintAndExportHelper {
             ) {
                 val pdfDoc = mPdfDocument ?: return
                 try {
-                    for (pageNumber in 0 until totalPages) {
+                    // Honour the page selection the user made in the print
+                    // dialog — printing every sheet regardless silently prints
+                    // cards the user asked not to print.
+                    val requested = pages.filter { it.getStart() <= it.getEnd() }
+                        .flatMap { r -> (r.getStart()..minOf(r.getEnd(), totalPages - 1)).toList() }
+                        .filter { it in 0 until totalPages }
+                        .distinct()
+                        .sorted()
+                        .ifEmpty { (0 until totalPages).toList() }
+
+                    for (pageNumber in requested) {
                         if (cancellationSignal?.isCanceled == true) {
                             callback.onWriteCancelled()
                             return
@@ -988,12 +1104,15 @@ object CardPrintAndExportHelper {
                             users = users,
                             config = config,
                             bgBitmap = bgBitmap,
-                            batch = batch
+                            batch = batch,
+                            logoBitmap = logoBitmap
                         )
                         pdfDoc.finishPage(page)
                     }
 
-                    pdfDoc.writeTo(FileOutputStream(destination.fileDescriptor))
+                    FileOutputStream(destination.fileDescriptor).use { out ->
+                        pdfDoc.writeTo(out)
+                    }
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                 } catch (e: Exception) {
                     OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
@@ -1009,7 +1128,12 @@ object CardPrintAndExportHelper {
     }
 
     /**
-     * Direct print of single user card
+     * Direct print of single user card.
+     *
+     * The card must look like the batch it belongs to, so the template linked
+     * to the card's profile is used (the same lookup the batch print uses).
+     * The grid collapses to a single voucher-sized card — stretching one card
+     * over a whole A4 sheet is not a voucher.
      */
     fun printSingleCardDirectly(context: Context, user: UserManagerUser) {
         val singleBatch = GeneratedBatchRecord(
@@ -1020,10 +1144,14 @@ object CardPrintAndExportHelper {
             date = "",
             prefix = ""
         )
-        val cfg = CardTemplateConfig(
+        val linkedTemplate = resolveLinkedTemplateName(context, user.profile)
+        val template = linkedTemplate?.let { loadTemplateConfig(context, it) }
+            ?: defaultSingleCardConfig(user.username)
+        val cfg = template.copy(
+            templateName = "كرت_فردي_${user.username}",
             columns = 1,
             rows = 1,
-            templateName = "كرت_فردي_${user.username}"
+            autoFitA4 = false
         )
         printVoucherBatchDirectly(
             context = context,
@@ -1045,12 +1173,13 @@ object CardPrintAndExportHelper {
     ) {
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {
-            Toast.makeText(context, "خدمة الطباعة غير متوفرة في هذا الجهاز!", Toast.LENGTH_LONG).show()
+            AppFeedback.info("خدمة الطباعة غير متوفرة في هذا الجهاز!", long = true)
             return
         }
 
         val totalPages = pageCountFor(users.size, config)
         val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
+        val logoBitmap = loadLogoBitmap(context, config.logoUrl)
 
         val printAdapter = object : PrintDocumentAdapter() {
             private var mPdfDocument: PrintedPdfDocument? = null
@@ -1083,7 +1212,17 @@ object CardPrintAndExportHelper {
             ) {
                 val pdfDoc = mPdfDocument ?: return
                 try {
-                    for (pageNumber in 0 until totalPages) {
+                    // Honour the page selection the user made in the print
+                    // dialog — printing every sheet regardless silently prints
+                    // cards the user asked not to print.
+                    val requested = pages.filter { it.getStart() <= it.getEnd() }
+                        .flatMap { r -> (r.getStart()..minOf(r.getEnd(), totalPages - 1)).toList() }
+                        .filter { it in 0 until totalPages }
+                        .distinct()
+                        .sorted()
+                        .ifEmpty { (0 until totalPages).toList() }
+
+                    for (pageNumber in requested) {
                         if (cancellationSignal?.isCanceled == true) {
                             callback.onWriteCancelled()
                             return
@@ -1097,12 +1236,15 @@ object CardPrintAndExportHelper {
                             users = users,
                             config = config,
                             bgBitmap = bgBitmap,
-                            batch = batch
+                            batch = batch,
+                            logoBitmap = logoBitmap
                         )
                         pdfDoc.finishPage(page)
                     }
 
-                    pdfDoc.writeTo(FileOutputStream(destination.fileDescriptor))
+                    FileOutputStream(destination.fileDescriptor).use { out ->
+                        pdfDoc.writeTo(out)
+                    }
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                 } catch (e: Exception) {
                     OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
@@ -1131,6 +1273,7 @@ object CardPrintAndExportHelper {
         try {
             val totalPages = pageCountFor(users.size, config)
             val bgBitmap = customBgBitmap ?: loadPresetBitmap(context, config.bgPreset, config.customBgPath)
+            val logoBitmap = loadLogoBitmap(context, config.logoUrl)
 
             val isLandscape = config.pageOrientation.equals("landscape", ignoreCase = true)
             val sheetW = if (isLandscape) 842 else 595
@@ -1150,7 +1293,8 @@ object CardPrintAndExportHelper {
                     users = users,
                     config = config,
                     bgBitmap = bgBitmap,
-                    batch = batch
+                    batch = batch,
+                    logoBitmap = logoBitmap
                 )
 
                 pdfDoc.finishPage(page)
@@ -1175,11 +1319,11 @@ object CardPrintAndExportHelper {
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
 
-            Toast.makeText(context, "تم حفظ ملف PDF بنجاح (${users.size} كرت)", Toast.LENGTH_LONG).show()
+            AppFeedback.success("تم حفظ ملف PDF بنجاح (${users.size} كرت)", long = true)
             onComplete(uri)
         } catch (e: Exception) {
             OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-            Toast.makeText(context, "تعذر حفظ ملف PDF.", Toast.LENGTH_LONG).show()
+            AppFeedback.error("تعذر حفظ ملف PDF.")
             onComplete(null)
         }
     }
@@ -1237,11 +1381,11 @@ object CardPrintAndExportHelper {
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
 
-            Toast.makeText(context, "تم تصدير ${users.size} كرت إلى Excel بنجاح!", Toast.LENGTH_LONG).show()
+            AppFeedback.success("تم تصدير ${users.size} كرت إلى Excel بنجاح!", long = true)
             return file
         } catch (e: Exception) {
             OperationTelemetry.record(event = OperationTelemetry.Event.EXPORT_RESULT, operation = OperationTelemetry.Operation.EXPORT, outcome = OperationTelemetry.Outcome.FAILURE, errorClass = OperationTelemetry.classify(e))
-            Toast.makeText(context, "تعذر تصدير الملف.", Toast.LENGTH_LONG).show()
+            AppFeedback.error("تعذر تصدير الملف.")
             return null
         }
     }
@@ -1293,6 +1437,27 @@ object CardPrintAndExportHelper {
     }
 
     /**
+     * Loads the card logo from a file path or a content URI.
+     * Returns null when the logo is missing or unreadable.
+     */
+    private fun loadLogoBitmap(context: Context, url: String?): Bitmap? {
+        if (url.isNullOrBlank()) return null
+        return try {
+            val uri = url.toUri()
+            when (uri.scheme) {
+                "file" -> BitmapFactory.decodeFile(uri.path)
+                "content" -> context.contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+                null -> BitmapFactory.decodeFile(url)
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Render an entire A4 page with high fidelity cards and configured elements
      */
     fun drawHighFidelityCardPage(
@@ -1302,7 +1467,8 @@ object CardPrintAndExportHelper {
         users: List<UserManagerUser>,
         config: CardTemplateConfig,
         bgBitmap: Bitmap?,
-        batch: GeneratedBatchRecord
+        batch: GeneratedBatchRecord,
+        logoBitmap: Bitmap? = null
     ) {
         val pageWidth = canvas.width.toFloat()
         val pageHeight = canvas.height.toFloat()
@@ -1310,7 +1476,7 @@ object CardPrintAndExportHelper {
         // Page Margins in points
         val marginX = (config.pageMarginMm * 2.83465f).coerceAtLeast(6f)
         val marginY = (config.pageMarginMm * 2.83465f).coerceAtLeast(6f)
-        val footerSpace = if (config.pageNumberingEnabled || config.pageNoteEnabled) 20f else 6f
+        val footerSpace = if (config.pageNumberingEnabled) 20f else 6f
 
         val printableW = pageWidth - (marginX * 2)
         val printableH = pageHeight - (marginY * 2) - footerSpace
@@ -1394,26 +1560,13 @@ object CardPrintAndExportHelper {
                 }
 
                 // 3. Draw All Independent Configured Elements
-                drawCardElements(canvas, cardRect, user, batch, config)
+                drawCardElements(canvas, cardRect, user, batch, config, logoBitmap)
 
                 cardIdx++
             }
         }
 
-        // 4. Page Header / Note
-        if (config.pageNoteEnabled && config.pageNoteText.isNotEmpty()) {
-            val notePaint = AndroidPaint().apply {
-                isAntiAlias = true
-                textAlign = AndroidPaint.Align.CENTER
-                textSize = config.pageNoteSize.coerceIn(6f, 16f)
-                color = parseColorSafe(config.pageNoteColorHex, ("#0C5A60").toColorInt())
-                isFakeBoldText = true
-            }
-            val noteY = pageHeight - 8f
-            canvas.drawText(config.pageNoteText, pageWidth / 2f, noteY, notePaint)
-        }
-
-        // 5. Page Numbering
+        // Page numbering is page-level metadata and remains in the footer.
         if (config.pageNumberingEnabled) {
             val numPaint = AndroidPaint().apply {
                 isAntiAlias = true
@@ -1479,7 +1632,8 @@ object CardPrintAndExportHelper {
         cardRect: AndroidRectF,
         user: UserManagerUser,
         batch: GeneratedBatchRecord,
-        config: CardTemplateConfig
+        config: CardTemplateConfig,
+        logoBitmap: Bitmap? = null
     ) {
         val cardW = cardRect.width()
         val cardH = cardRect.height()
@@ -1501,49 +1655,46 @@ object CardPrintAndExportHelper {
         val scaleX = cardW / cardWidthMm
         val scaleY = cardH / cardHeightMm
 
-        // Helper to draw text element based on xMm and yMm with alignment support
+        // Design editor positions X from the card's left edge. Match that contract
+        // in exports rather than interpreting it as a right-edge offset.
+        // `elem.titleText` is the element's LABEL (drawn on the line above the
+        // value) while `displayText` is the actual data of this card.
         fun drawTextItem(elem: CardElementConfig, displayText: String) {
             if (!elem.visible || displayText.isEmpty()) return
             val paint = AndroidPaint().apply {
                 isAntiAlias = true
-                textAlign = when (elem.alignment) {
-                    "center" -> AndroidPaint.Align.CENTER
-                    "left" -> AndroidPaint.Align.LEFT
-                    else -> AndroidPaint.Align.RIGHT
-                }
+                textAlign = AndroidPaint.Align.LEFT
                 textSize = elem.fontSize.coerceIn(5f, 26f)
                 color = parseColorSafe(elem.colorHex, ("#0F172A").toColorInt())
                 isFakeBoldText = elem.isBold
             }
-            val posX = when (elem.alignment) {
-                "center" -> cardRect.right - (elem.xMm * scaleX)
-                "left" -> cardRect.left + (elem.xMm * scaleX)
-                else -> cardRect.right - (elem.xMm * scaleX)
+            val posX = cardRect.left + (elem.xMm * scaleX)
+            val textTop = cardRect.top + (elem.yMm * scaleY)
+            if (elem.showTitle && elem.titleText.isNotEmpty()) {
+                val titlePaint = AndroidPaint().apply {
+                    isAntiAlias = true
+                    textAlign = paint.textAlign
+                    textSize = (elem.fontSize * 0.7f).coerceIn(5f, 12f)
+                    color = parseColorSafe(elem.colorHex, AndroidColor.DKGRAY)
+                }
+                val labelBaseline = textTop - titlePaint.fontMetrics.descent - titlePaint.textSize * 0.15f
+                canvas.drawText(elem.titleText, posX, labelBaseline, titlePaint)
             }
-            val posY = cardRect.top + (elem.yMm * scaleY) + (elem.fontSize * 0.85f)
-            canvas.drawText(displayText, posX, posY, paint)
+            canvas.drawText(displayText, posX, textTop - paint.fontMetrics.ascent, paint)
         }
 
         // 1. Username / Code (ALWAYS displays real user code, positioned at exact xMm & yMm)
-        if (config.usernameConfig.visible) {
+        if (config.showUsername && config.usernameConfig.visible) {
             val uCfg = config.usernameConfig
             val uPaint = AndroidPaint().apply {
                 isAntiAlias = true
-                textAlign = when (uCfg.alignment) {
-                    "center" -> AndroidPaint.Align.CENTER
-                    "left" -> AndroidPaint.Align.LEFT
-                    else -> AndroidPaint.Align.RIGHT
-                }
+                textAlign = AndroidPaint.Align.LEFT
                 textSize = uCfg.fontSize.coerceIn(6f, 24f)
                 color = parseColorSafe(uCfg.colorHex, ("#0F172A").toColorInt())
                 isFakeBoldText = uCfg.isBold
             }
-            val posX = when (uCfg.alignment) {
-                "center" -> cardRect.right - (uCfg.xMm * scaleX)
-                "left" -> cardRect.left + (uCfg.xMm * scaleX)
-                else -> cardRect.right - (uCfg.xMm * scaleX)
-            }
-            val posY = cardRect.top + (uCfg.yMm * scaleY) + (uCfg.fontSize * 0.85f)
+            val posX = cardRect.left + (uCfg.xMm * scaleX)
+            val textTop = cardRect.top + (uCfg.yMm * scaleY)
 
             if (uCfg.showTitle && uCfg.titleText.isNotEmpty()) {
                 val titlePaint = AndroidPaint().apply {
@@ -1552,11 +1703,12 @@ object CardPrintAndExportHelper {
                     textSize = (uCfg.fontSize * 0.65f).coerceIn(5f, 12f)
                     color = parseColorSafe(uCfg.colorHex, AndroidColor.DKGRAY)
                 }
-                canvas.drawText(uCfg.titleText, posX, posY - (uCfg.fontSize * 0.85f), titlePaint)
+                val labelBaseline = textTop - titlePaint.fontMetrics.descent - titlePaint.textSize * 0.15f
+                canvas.drawText(uCfg.titleText, posX, labelBaseline, titlePaint)
             }
 
             // Real user username code
-            canvas.drawText(user.username, posX, posY, uPaint)
+            canvas.drawText(user.username, posX, textTop - uPaint.fontMetrics.ascent, uPaint)
         }
 
         // 2. Title
@@ -1570,57 +1722,38 @@ object CardPrintAndExportHelper {
             drawTextItem(config.passwordConfig, pText)
         }
 
-        // 4. Price
+        // 4. Price — the batch price is the real value; the design's own text is
+        // only used when the batch carries no price at all.
         if (config.priceConfig.visible) {
-            val prText = if (config.priceConfig.titleText.isNotEmpty()) {
-                config.priceConfig.titleText
-            } else if (batch.pricePerCard > 0) {
-                "${batch.pricePerCard} ر.ي"
-            } else {
-                ""
+            val prText = when {
+                batch.pricePerCard > 0 -> "${batch.pricePerCard} ر.ي"
+                config.priceConfig.titleText.isNotEmpty() -> config.priceConfig.titleText
+                else -> ""
             }
             drawTextItem(config.priceConfig, prText)
         }
 
-        // 5. Profile
+        // 5. Profile (package name) — the plan the card is worth.
         if (config.profileConfig.visible) {
-            val pfText = if (config.profileConfig.titleText.isNotEmpty()) {
-                config.profileConfig.titleText
-            } else if (user.profile.isNotEmpty()) {
-                user.profile
-            } else {
-                batch.profileName
-            }
+            val pfText = user.profile.ifEmpty { batch.profileName }
             drawTextItem(config.profileConfig, pfText)
         }
 
         // 6. Payment / Batch
         if (config.paymentConfig.visible) {
-            val payText = if (config.paymentConfig.titleText.isNotEmpty()) {
-                config.paymentConfig.titleText
-            } else {
-                batch.batchId
-            }
-            drawTextItem(config.paymentConfig, payText)
+            // This field is configured as literal text in the design editor.
+            // Never print the internal batch identifier as card content.
+            drawTextItem(config.paymentConfig.copy(showTitle = false), config.paymentConfig.titleText)
         }
 
         // 7. Serial
         if (config.serialConfig.visible) {
-            val sText = if (config.serialConfig.titleText.isNotEmpty()) {
-                config.serialConfig.titleText
-            } else {
-                user.username.takeLast(4)
-            }
-            drawTextItem(config.serialConfig, sText)
+            drawTextItem(config.serialConfig, user.username.takeLast(4))
         }
 
         // 8. POS
         if (config.posConfig.visible) {
-            val posText = if (config.posConfig.titleText.isNotEmpty()) {
-                config.posConfig.titleText
-            } else {
-                "المركز الرئيسي"
-            }
+            val posText = config.posConfig.titleText.ifEmpty { "المركز الرئيسي" }
             drawTextItem(config.posConfig, posText)
         }
 
@@ -1631,7 +1764,7 @@ object CardPrintAndExportHelper {
             val bCfg = config.barcodeConfig
             val bw = (bCfg.widthMm * scaleX).coerceAtLeast(10f)
             val bh = (bCfg.heightMm * scaleY).coerceAtLeast(6f)
-            val bx = cardRect.right - (bCfg.xMm * scaleX) - bw
+            val bx = cardRect.left + (bCfg.xMm * scaleX)
             val by = cardRect.top + (bCfg.yMm * scaleY)
             val bRect = AndroidRectF(bx, by, bx + bw, by + bh)
 
@@ -1700,13 +1833,39 @@ object CardPrintAndExportHelper {
             val ly = cardRect.top + (lCfg.yMm * scaleY)
             val lRect = AndroidRectF(lx, ly, lx + lw, ly + lh)
 
-            val logoPaint = AndroidPaint().apply {
-                isAntiAlias = true
-                style = AndroidPaint.Style.STROKE
-                strokeWidth = 1f
-                color = AndroidColor.DKGRAY
+            if (logoBitmap != null) {
+                val logoPaint = AndroidPaint().apply {
+                    isAntiAlias = true
+                    isFilterBitmap = true
+                    isDither = true
+                }
+                canvas.drawBitmap(logoBitmap, AndroidRect(0, 0, logoBitmap.width, logoBitmap.height), lRect, logoPaint)
+            } else {
+                // No image available — draw an honest empty placeholder instead
+                // of pretending a logo is there.
+                val logoPaint = AndroidPaint().apply {
+                    isAntiAlias = true
+                    style = AndroidPaint.Style.STROKE
+                    strokeWidth = 1f
+                    color = AndroidColor.DKGRAY
+                }
+                canvas.drawRoundRect(lRect, 2f, 2f, logoPaint)
             }
-            canvas.drawRoundRect(lRect, 2f, 2f, logoPaint)
+        }
+
+        // Page note is a card element in the editor preview, so honor its saved
+        // millimeter coordinates on every card instead of moving it to the sheet footer.
+        if (config.pageNoteEnabled && config.pageNoteText.isNotEmpty()) {
+            val notePaint = AndroidPaint().apply {
+                isAntiAlias = true
+                textAlign = AndroidPaint.Align.LEFT
+                textSize = config.pageNoteSize.coerceIn(6f, 16f)
+                color = parseColorSafe(config.pageNoteColorHex, ("#0C5A60").toColorInt())
+                isFakeBoldText = true
+            }
+            val noteX = cardRect.left + config.pageNoteX * scaleX
+            val noteTop = cardRect.top + config.pageNoteY * scaleY
+            canvas.drawText(config.pageNoteText, noteX, noteTop - notePaint.fontMetrics.ascent, notePaint)
         }
     }
 

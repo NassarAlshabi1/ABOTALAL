@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +48,7 @@ import com.example.data.model.UserManagerUser
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.CardPrintAndExportHelper
+import com.example.ui.components.RefreshableListContainer
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -92,6 +94,7 @@ fun UserManagerScreen(
 ) {
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val conn by viewModel.currentConnection.collectAsState()
+    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val userManagerUsers by viewModel.userManagerUsers.collectAsState()
     val userManagerProfiles by viewModel.userManagerProfiles.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -235,6 +238,9 @@ fun UserManagerScreen(
         )
     }
 
+    // Pull-to-refresh: re-syncs data from the router.
+    var isPullRefreshing by remember { mutableStateOf(false) }
+
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
             topBar = {
@@ -258,7 +264,7 @@ fun UserManagerScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Right Side: Back Arrow Button ➔ + Green Badge "متصل •"
+                            // Right Side: Back Arrow Button ➔ + Router connection status
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -285,7 +291,7 @@ fun UserManagerScreen(
                                 // Green Badge: متصل •
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = Color(0xFFDCFCE7)
+                                    color = if (isConnected) Color(0xFFDCFCE7) else Color(0xFFF1F5F9)
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -296,12 +302,12 @@ fun UserManagerScreen(
                                             modifier = Modifier
                                                 .size(7.dp)
                                                 .clip(CircleShape)
-                                                .background(Color(0xFF16A34A))
+                                                .background(if (isConnected) Color(0xFF16A34A) else Color(0xFF94A3B8))
                                         )
                                         Text(
-                                            text = "متصل",
+                                            text = if (isConnected) "متصل" else "غير متصل",
                                             fontFamily = CairoFontFamily,
-                                            color = Color(0xFF15803D),
+                                            color = if (isConnected) Color(0xFF15803D) else Color(0xFF64748B),
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold
                                         )
@@ -407,6 +413,17 @@ fun UserManagerScreen(
             },
             containerColor = Color(0xFFF8FAFC)
         ) { innerPadding ->
+            RefreshableListContainer(
+                isRefreshing = isPullRefreshing,
+                onRefresh = {
+                    if (!isPullRefreshing) {
+                        isPullRefreshing = true
+                        viewModel.refreshAllData { isPullRefreshing = false }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize(),
+            ) {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -495,6 +512,7 @@ fun UserManagerScreen(
                     Spacer(modifier = Modifier.height(24.dp))
                 }
             }
+            } // RefreshableListContainer
         }
     }
 
@@ -582,22 +600,30 @@ fun UserManagerScreen(
                                             if (cardsToPrint.isEmpty()) {
                                                 feedbackMessage = "لا توجد كروت فعلية لهذه الدفعة في بيانات الراوتر"
                                             } else {
-                                                feedbackMessage = "جاري إرسال ${cardsToPrint.size} كرت إلى الطباعة..."
-                                                val printBatch = GeneratedBatchRecord(
-                                                    batchId = batch.batchId,
-                                                    date = batch.date,
-                                                    profileName = batch.profileName,
-                                                    count = cardsToPrint.size,
-                                                    pricePerCard = batch.pricePerCard,
-                                                    prefix = batch.prefix,
-                                                    cards = cardsToPrint
-                                                )
-                                                CardPrintAndExportHelper.printVoucherBatchDirectly(
-                                                    context = context,
-                                                    batch = printBatch,
-                                                    users = cardsToPrint,
-                                                    config = CardPrintAndExportHelper.loadTemplateConfig(context, "Default_Design")
-                                                )
+                                                val templateName = context
+                                                    .getSharedPreferences("card_templates_prefs", android.content.Context.MODE_PRIVATE)
+                                                    .getString("${batch.profileName}_template", "")
+                                                    .orEmpty()
+                                                if (templateName.isBlank() || templateName !in CardPrintAndExportHelper.getTemplatesList(context)) {
+                                                    feedbackMessage = "الباقة ${batch.profileName} غير مرتبطة بقالب طباعة محفوظ"
+                                                } else {
+                                                    feedbackMessage = "جاري إرسال ${cardsToPrint.size} كرت إلى الطباعة..."
+                                                    val printBatch = GeneratedBatchRecord(
+                                                        batchId = batch.batchId,
+                                                        date = batch.date,
+                                                        profileName = batch.profileName,
+                                                        count = cardsToPrint.size,
+                                                        pricePerCard = batch.pricePerCard,
+                                                        prefix = batch.prefix,
+                                                        cards = cardsToPrint
+                                                    )
+                                                    CardPrintAndExportHelper.printVoucherBatchDirectly(
+                                                        context = context,
+                                                        batch = printBatch,
+                                                        users = cardsToPrint,
+                                                        config = CardPrintAndExportHelper.loadTemplateConfig(context, templateName)
+                                                    )
+                                                }
                                             }
                                         }
                                     ) {

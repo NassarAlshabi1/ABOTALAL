@@ -16,7 +16,8 @@ import javax.net.ssl.SSLSocketFactory
 
 /**
  * Native MikroTik RouterOS Binary API Client (Port 8728 / 8729)
- * Supports ROS v6 and v7 authentication and sentence command execution.
+ * Implements the RouterOS Binary API used by this app's supported v6 routers.
+ * The login handshake also supports legacy v6 MD5 challenge authentication.
  */
 class MikroTikNativeApi(
     val host: String,
@@ -341,7 +342,18 @@ class MikroTikNativeApi(
             recordCommandResult(command, operationId, startedAt)
             return result
         } catch (e: SocketTimeoutException) {
-            // A one-shot retry: reconnect + re-login, resend the command once.
+            // A timed-out mutation may already have been applied by RouterOS even
+            // though its reply was lost. Never replay it: surface the ambiguous
+            // result so callers can verify router state before trying again.
+            if (OperationTelemetry.isMutationCommand(command)) {
+                closeInternal()
+                lastCommandError = "انتهت المهلة أثناء تنفيذ $command؛ قد يكون الراوتر نفّذ الأمر. تحقّق من الحالة قبل إعادة المحاولة."
+                lastCommandErrorClass = OperationTelemetry.ErrorClass.TIMEOUT
+                recordCommandResult(command, operationId, startedAt)
+                return mutableListOf()
+            }
+
+            // A one-shot retry is safe for reads: reconnect + re-login, resend once.
             closeInternal()
             lastCommandError = null
             lastCommandErrorClass = null
@@ -584,32 +596,7 @@ class MikroTikNativeApi(
     }
 
     private fun writeWord(out: OutputStream, word: String) {
-        val bytes = word.toByteArray(Charsets.UTF_8)
-        val len = bytes.size
-        when {
-            len < 0x80 -> {
-                out.write(len)
-            }
-            len < 0x4000 -> {
-                out.write((len shr 8) or 0x80)
-                out.write(len and 0xFF)
-            }
-            len < 0x200000 -> {
-                out.write((len shr 16) or 0xC0)
-                out.write((len shr 8) and 0xFF)
-                out.write(len and 0xFF)
-            }
-            else -> {
-                // 5-byte form: 0xF0 marker followed by 4 length bytes (len >= 0x200000).
-                // The old 4-byte 0xE0 variant is NOT part of the RouterOS protocol.
-                out.write(0xF0)
-                out.write((len shr 24) and 0xFF)
-                out.write((len shr 16) and 0xFF)
-                out.write((len shr 8) and 0xFF)
-                out.write(len and 0xFF)
-            }
-        }
-        out.write(bytes)
+        RouterOsApiWordCodec.writeWord(out, word)
     }
 
     private fun readSentence(): List<String> {
@@ -626,40 +613,7 @@ class MikroTikNativeApi(
     }
 
     private fun readWord(input: InputStream): String? {
-        val firstByte = input.read()
-        if (firstByte == -1) return null
-        if (firstByte == 0) return ""
-
-        val len = when {
-            (firstByte and 0x80) == 0 -> firstByte
-            (firstByte and 0xC0) == 0x80 -> {
-                val b2 = input.read()
-                ((firstByte and 0x3F) shl 8) or b2
-            }
-            (firstByte and 0xE0) == 0xC0 -> {
-                val b2 = input.read()
-                val b3 = input.read()
-                ((firstByte and 0x1F) shl 16) or (b2 shl 8) or b3
-            }
-            (firstByte and 0xF0) == 0xF0 -> {
-                // 5-byte form: 0xF0 marker + 4 length bytes (len >= 0x200000)
-                val b2 = input.read()
-                val b3 = input.read()
-                val b4 = input.read()
-                val b5 = input.read()
-                (b2 shl 24) or (b3 shl 16) or (b4 shl 8) or b5
-            }
-            else -> return ""
-        }
-
-        val buffer = ByteArray(len)
-        var offset = 0
-        while (offset < len) {
-            val r = input.read(buffer, offset, len - offset)
-            if (r == -1) break
-            offset += r
-        }
-        return String(buffer, 0, offset, Charsets.UTF_8)
+        return RouterOsApiWordCodec.readWord(input)
     }
 
     private fun md5Response(challengeHex: String, pass: String): String {

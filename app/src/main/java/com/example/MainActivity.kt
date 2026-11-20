@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.components.AppExitConfirmationDialog
+import com.example.ui.components.AppFeedbackHost
 import com.example.ui.screens.*
 import com.example.ui.screens.designs.DesignsScreen
 import com.example.ui.theme.CairoFontFamily
@@ -69,7 +70,17 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                MainAppNavigation(viewModel)
+                // App-wide feedback snackbars: single host above every screen
+                // (login, splash and all tabs) so any AppFeedback call renders
+                // here instead of system toasts.
+                Box(modifier = Modifier.fillMaxSize()) {
+                    MainAppNavigation(viewModel)
+                    AppFeedbackHost(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                    )
+                }
             }
         }
     }

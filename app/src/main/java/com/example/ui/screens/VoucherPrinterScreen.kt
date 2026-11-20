@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import androidx.core.graphics.toColorInt
 
+
+import com.example.ui.components.AppFeedback
 import java.util.Locale
 import android.content.Context
 import android.graphics.Bitmap
@@ -21,7 +23,6 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -47,6 +48,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -70,6 +72,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.IOException
 import java.util.UUID
+import kotlin.math.roundToInt
 
 // Prevent accidental multi-thousand-card generations that would freeze the UI
 // and saturate the router. The preview is additionally capped below.
@@ -115,12 +118,26 @@ fun VoucherPrinterScreen(
     var selectedMode by remember { mutableStateOf(initialMode) }
     var selectedProfile by remember { mutableStateOf("") }
 
-    // Initialize default profile
+    // Real price of the selected profile (UM only carries a price; hotspot
+    // profiles have none). Replaces the previously hard-coded "١٠٠٠ د.ع".
+    val selectedProfilePrice by remember(selectedProfile, selectedMode, userManagerProfiles) {
+        mutableStateOf(
+            if (selectedMode == VoucherMode.USER_MANAGER)
+                userManagerProfiles.firstOrNull { it.name == selectedProfile }?.price ?: 0
+            else 0
+        )
+    }
+
+    // Initialize default profile (only when the selection is empty or no longer
+    // valid — never clobber the operator's choice on every router sync).
     LaunchedEffect(selectedMode, hotspotProfiles, userManagerProfiles) {
-        if (selectedMode == VoucherMode.HOTSPOT && hotspotProfiles.isNotEmpty()) {
-            selectedProfile = hotspotProfiles.first().name
-        } else if (selectedMode == VoucherMode.USER_MANAGER && userManagerProfiles.isNotEmpty()) {
-            selectedProfile = userManagerProfiles.first().name
+        val validProfiles = if (selectedMode == VoucherMode.HOTSPOT) hotspotProfiles.map { it.name } else userManagerProfiles.map { it.name }
+        if (selectedProfile.isEmpty() || selectedProfile !in validProfiles) {
+            if (selectedMode == VoucherMode.HOTSPOT && hotspotProfiles.isNotEmpty()) {
+                selectedProfile = hotspotProfiles.first().name
+            } else if (selectedMode == VoucherMode.USER_MANAGER && userManagerProfiles.isNotEmpty()) {
+                selectedProfile = userManagerProfiles.first().name
+            }
         }
     }
 
@@ -168,10 +185,10 @@ fun VoucherPrinterScreen(
                     val originalBitmap = BitmapFactory.decodeStream(inputStream)
                     customImageBitmap = originalBitmap
                     designTheme = CardDesignTheme.CUSTOM_IMAGE
-                    Toast.makeText(context, "تم تحميل قالب الكرت المخصص بنجاح!", Toast.LENGTH_SHORT).show()
+                    AppFeedback.success("تم تحميل قالب الكرت المخصص بنجاح!")
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, "فشل في قراءة الصورة: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                AppFeedback.error("فشل في قراءة الصورة: ${e.localizedMessage}")
             }
         }
     }
@@ -179,6 +196,7 @@ fun VoucherPrinterScreen(
     // 5. Execution State Pool
     val generatedVouchersList = remember { mutableStateListOf<TempVoucher>() }
     var isGeneratingAndAdding by remember { mutableStateOf(false) }
+    var pushedToRouter by remember { mutableStateOf(false) }
     var generationProgress by remember { mutableStateOf(0f) }
     var syncStatusText by remember { mutableStateOf<String?>(null) }
 
@@ -246,6 +264,7 @@ fun VoucherPrinterScreen(
     }
 
     LaunchedEffect(selectedMode, selectedProfile, qtyToGenerate, prefixText, usernameLength, generationTypeSeq, startSeqNum, matchPasswordWithUsername, bindMacOnFirstLogin) {
+        pushedToRouter = false
         generatedVouchersList.clear()
         val safeQty = qtyToGenerate.coerceIn(0, MAX_VOUCHERS_PER_BATCH)
         generatedVouchersList.addAll(buildVoucherBatch(safeQty, occupiedUsernames()))
@@ -351,7 +370,7 @@ fun VoucherPrinterScreen(
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
-                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         text = "1. خيارات التوليد ونظام الحسابات",
                         fontWeight = FontWeight.Bold,
@@ -362,9 +381,9 @@ fun VoucherPrinterScreen(
                     // Profile Picker
                     Column {
                         Text("اختر بروفايل الخدمة المعتمد:", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             modifier = Modifier.horizontalScroll(rememberScrollState())
                         ) {
                             val activeList = if (selectedMode == VoucherMode.HOTSPOT) hotspotProfiles.map { it.name } else userManagerProfiles.map { it.name }
@@ -390,7 +409,7 @@ fun VoucherPrinterScreen(
                                                 RoundedCornerShape(12.dp)
                                             )
                                             .clickable { selectedProfile = profileName }
-                                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                                            .padding(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
                                         Text(
                                             text = profileName,
@@ -408,7 +427,7 @@ fun VoucherPrinterScreen(
                     // Horizontal Inputs
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedTextField(
                             value = if (qtyToGenerate == 0) "" else qtyToGenerate.toString(),
@@ -438,7 +457,7 @@ fun VoucherPrinterScreen(
                     // Numeric Mode Selector
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1.0f)) {
@@ -457,7 +476,7 @@ fun VoucherPrinterScreen(
                     AnimatedVisibility(visible = generationTypeSeq) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             OutlinedTextField(
                                 value = if (startSeqNum == 0) "" else startSeqNum.toString(),
@@ -486,7 +505,7 @@ fun VoucherPrinterScreen(
                                 value = usernameLength.toFloat(),
                                 onValueChange = { usernameLength = it.toInt() },
                                 valueRange = 4f..12f,
-                                modifier = Modifier.padding(horizontal = 12.dp)
+                                modifier = Modifier.padding(horizontal = 6.dp)
                             )
                             Text("$usernameLength أحرف", fontWeight = FontWeight.Bold)
                         }
@@ -602,7 +621,7 @@ fun VoucherPrinterScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(180.dp)
+                            .aspectRatio(1.5f)
                             .clip(RoundedCornerShape(16.dp))
                             .background(
                                 when (designTheme) {
@@ -651,36 +670,30 @@ fun VoucherPrinterScreen(
                             Text(
                                 text = "شبكة NetCraft",
                                 color = if (designTheme == CardDesignTheme.MINIMAL_WHITE) Color.Black else Color.White,
-                                style = MaterialTheme.typography.labelMedium,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 8.dp)
+                                    .absoluteOffset(x = (cardW.value * 0.5f).dp, y = (cardH.value * 0.08f).dp)
+                                    .graphicsLayer { translationX = -size.width / 2f }
                             )
 
                             // Username layout mapping
                             Box(
                                 modifier = Modifier
                                     .absoluteOffset(
-                                        x = (cardW.value * usernameX).dp - 50.dp,
+                                        x = (cardW.value * usernameX).dp,
                                         y = (cardH.value * usernameY).dp
                                     )
+                                    .graphicsLayer { translationX = -size.width / 2f }
                             ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(
-                                        text = "اسم المستخدم (User):",
-                                        color = textDesignColor.copy(alpha = 0.8f),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontSize = (passwordFontSize - 3).sp
-                                    )
-                                    Text(
-                                        text = if (generatedVouchersList.isNotEmpty()) generatedVouchersList.first().username else "NETCRAFT-101",
-                                        color = textDesignColor,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = usernameFontSize.sp,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
+                                Text(
+                                    text = "U: ${if (generatedVouchersList.isNotEmpty()) generatedVouchersList.first().username else "NETCRAFT-101"}",
+                                    color = textDesignColor,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = (usernameFontSize * 0.7f).sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1
+                                )
                             }
 
                             // Password layout mapping
@@ -688,25 +701,19 @@ fun VoucherPrinterScreen(
                                 Box(
                                     modifier = Modifier
                                         .absoluteOffset(
-                                            x = (cardW.value * passwordX).dp - 50.dp,
+                                            x = (cardW.value * passwordX).dp,
                                             y = (cardH.value * passwordY).dp
                                         )
+                                        .graphicsLayer { translationX = -size.width / 2f }
                                 ) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text(
-                                            text = "كلمة المرور (Pass):",
-                                            color = textDesignColor.copy(alpha = 0.8f),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontSize = (passwordFontSize - 3).sp
-                                        )
-                                        Text(
-                                            text = if (generatedVouchersList.isNotEmpty()) generatedVouchersList.first().password else "653412",
-                                            color = textDesignColor,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = passwordFontSize.sp,
-                                            fontFamily = FontFamily.Monospace
-                                        )
-                                    }
+                                    Text(
+                                        text = "P: ${if (generatedVouchersList.isNotEmpty()) generatedVouchersList.first().password else "653412"}",
+                                        color = textDesignColor,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = (passwordFontSize * 0.7f).sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1
+                                    )
                                 }
                             }
 
@@ -714,17 +721,18 @@ fun VoucherPrinterScreen(
                             Box(
                                 modifier = Modifier
                                     .absoluteOffset(
-                                        x = (cardW.value * detailsX).dp - 60.dp,
+                                        x = (cardW.value * detailsX).dp,
                                         y = (cardH.value * detailsY).dp
                                     )
+                                    .graphicsLayer { translationX = -size.width / 2f }
                             ) {
                                 Text(
-                                    text = "باقة: $selectedProfile | السعر: ١٠٠٠ د.ع",
+                                    text = "باقة: $selectedProfile | السعر: ${if (selectedProfilePrice > 0) "$selectedProfilePrice د.ع" else "—"}",
                                     color = if (designTheme == CardDesignTheme.MINIMAL_WHITE) Color.DarkGray else Color.White.copy(
                                         alpha = 0.9f
                                     ),
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = detailsFontSize.sp,
+                                    fontSize = (detailsFontSize * 0.7f).sp,
                                     textAlign = TextAlign.Center,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -754,7 +762,7 @@ fun VoucherPrinterScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("حجم الخط (Size)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                     Slider(value = usernameFontSize.toFloat(), onValueChange = { usernameFontSize = it.toInt() }, valueRange = 8f..24f, modifier = Modifier.weight(1f))
-                                    Text("$usernameFontSize px", style = MaterialTheme.typography.labelSmall)
+                                    Text("$usernameFontSize sp", style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
@@ -777,7 +785,7 @@ fun VoucherPrinterScreen(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("حجم الخط (Size)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(100.dp))
                                         Slider(value = passwordFontSize.toFloat(), onValueChange = { passwordFontSize = it.toInt() }, valueRange = 8f..24f, modifier = Modifier.weight(1f))
-                                        Text("$passwordFontSize px", style = MaterialTheme.typography.labelSmall)
+                                        Text("$passwordFontSize sp", style = MaterialTheme.typography.labelSmall)
                                     }
                                 }
                             }
@@ -922,7 +930,7 @@ fun VoucherPrinterScreen(
                             if (!viewModel.isConnected.value) {
                                 isGeneratingAndAdding = false
                                 syncStatusText = null
-                                Toast.makeText(context, "اتصل بالراوتر أولاً قبل توليد الكروت.", Toast.LENGTH_LONG).show()
+                                AppFeedback.info("اتصل بالراوتر أولاً قبل توليد الكروت.", long = true)
                                 return@launch
                             }
 
@@ -951,11 +959,7 @@ fun VoucherPrinterScreen(
                             if (!synced) {
                                 isGeneratingAndAdding = false
                                 syncStatusText = null
-                                Toast.makeText(
-                                    context,
-                                    syncError ?: "تعذرت مزامنة كروت الراوتر. لم يتم توليد أي كرت لتفادي التكرار.",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                AppFeedback.error(syncError ?: "تعذرت مزامنة كروت الراوتر. لم يتم توليد أي كرت لتفادي التكرار.")
                                 return@launch
                             }
 
@@ -1021,6 +1025,7 @@ fun VoucherPrinterScreen(
 
                             isGeneratingAndAdding = false
                             if (successCount > 0) {
+                                pushedToRouter = true
                                 viewModel.writeActivityLog(
                                     "توليد كروت آلي",
                                     "تمت إضافة $successCount كارت لبروفايل $selectedProfile" +
@@ -1034,11 +1039,12 @@ fun VoucherPrinterScreen(
                                     append("تعذر إضافة $failureCount كرت — راجع اتصال الراوتر وأعد المحاولة.")
                                 }
                             }
-                            Toast.makeText(
-                                context,
-                                message.ifBlank { "لم تتم إضافة أي كرت." },
-                                if (failureCount > 0) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
-                            ).show()
+                            val summary = message.ifBlank { "لم تتم إضافة أي كرت." }
+                            if (failureCount > 0) {
+                                AppFeedback.warning(summary, long = true)
+                            } else {
+                                AppFeedback.success(summary)
+                            }
                         }
                     },
                     enabled = !isGeneratingAndAdding && generatedVouchersList.isNotEmpty(),
@@ -1067,29 +1073,34 @@ fun VoucherPrinterScreen(
                 // Native Print & Save PDF Button (100% Real!)
                 Button(
                     onClick = {
-                        val printerHelper = VoucherPDFPrinter(
-                            context = context,
-                            vouchers = generatedVouchersList.toList(),
-                            theme = designTheme,
-                            customBg = customImageBitmap,
-                            cols = columnsCount,
-                            cardsPerPage = limitPerPage,
-                            xUser = usernameX,
-                            yUser = usernameY,
-                            xPass = passwordX,
-                            yPass = passwordY,
-                            xDetails = detailsX,
-                            yDetails = detailsY,
-                            sizeUser = usernameFontSize,
-                            sizePass = passwordFontSize,
-                            sizeDetails = detailsFontSize,
-                            textColor = textDesignColor,
-                            selectedProfile = selectedProfile,
-                            matchPasswordWithUsername = matchPasswordWithUsername
-                        )
-                        printerHelper.startPrintFlow()
+                        if (!pushedToRouter) {
+                            AppFeedback.warning("يجب توليد وإضافة الكروت إلى السيرفر أولاً قبل الطباعة.", long = true)
+                        } else {
+                            val printerHelper = VoucherPDFPrinter(
+                                context = context,
+                                vouchers = generatedVouchersList.toList(),
+                                theme = designTheme,
+                                customBg = customImageBitmap,
+                                cols = columnsCount,
+                                cardsPerPage = limitPerPage,
+                                xUser = usernameX,
+                                yUser = usernameY,
+                                xPass = passwordX,
+                                yPass = passwordY,
+                                xDetails = detailsX,
+                                yDetails = detailsY,
+                                sizeUser = usernameFontSize,
+                                sizePass = passwordFontSize,
+                                sizeDetails = detailsFontSize,
+                                textColor = textDesignColor,
+                                selectedProfile = selectedProfile,
+                                selectedProfilePrice = selectedProfilePrice,
+                                matchPasswordWithUsername = matchPasswordWithUsername
+                            )
+                            printerHelper.startPrintFlow()
+                        }
                     },
-                    enabled = generatedVouchersList.isNotEmpty(),
+                    enabled = generatedVouchersList.isNotEmpty() && pushedToRouter,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0061A4), contentColor = Color.White),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
@@ -1228,6 +1239,7 @@ fun VoucherPrinterScreen(
                                                         voucher = voucher,
                                                         theme = designTheme,
                                                         customImageBitmap = customImageBitmap,
+                                                        selectedProfilePrice = selectedProfilePrice,
                                                         usernameX = usernameX,
                                                         usernameY = usernameY,
                                                         passwordX = passwordX,
@@ -1271,6 +1283,7 @@ fun PrintVoucherCardItem(
     voucher: TempVoucher,
     theme: CardDesignTheme,
     customImageBitmap: Bitmap?,
+    selectedProfilePrice: Int,
     usernameX: Float,
     usernameY: Float,
     passwordX: Float,
@@ -1324,24 +1337,25 @@ fun PrintVoucherCardItem(
             val cardW = maxWidth
             val cardH = maxHeight
 
-            // Static Brand
+            // These fractional anchors are also used by VoucherPDFPrinter.
             Text(
-                text = "الأمير نت",
+                text = "شبكة NetCraft",
                 color = if (theme == CardDesignTheme.MINIMAL_WHITE) Color.Black else Color.White,
-                fontSize = 8.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 4.dp)
+                    .absoluteOffset(x = (cardW.value * 0.5f).dp, y = (cardH.value * 0.08f).dp)
+                    .graphicsLayer { translationX = -size.width / 2f }
             )
 
             // Username (centered dynamically in its text area)
             Box(
                 modifier = Modifier
                     .absoluteOffset(
-                        x = (cardW.value * usernameX).dp - 35.dp,
+                        x = (cardW.value * usernameX).dp,
                         y = (cardH.value * usernameY).dp
                     )
+                    .graphicsLayer { translationX = -size.width / 2f }
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
@@ -1349,7 +1363,8 @@ fun PrintVoucherCardItem(
                         color = textDesignColor,
                         fontWeight = FontWeight.Bold,
                         fontSize = (usernameFontSize * 0.7f).sp,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
                     )
                 }
             }
@@ -1358,10 +1373,11 @@ fun PrintVoucherCardItem(
             if (!matchPasswordWithUsername) {
                 Box(
                     modifier = Modifier
-                        .absoluteOffset(
-                            x = (cardW.value * passwordX).dp - 35.dp,
-                            y = (cardH.value * passwordY).dp
-                        )
+                    .absoluteOffset(
+                        x = (cardW.value * passwordX).dp,
+                        y = (cardH.value * passwordY).dp
+                    )
+                    .graphicsLayer { translationX = -size.width / 2f }
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
@@ -1369,7 +1385,8 @@ fun PrintVoucherCardItem(
                             color = textDesignColor,
                             fontWeight = FontWeight.Bold,
                             fontSize = (passwordFontSize * 0.7f).sp,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
                         )
                     }
                 }
@@ -1379,12 +1396,13 @@ fun PrintVoucherCardItem(
             Box(
                 modifier = Modifier
                     .absoluteOffset(
-                        x = (cardW.value * detailsX).dp - 40.dp,
+                        x = (cardW.value * detailsX).dp,
                         y = (cardH.value * detailsY).dp
                     )
+                    .graphicsLayer { translationX = -size.width / 2f }
             ) {
                 Text(
-                    text = "$selectedProfile",
+                    text = "باقة: $selectedProfile | السعر: ${if (selectedProfilePrice > 0) "$selectedProfilePrice د.ع" else "—"}",
                     color = if (theme == CardDesignTheme.MINIMAL_WHITE) Color.DarkGray else Color.White.copy(alpha = 0.9f),
                     fontWeight = FontWeight.SemiBold,
                     fontSize = (detailsFontSize * 0.7f).sp,
@@ -1457,18 +1475,20 @@ class VoucherPDFPrinter(
     private val sizeDetails: Int,
     private val textColor: Color,
     private val selectedProfile: String,
+    private val selectedProfilePrice: Int,
     private val matchPasswordWithUsername: Boolean
 ) {
     fun startPrintFlow() {
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {
-            Toast.makeText(context, "خدمة الطباعة غير متوفرة في هذا الجهاز!", Toast.LENGTH_LONG).show()
+            AppFeedback.info("خدمة الطباعة غير متوفرة في هذا الجهاز!", long = true)
             return
         }
 
         val printAdapter = object : PrintDocumentAdapter() {
             private var mPdfDocument: PrintedPdfDocument? = null
             private var mTotalPages = 1
+            private var printTextScaleY = 1f
 
             override fun onLayout(
                 oldAttributes: PrintAttributes?,
@@ -1478,6 +1498,9 @@ class VoucherPDFPrinter(
                 extras: Bundle?
             ) {
                 mPdfDocument = PrintedPdfDocument(context, newAttributes)
+                val resolution = newAttributes.resolution
+                val fontScale = context.resources.configuration.fontScale
+                printTextScaleY = (resolution?.verticalDpi ?: 300).toFloat() / 160f * fontScale
                 mTotalPages = Math.ceil(vouchers.size.toDouble() / cardsPerPage).toInt()
 
                 if (cancellationSignal?.isCanceled == true) {
@@ -1505,7 +1528,14 @@ class VoucherPDFPrinter(
                 val pdfDocument = mPdfDocument ?: return
                 
                 try {
-                    for (pageNumber in 0 until mTotalPages) {
+                    val requested = pages.filter { it.getStart() <= it.getEnd() }
+                        .flatMap { r -> (r.getStart()..minOf(r.getEnd(), mTotalPages - 1)).toList() }
+                        .filter { it in 0 until mTotalPages }
+                        .distinct()
+                        .sorted()
+                        .ifEmpty { (0 until mTotalPages).toList() }
+
+                    for (pageNumber in requested) {
                         if (cancellationSignal?.isCanceled == true) {
                             callback.onWriteCancelled()
                             return
@@ -1522,7 +1552,9 @@ class VoucherPDFPrinter(
                     }
 
                     // Write outputs stream
-                    pdfDocument.writeTo(FileOutputStream(destination.fileDescriptor))
+                    FileOutputStream(destination.fileDescriptor).use { out ->
+                        pdfDocument.writeTo(out)
+                    }
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                 } catch (e: Exception) {
                     callback.onWriteFailed(e.localizedMessage)
@@ -1546,8 +1578,9 @@ class VoucherPDFPrinter(
 
                 // Layout equations
                 val rows = Math.ceil(cardsPerPage.toDouble() / cols).toInt()
-                val cardW = gridW / cols
-                val cardH = gridH / rows
+                val cellW = gridW.toFloat() / cols
+                val cellH = gridH.toFloat() / rows
+                val targetAspectRatio = 1.5f // same aspectRatio used by PrintVoucherCardItem
 
                 val startIndex = pageIndex * cardsPerPage
                 val endIndex = Math.min(startIndex + cardsPerPage, vouchers.size)
@@ -1575,20 +1608,35 @@ class VoucherPDFPrinter(
                         val voucher = vouchers[currentCardIndex]
 
                         // Compute rect bounds
-                        val xLeft = lateralMargin + (c * cardW) + 5
-                        val xRight = lateralMargin + ((c + 1) * cardW) - 5
-                        val yTop = topMargin + (r * cardH) + 5
-                        val yBottom = topMargin + ((r + 1) * cardH) - 5
-
-                        val singleW = xRight - xLeft
-                        val singleH = yBottom - yTop
+                        val cellLeft = lateralMargin + c * cellW
+                        val cellTop = topMargin + r * cellH
+                        val availableW = (cellW - 10f).coerceAtLeast(1f)
+                        val availableH = (cellH - 10f).coerceAtLeast(1f)
+                        val singleW = minOf(availableW, availableH * targetAspectRatio)
+                        val singleH = singleW / targetAspectRatio
+                        val xLeft = (cellLeft + (cellW - singleW) / 2f).roundToInt()
+                        val yTop = (cellTop + (cellH - singleH) / 2f).roundToInt()
+                        val xRight = (xLeft + singleW).roundToInt()
+                        val yBottom = (yTop + singleH).roundToInt()
 
                         // Draw card background depending on theme selections
                         val backgroundRect = AndroidRectF(xLeft.toFloat(), yTop.toFloat(), xRight.toFloat(), yBottom.toFloat())
+                        val cardSaveCount = canvas.save()
+                        canvas.clipRect(backgroundRect)
 
                         if (theme == CardDesignTheme.CUSTOM_IMAGE && customBg != null) {
                             // Draw scaled custom image base
-                            val srcRect = AndroidRect(0, 0, customBg.width, customBg.height)
+                            val targetRatio = singleW / singleH
+                            val sourceRatio = customBg.width.toFloat() / customBg.height.toFloat()
+                            val srcRect = if (sourceRatio > targetRatio) {
+                                val croppedWidth = (customBg.height * targetRatio).roundToInt()
+                                val left = (customBg.width - croppedWidth) / 2
+                                AndroidRect(left, 0, left + croppedWidth, customBg.height)
+                            } else {
+                                val croppedHeight = (customBg.width / targetRatio).roundToInt()
+                                val top = (customBg.height - croppedHeight) / 2
+                                AndroidRect(0, top, customBg.width, top + croppedHeight)
+                            }
                             val dstRect = AndroidRect(xLeft, yTop, xRight, yBottom)
                             canvas.drawBitmap(customBg, srcRect, dstRect, paintBg)
                         } else {
@@ -1621,56 +1669,41 @@ class VoucherPDFPrinter(
                         canvas.drawRoundRect(backgroundRect, 10f, 10f, paintLine)
 
                         // 1. Draw static header
-                        val textCol = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.BLACK else paintText.color
                         val paintBrand = AndroidPaint().apply {
                             isAntiAlias = true
                             textAlign = AndroidPaint.Align.CENTER
-                            color = textCol
-                            textSize = 10f
+                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.BLACK else AndroidColor.WHITE
+                            textSize = 10f * printTextScaleY
                             isFakeBoldText = true
                         }
-                        canvas.drawText("شبكة NetCraft", (xLeft + (singleW / 2)).toFloat(), yTop + 20f, paintBrand)
+                        val centerX = xLeft + singleW / 2f
+                        val brandTop = yTop + singleH * 0.08f
+                        canvas.drawText("شبكة NetCraft", centerX, brandTop - paintBrand.fontMetrics.ascent, paintBrand)
 
                         // 2. Plot Username
                         val uX = xLeft + (singleW * xUser)
                         val uY = yTop + (singleH * yUser)
-                        val paintUserLabel = AndroidPaint().apply {
-                            isAntiAlias = true
-                            textAlign = AndroidPaint.Align.CENTER
-                            color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else ("#DCDCDC").toColorInt()
-                            textSize = 7f
-                        }
-                        canvas.drawText("USER:", uX, uY - 3f, paintUserLabel)
-                        
                         val paintUserVal = AndroidPaint().apply {
                             isAntiAlias = true
                             textAlign = AndroidPaint.Align.CENTER
                             color = paintText.color
-                            textSize = sizeUser.toFloat()
+                            textSize = sizeUser * 0.7f * printTextScaleY
                             isFakeBoldText = true
                         }
-                        canvas.drawText(voucher.username, uX, uY + sizeUser - 4f, paintUserVal)
+                        canvas.drawText("U: ${voucher.username}", uX, uY - paintUserVal.fontMetrics.ascent, paintUserVal)
 
                         // 3. Plot Password
                         if (!matchPasswordWithUsername) {
                             val pX = xLeft + (singleW * xPass)
                             val pY = yTop + (singleH * yPass)
-                            val paintPassLabel = AndroidPaint().apply {
-                                isAntiAlias = true
-                                textAlign = AndroidPaint.Align.CENTER
-                                color = if (theme == CardDesignTheme.MINIMAL_WHITE) AndroidColor.GRAY else ("#DCDCDC").toColorInt()
-                                textSize = 7f
-                            }
-                            canvas.drawText("PASS:", pX, pY - 3f, paintPassLabel)
-
                             val paintPassVal = AndroidPaint().apply {
                                 isAntiAlias = true
                                 textAlign = AndroidPaint.Align.CENTER
                                 color = paintText.color
-                                textSize = sizePass.toFloat()
+                                textSize = sizePass * 0.7f * printTextScaleY
                                 isFakeBoldText = true
                             }
-                            canvas.drawText(voucher.password, pX, pY + sizePass - 4f, paintPassVal)
+                            canvas.drawText("P: ${voucher.password}", pX, pY - paintPassVal.fontMetrics.ascent, paintPassVal)
                         }
 
                         // 4. Plot Details Layer
@@ -1680,10 +1713,13 @@ class VoucherPDFPrinter(
                             isAntiAlias = true
                             textAlign = AndroidPaint.Align.CENTER
                             color = if (theme == CardDesignTheme.MINIMAL_WHITE) ("#1B2A4A").toColorInt() else AndroidColor.WHITE
-                            textSize = sizeDetails.toFloat()
+                            textSize = sizeDetails * 0.7f * printTextScaleY
                             isFakeBoldText = true
                         }
-                        canvas.drawText("باقة: $selectedProfile | ١٠٠٠ د.ع", dX, dY, paintDetailsVal)
+                        val detailsText = "باقة: $selectedProfile | السعر: ${if (selectedProfilePrice > 0) "$selectedProfilePrice د.ع" else "—"}"
+                        canvas.drawText(detailsText, dX, dY - paintDetailsVal.fontMetrics.ascent, paintDetailsVal)
+
+                        canvas.restoreToCount(cardSaveCount)
 
                         currentCardIndex++
                     }

@@ -3,7 +3,6 @@ package com.example.ui.screens
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 
-import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.TelegramBotItem
 import com.example.data.model.TelegramNotificationSettings
+
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.TelegramHelper
@@ -293,7 +294,7 @@ fun TelegramBotConfigScreen(
                                 if (res.first) {
                                     chatId = res.second
                                     persistCurrentBot()
-                                    Toast.makeText(context, "✅ تم جلب معرف الشات بنجاح: ${res.second}", Toast.LENGTH_LONG).show()
+                                    AppFeedback.success("✅ تم جلب معرف الشات بنجاح: ${res.second}", long = true)
                                 } else {
                                     testResultDialogText = res.second
                                 }
@@ -330,7 +331,7 @@ fun TelegramBotConfigScreen(
                         onSettingsChange = {
                             notifSettings = it
                             TelegramHelper.saveSettings(context, it)
-                            Toast.makeText(context, "تم حفظ تخصيصات التنبيهات", Toast.LENGTH_SHORT).show()
+                            AppFeedback.success("تم حفظ تخصيصات التنبيهات")
                         }
                     )
 
@@ -409,13 +410,13 @@ fun TelegramBotConfigScreen(
                                 selectedBotIndex = updated.lastIndex
                                 secretStorageWarning = false
                                 showAddBotDialog = false
-                                Toast.makeText(context, "تمت إضافة البوت بنجاح!", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تمت إضافة البوت بنجاح!")
                             } else {
                                 secretStorageWarning = true
-                                Toast.makeText(context, "تعذر حفظ البوت لأن التشفير الآمن غير متاح", Toast.LENGTH_LONG).show()
+                                AppFeedback.error("تعذر حفظ البوت لأن التشفير الآمن غير متاح")
                             }
                         } else {
-                            Toast.makeText(context, "يرجى ملء الاسم والتوكن", Toast.LENGTH_SHORT).show()
+                            AppFeedback.info("يرجى ملء الاسم والتوكن")
                         }
                     }
                 ) {
@@ -475,11 +476,11 @@ fun TelegramBotConfigScreen(
                             onSuccess = {
                                 isInstallingScript = false
                                 showScriptPreviewDialog = false
-                                Toast.makeText(context, "✅ تم تثبيت السكربت على الراوتر بنجاح!", Toast.LENGTH_LONG).show()
+                                AppFeedback.success("✅ تم تثبيت السكربت على الراوتر بنجاح!", long = true)
                             },
                             onError = { err ->
                                 isInstallingScript = false
-                                Toast.makeText(context, "فشل التثبيت: $err", Toast.LENGTH_LONG).show()
+                                AppFeedback.error("فشل التثبيت: $err")
                             }
                         )
                     },
@@ -496,7 +497,7 @@ fun TelegramBotConfigScreen(
                 OutlinedButton(
                     onClick = {
                         clipboardManager.setText(AnnotatedString(scriptSource))
-                        Toast.makeText(context, "تم نسخ كود السكربت للحافظة", Toast.LENGTH_SHORT).show()
+                        AppFeedback.success("تم نسخ كود السكربت للحافظة")
                     }
                 ) {
                     Text("نسخ الكود", fontFamily = CairoFontFamily)

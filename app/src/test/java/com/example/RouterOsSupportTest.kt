@@ -21,8 +21,17 @@ class RouterOsSupportTest {
     fun `rejects v7 and unknown versions`() {
         assertFalse(RouterOsSupport.isSupported("7.14.3"))
         assertFalse(RouterOsSupport.isSupported("7.0"))
+        assertFalse(RouterOsSupport.isSupported("6"))
         assertFalse(RouterOsSupport.isSupported(""))
         assertFalse(RouterOsSupport.isSupported("unknown"))
+    }
+
+    @Test
+    fun `parses version components using the support gate parser`() {
+        assertTrue(RouterOsSupport.parseVersion("6.49.21 (stable)") == (6 to 49))
+        assertTrue(RouterOsSupport.parseVersion(" 6.43.16") == (6 to 43))
+        assertTrue(RouterOsSupport.parseVersion("6") == null)
+        assertTrue(RouterOsSupport.parseVersion("unknown") == null)
     }
 
     @Test

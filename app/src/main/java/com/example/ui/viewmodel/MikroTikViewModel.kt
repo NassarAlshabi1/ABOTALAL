@@ -476,8 +476,8 @@ class MikroTikViewModel(application: Application) : AndroidViewModel(application
         repository.shutdownRouter(onSuccess, onError)
     }
 
-    fun refreshAllData() {
-        repository.refreshData()
+    fun refreshAllData(onComplete: (String?) -> Unit = {}) {
+        repository.refreshData(onComplete)
     }
 
     /* Tools & Advanced Router Operations */

@@ -1,3 +1,23 @@
 <resources>
     <string name="app_name">NetCraft</string>
+
+    <!-- Shared UI: pull-to-refresh & charts (new components) -->
+    <string name="pull_to_refresh">اسحب للتحديث</string>
+    <string name="cpu_live_chart_title">استهلاك المعالج (مباشر)</string>
+    <string name="memory_live_chart_title">استخدام الذاكرة (مباشر)</string>
+    <string name="chart_no_data">بانتظار البيانات…</string>
+    <string name="cpu_current_value">المعالج الآن: %1$d%%</string>
+    <string name="memory_current_value">الذاكرة الآن: %1$d%%</string>
+    <string name="last_samples_note">آخر %1$d قراءة (تحديث كل 3 ثوانٍ)</string>
+
+    <!-- Dashboard: stat cards & printing-system banner -->
+    <string name="stat_accounts_value_title">قيمة الحسابات</string>
+    <string name="stat_accounts_value_footer">حسب أسعار باقات اليوزرمانجر</string>
+    <string name="stat_generated_cards_title">الكروت المولدة</string>
+    <string name="stat_generated_cards_footer">الكروت خلال 30 يوماً: %1$d</string>
+    <string name="stat_active_cards_title">الكروت النشطة</string>
+    <string name="stat_remaining_cards_title">الكروت المتبقية</string>
+    <string name="stat_remaining_cards_footer">كروت الهوتسبوت: %1$d</string>
+    <string name="printing_system_banner_title">معا نظام الطباعة NetCraft</string>
+    <string name="action_view">عرض</string>
 </resources>

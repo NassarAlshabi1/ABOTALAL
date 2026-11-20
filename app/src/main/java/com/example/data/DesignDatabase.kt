@@ -5,11 +5,13 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import android.content.Context
 
 @Database(
     entities = [Design::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -20,13 +22,32 @@ abstract class DesignDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: DesignDatabase? = null
         
+        /**
+         * v1 → v2: adds the card "profile" (package name) element and the
+         * barcode-type selector. Existing designs keep their layout; the new
+         * element starts hidden with the same label the editor shows.
+         */
+        internal val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Default value is a fully encoded ElementStyle so the new
+                // column reads back as the editor's default element.
+                db.execSQL(
+                    "ALTER TABLE `designs` ADD COLUMN `profile` TEXT NOT NULL DEFAULT " +
+                        "'false,4.0,14.0,8.0,#000000,true,false,2KfZhNio2KfZgtip'"
+                )
+                db.execSQL("ALTER TABLE `designs` ADD COLUMN `barcodeType` TEXT NOT NULL DEFAULT 'barcode'")
+            }
+        }
+
         fun getInstance(context: Context): DesignDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     DesignDatabase::class.java,
                     "design_database"
-                ).build()
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
                 INSTANCE = instance
                 instance
             }

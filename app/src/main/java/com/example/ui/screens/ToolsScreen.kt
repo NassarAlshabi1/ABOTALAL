@@ -5,7 +5,6 @@ import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.automirrored.filled.Rule
 
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -37,6 +36,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 
@@ -210,7 +211,7 @@ fun ToolsScreen(
                                     IconButton(
                                         onClick = {
                                             viewModel.refreshAllData()
-                                            Toast.makeText(context, "تم تحديث البيانات", Toast.LENGTH_SHORT).show()
+                                            AppFeedback.success("تم تحديث البيانات")
                                         },
                                         modifier = Modifier
                                             .background(Color.White.copy(alpha = 0.18f), CircleShape)
@@ -630,10 +631,10 @@ fun ToolsScreen(
                         viewModel.rebootSystem(
                             onSuccess = { msg ->
                                 showRebootDialog = false
-                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                AppFeedback.info(msg, long = true)
                             },
                             onError = { err ->
-                                Toast.makeText(context, "فشل: $err", Toast.LENGTH_LONG).show()
+                                AppFeedback.error("فشل: $err")
                             }
                         )
                     },

@@ -7,7 +7,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -71,6 +70,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -105,9 +105,12 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.example.data.model.UserManagerProfile
 import com.example.data.model.UserManagerUser
+
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
 import com.example.util.CardPrintAndExportHelper
+import com.example.ui.components.RefreshableListContainer
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -125,7 +128,7 @@ import java.nio.charset.StandardCharsets
  * - شريط الترقيم والتنقل بين الصفحات
  */
 private fun isExpiredCard(user: UserManagerUser): Boolean =
-    !user.active || (user.profileExpired && user.uptimeUsed.isNotBlank() && user.uptimeUsed != "0s")
+    user.isConfirmedExpired
 
 @Composable
 private fun CardStatPill(modifier: Modifier, label: String, value: Int, color: Color) {
@@ -145,6 +148,7 @@ private fun CardStatPill(modifier: Modifier, label: String, value: Int, color: C
     }
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun UserManagerCardsScreen(
     viewModel: MikroTikViewModel,
@@ -153,13 +157,16 @@ fun UserManagerCardsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // Pull-to-refresh: re-syncs data from the router.
+    var isPullRefreshing by remember { mutableStateOf(false) }
+
     val rawUsers by viewModel.userManagerUsers.collectAsStateWithLifecycle()
     val profiles by viewModel.userManagerProfiles.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
 
     // Filter states (declared first — the router-side search effect below observes them)
     var selectedScope by remember { mutableStateOf("جميع الكروت من الروتر") }
-    var scopeMenuExpanded by remember { mutableStateOf(false) }
+    var showScopeSheet by remember { mutableStateOf(false) }
 
     var searchQuery by remember { mutableStateOf("") }
     var searchFieldType by remember { mutableStateOf("الاسم") }
@@ -352,6 +359,17 @@ fun UserManagerCardsScreen(
             },
             containerColor = Color(0xFFF8FAFC)
         ) { innerPadding ->
+            RefreshableListContainer(
+                isRefreshing = isPullRefreshing,
+                onRefresh = {
+                    if (!isPullRefreshing) {
+                        isPullRefreshing = true
+                        viewModel.refreshAllData { isPullRefreshing = false }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize(),
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -368,7 +386,7 @@ fun UserManagerCardsScreen(
                     color = Color.White,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { scopeMenuExpanded = true }
+                        .clickable { showScopeSheet = true }
                 ) {
                     Row(
                         modifier = Modifier
@@ -412,34 +430,66 @@ fun UserManagerCardsScreen(
                             color = Color(0xFF334155)
                         )
                     }
+                }
 
-                    DropdownMenu(
-                        expanded = scopeMenuExpanded,
-                        onDismissRequest = { scopeMenuExpanded = false }
+                // Scope picker as a ModalBottomSheet (touch-friendly, scrollable).
+                if (showScopeSheet) {
+                    ModalBottomSheet(
+                        onDismissRequest = { showScopeSheet = false },
+                        containerColor = Color.White,
                     ) {
+                        Text(
+                            text = "عرض الكروت حسب",
+                            fontFamily = CairoFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = Color(0xFF0F172A),
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
+                        )
                         listOf(
                             "جميع الكروت من الروتر",
                             "الكروت المفعلة (النشطة)",
                             "الكروت غير المفعلة",
                             "الكروت المنتهية"
                         ).forEach { scopeOption ->
-                            DropdownMenuItem(
-                                text = {
+                            Surface(
+                                color = if (selectedScope == scopeOption) Color(0xFFE0F2F1) else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                                    .clickable {
+                                        selectedScope = scopeOption
+                                        currentPage = 1
+                                        showScopeSheet = false
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Text(
                                         text = scopeOption,
                                         fontFamily = CairoFontFamily,
-                                        fontSize = 13.sp,
+                                        fontSize = 14.sp,
                                         fontWeight = if (selectedScope == scopeOption) FontWeight.Bold else FontWeight.Normal,
                                         color = if (selectedScope == scopeOption) Color(0xFF0C5A60) else Color(0xFF1E293B)
                                     )
-                                },
-                                onClick = {
-                                    selectedScope = scopeOption
-                                    currentPage = 1
-                                    scopeMenuExpanded = false
+                                    if (selectedScope == scopeOption) {
+                                        Icon(
+                                            imageVector = Icons.Filled.CheckCircle,
+                                            contentDescription = null,
+                                            tint = Color(0xFF0C5A60),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                 }
-                            )
+                            }
                         }
+                        Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
 
@@ -623,17 +673,17 @@ fun UserManagerCardsScreen(
                                 .clickable {
                                     val selected = selectedUsernames.value
                                     if (selected.isEmpty()) {
-                                        Toast.makeText(context, "يرجى تحديد كرت واحد على الأقل للتفعيل", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.info("يرجى تحديد كرت واحد على الأقل للتفعيل")
                                     } else {
                                         viewModel.bulkToggleUserManagerUsers(
                                             selected.toList(),
                                             active = true,
                                             onSuccess = { count ->
-                                                Toast.makeText(context, "تم تفعيل $count كرت بنجاح", Toast.LENGTH_SHORT).show()
+                                                AppFeedback.success("تم تفعيل $count كرت بنجاح")
                                                 selectedUsernames.value = emptySet()
                                             },
                                             onError = { message ->
-                                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                                AppFeedback.info(message, long = true)
                                             }
                                         )
                                     }
@@ -671,7 +721,7 @@ fun UserManagerCardsScreen(
                                 .clickable {
                                     val selected = selectedUsernames.value
                                     if (selected.isEmpty()) {
-                                        Toast.makeText(context, "يرجى تحديد الكروت المراد حذفها", Toast.LENGTH_SHORT).show()
+                                        AppFeedback.info("يرجى تحديد الكروت المراد حذفها")
                                     } else {
                                         userToDelete = null // Bulk delete flag
                                         showDeleteConfirmDialog = true
@@ -756,7 +806,7 @@ fun UserManagerCardsScreen(
                                     // touch cards that are no longer visible/fresh.
                                     selectedUsernames.value = emptySet()
                                     viewModel.refreshAllData()
-                                    Toast.makeText(context, "جاري تحديث الكروت من السيرفر...", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.info("جاري تحديث الكروت من السيرفر...")
                                 }
                                 .testTag("cards_refresh_button")
                         ) {
@@ -1307,6 +1357,7 @@ fun UserManagerCardsScreen(
                     }
                 }
             }
+            } // RefreshableListContainer
         }
     }
 
@@ -1326,10 +1377,10 @@ fun UserManagerCardsScreen(
                 viewModel.toggleUserManagerUser(
                     username = user.username,
                     onSuccess = {
-                        Toast.makeText(context, "تم تغيير حالة الكرت", Toast.LENGTH_SHORT).show()
+                        AppFeedback.success("تم تغيير حالة الكرت")
                     },
                     onError = { err ->
-                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                        AppFeedback.error(err)
                     }
                 )
                 selectedCardForDetails = null
@@ -1359,11 +1410,11 @@ fun UserManagerCardsScreen(
                     newProfile = targetProfile,
                     resetUptime = resetUptime,
                     onSuccess = {
-                        Toast.makeText(context, "✅ تم تجديد الكرت (${user.username}) بالباقة ($targetProfile) بنجاح!", Toast.LENGTH_LONG).show()
+                        AppFeedback.success("✅ تم تجديد الكرت (${user.username}) بالباقة ($targetProfile) بنجاح!", long = true)
                         cardToRenew = null
                     },
                     onError = { err ->
-                        Toast.makeText(context, "تعذر التجديد: $err", Toast.LENGTH_SHORT).show()
+                        AppFeedback.error("تعذر التجديد: $err")
                     }
                 )
             }
@@ -1407,18 +1458,18 @@ fun UserManagerCardsScreen(
                             viewModel.deleteUserManagerUser(
                                 username = userToDelete!!,
                                 onSuccess = {
-                                    Toast.makeText(context, "تم حذف الكرت بنجاح", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.success("تم حذف الكرت بنجاح")
                                 },
-                                onError = { Toast.makeText(context, "فشل الحذف", Toast.LENGTH_SHORT).show() }
+                                onError = { AppFeedback.error("فشل الحذف") }
                             )
                         } else {
                             viewModel.bulkDeleteUserManagerUsers(
                                 usernames = selectedUsernames.value.toList(),
                                 onSuccess = { deletedCount ->
-                                    Toast.makeText(context, "تم حذف $deletedCount كرت بنجاح", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.success("تم حذف $deletedCount كرت بنجاح")
                                     selectedUsernames.value = emptySet()
                                 },
-                                onError = { Toast.makeText(context, "فشل الحذف الجماعي", Toast.LENGTH_SHORT).show() }
+                                onError = { AppFeedback.error("فشل الحذف الجماعي") }
                             )
                         }
                         showDeleteConfirmDialog = false
@@ -1471,10 +1522,10 @@ fun UserManagerCardsScreen(
                         showCleanExpiredConfirmDialog = false
                         viewModel.cleanExpiredUserManagerUsers(
                             onSuccess = { count ->
-                                Toast.makeText(context, "تم تنظيف $count كرت منتهي", Toast.LENGTH_SHORT).show()
+                                AppFeedback.error("تم تنظيف $count كرت منتهي")
                             },
                             onError = { err ->
-                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                AppFeedback.error(err)
                             }
                         )
                     },
@@ -1615,7 +1666,7 @@ fun CardDetailsDialog(
                                     IconButton(
                                         onClick = {
                                             clipboard.setPrimaryClip(ClipData.newPlainText("username", user.username))
-                                            Toast.makeText(context, "تم نسخ اسم المستخدم", Toast.LENGTH_SHORT).show()
+                                            AppFeedback.success("تم نسخ اسم المستخدم")
                                         },
                                         modifier = Modifier.size(24.dp)
                                     ) {
@@ -1650,7 +1701,7 @@ fun CardDetailsDialog(
                                     IconButton(
                                         onClick = {
                                             clipboard.setPrimaryClip(ClipData.newPlainText("password", user.password.ifEmpty { user.username }))
-                                            Toast.makeText(context, "تم نسخ كلمة المرور", Toast.LENGTH_SHORT).show()
+                                            AppFeedback.success("تم نسخ كلمة المرور")
                                         },
                                         modifier = Modifier.size(24.dp)
                                     ) {
@@ -2058,9 +2109,9 @@ private fun exportCardsCsv(context: Context, users: List<UserManagerUser>) {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(shareIntent, "مشاركة أو فتح ملف الكروت (Excel)"))
-        Toast.makeText(context, "تم تجهيز ملف Excel بنجاح", Toast.LENGTH_SHORT).show()
+        AppFeedback.success("تم تجهيز ملف Excel بنجاح")
     } catch (e: Exception) {
-        Toast.makeText(context, "حدث خطأ أثناء تصدير الملف: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        AppFeedback.error("حدث خطأ أثناء تصدير الملف: ${e.localizedMessage}")
     }
 }
 

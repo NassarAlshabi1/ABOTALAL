@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,8 +26,11 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.PppoeUser
+
+import com.example.ui.components.AppFeedback
 import com.example.ui.theme.CairoFontFamily
 import com.example.ui.viewmodel.MikroTikViewModel
+import com.example.ui.components.RefreshableListContainer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +41,7 @@ fun PppoeManagerScreen(
     val context = LocalContext.current
     var usersList by remember { mutableStateOf<List<PppoeUser>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) } // 0: الكل, 1: المتصلين حالياً
     var showAddDialog by remember { mutableStateOf(false) }
@@ -46,6 +49,7 @@ fun PppoeManagerScreen(
 
     fun refreshUsers() {
         isLoading = true
+        loadError = null
         viewModel.fetchPppoeUsers(
             onSuccess = {
                 usersList = it
@@ -53,7 +57,8 @@ fun PppoeManagerScreen(
             },
             onError = {
                 isLoading = false
-                Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                loadError = it
+                AppFeedback.info(it)
             }
         )
     }
@@ -151,6 +156,14 @@ fun PppoeManagerScreen(
                 }
             }
         ) { padding ->
+            RefreshableListContainer(
+                isRefreshing = isLoading,
+                onRefresh = {
+                    refreshUsers()
+                },
+                modifier = Modifier
+                    .fillMaxSize(),
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -219,15 +232,34 @@ fun PppoeManagerScreen(
                     )
                 }
 
-                if (isLoading) {
+                if (isLoading && usersList.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = Color(0xFF2563EB))
                     }
+                } else if (loadError != null && usersList.isEmpty()) {
+                    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Text(loadError ?: "تعذر تحميل الحسابات", fontFamily = CairoFontFamily, color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { refreshUsers() }) { Text("إعادة المحاولة", fontFamily = CairoFontFamily) }
+                    }
                 } else if (filteredList.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("لا يوجد مستخدمي بروباند مطابقين للبحث", fontFamily = CairoFontFamily, color = Color.Gray)
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            if (loadError != null) "تعذر التحديث: $loadError" else "لا يوجد مستخدمو بروباند مطابقون للبحث",
+                            fontFamily = CairoFontFamily,
+                            color = if (loadError != null) MaterialTheme.colorScheme.error else Color.Gray
+                        )
+                        if (loadError != null) {
+                            Text("البيانات المعروضة قديمة أو لا تطابق عوامل التصفية.", fontFamily = CairoFontFamily, color = Color.Gray)
+                            TextButton(onClick = { refreshUsers() }) { Text("إعادة المحاولة", fontFamily = CairoFontFamily) }
+                        }
                     }
                 } else {
+                    Column(Modifier.fillMaxSize()) {
+                    if (isLoading || loadError != null) Text(if (isLoading) "جارٍ تحديث البيانات…" else "تعذر التحديث: ${loadError}. البيانات المعروضة قديمة", modifier = Modifier.padding(horizontal = 16.dp), color = if (loadError != null) MaterialTheme.colorScheme.error else Color.Gray, fontFamily = CairoFontFamily)
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
@@ -328,8 +360,10 @@ fun PppoeManagerScreen(
                             }
                         }
                     }
+                    }
                 }
             }
+            } // RefreshableListContainer
         }
     }
 
@@ -384,10 +418,10 @@ fun PppoeManagerScreen(
                                 ),
                                 onSuccess = {
                                     showAddDialog = false
-                                    Toast.makeText(context, "تمت إضافة المستخدم بنجاح", Toast.LENGTH_SHORT).show()
+                                    AppFeedback.success("تمت إضافة المستخدم بنجاح")
                                     refreshUsers()
                                 },
-                                onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+                                onError = { AppFeedback.info(it, long = true) }
                             )
                         }
                     },
@@ -420,10 +454,10 @@ fun PppoeManagerScreen(
                         viewModel.deletePppoeUser(
                             name = target.name,
                             onSuccess = {
-                                Toast.makeText(context, "تم حذف المستخدم ${target.name}", Toast.LENGTH_SHORT).show()
+                                AppFeedback.success("تم حذف المستخدم ${target.name}")
                                 refreshUsers()
                             },
-                            onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+                            onError = { AppFeedback.info(it, long = true) }
                         )
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
